@@ -1,6 +1,6 @@
 """Source-expression builder: one `Mb` per module, ids assigned in construction order.
 
-Nodes are plain dicts in the SourceModule JSON shape (`{"id": {"value": n}, "variant": {...}}`), with
+Nodes are plain dicts in the SourceModule JSON shape (`{"id": n, "variant": {...}}`), with
 variant fields inserted in codec order so the serialized module matches the Java codec byte for byte.
 """
 
@@ -19,22 +19,24 @@ class Mb:
     def _node(self, kind, fields):
         node_id = self._next_id
         self._next_id += 1
-        return {"id": {"value": node_id}, "variant": {kind: fields}}
+        return {"id": node_id, "variant": {kind: fields}}
 
     def num(self, value):
-        return self._node("literal", {"value": {"number": {"value": float(value)}}})
+        return self._node("literal", {"number": float(value)})
 
     def str(self, value):
-        return self._node("literal", {"value": {"str": {"value": value}}})
+        return self._node("literal", {"str": value})
 
     def bool(self, value):
-        return self._node("literal", {"value": {"bool": {"value": value}}})
+        return self._node("literal", {"bool": value})
 
     def as_(self, base, target):
         return self._node("as", {"base": base, "target": target})
 
     def bind(self, name, value):
-        return self._node("bind", {"name": name, "value": value})
+        node_id = self._next_id
+        self._next_id += 1
+        return {"id": node_id, "variant": {"bind": {"name": self.str(name), "value": value}}}
 
     def call(self, func, arg):
         return self._node("call", {"func": func, "arg": arg})
@@ -46,7 +48,7 @@ class Mb:
         return self._node("foreach", {"base": base, "element_key": element_key, "body": body})
 
     def graft(self, expr):
-        return self._node("graft", {"expr": expr})
+        return self._node("graft", expr)
 
     def source_local(self, path):
         return self.call(self.builtin("source", "local"), path)
@@ -74,7 +76,7 @@ class Mb:
         return self._return(label, None)
 
     def lower(self, expr):
-        return self._node("lower", {"expr": expr})
+        return self._node("lower", expr)
 
     def operator_binary(self, op, base, reference):
         return self._node("operator_binary", {"op": op, "base": base, "reference": reference})
@@ -141,24 +143,24 @@ class Mb:
 
     def record(self, entries):
         """`entries`: list of (key expr, value expr)."""
-        return self._node("record", {"entries": [{"key": k, "value": v} for k, v in entries]})
+        return self._node("record", [{"key": k, "value": v} for k, v in entries])
 
     def scope_use(self, key):
         node_id = self._next_id
         self._next_id += 1
-        return {"id": {"value": node_id}, "variant": {"scope_use": {"key": self.str(key)}}}
+        return {"id": node_id, "variant": {"scope_use": self.str(key)}}
 
     def seq(self, exprs):
-        return self._node("seq", {"exprs": list(exprs)})
+        return self._node("seq", list(exprs))
 
     def set(self, base, value):
         return self._node("set", {"base": base, "value": value})
 
     def stage(self, expr):
-        return self._node("stage", {"expr": expr})
+        return self._node("stage", expr)
 
     def tuple(self, values):
-        return self._node("tuple", {"exprs": list(values)})
+        return self._node("tuple", list(values))
 
     def builtin(self, *path):
         expr = self.scope_use("builtins")
@@ -419,5 +421,5 @@ def _encode(value, out):
 def module_json(exprs):
     """Compact SourceModule JSON matching the Java codec output."""
     out = []
-    _encode({"v1": {"exprs": exprs}}, out)
+    _encode({"v1": exprs}, out)
     return "".join(out)

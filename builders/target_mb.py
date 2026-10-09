@@ -327,7 +327,7 @@ def returns_to(expr, label):
     if kind == "as":
         return returns_to(v["base"], label) or returns_to(v["target"], label)
     if kind == "bind":
-        return returns_to(v["value"], label)
+        return returns_to(v["name"], label) or returns_to(v["value"], label)
     if kind == "call":
         return returns_to(v["func"], label) or returns_to(v["arg"], label)
     if kind == "field":
@@ -335,7 +335,7 @@ def returns_to(expr, label):
     if kind == "foreach":
         return returns_to(v["base"], label) or returns_to(v["element_key"], label) or returns_to(v["body"], label)
     if kind in ("graft", "lower", "stage"):
-        return returns_to(v["expr"], label)
+        return returns_to(v, label)
     if kind == "if":
         for branch in v["conditions"]:
             if returns_to(branch["condition"], label) or returns_to(branch["body"], label):
@@ -357,16 +357,16 @@ def returns_to(expr, label):
     if kind == "operator_unary":
         return returns_to(v["base"], label)
     if kind == "record":
-        for entry in v["entries"]:
+        for entry in v:
             if returns_to(entry["key"], label) or returns_to(entry["value"], label):
                 return True
         return False
     if kind == "return":
         return v["label"].get("some") == label or _returns_to_opt(v["value"], label)
     if kind == "scope_use":
-        return returns_to(v["key"], label)
+        return returns_to(v, label)
     if kind in ("seq", "tuple"):
-        return any(returns_to(x, label) for x in v["exprs"])
+        return any(returns_to(x, label) for x in v)
     if kind == "set":
         return returns_to(v["base"], label) or returns_to(v["value"], label)
     if kind == "try":
