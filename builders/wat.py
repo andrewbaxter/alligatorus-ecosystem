@@ -2923,6 +2923,11 @@ def module(e):
                     e.p("mload", _count_use(e, _p(e, "addr"))),
                     e.p("store", _count_use(e, _p(e, "val"))),
                     e.p("mstore", e.seq(_count_name(e, _p(e, "addr")), _count_use(e, _p(e, "val")))),
+                    e.p("mgrow", _count_use(e, _p(e, "a"))),
+                    e.p(
+                        "mcopy",
+                        e.seq(_count_use(e, _p(e, "dst")), _count_use(e, _p(e, "src")), _count_use(e, _p(e, "n"))),
+                    ),
                     e.p("push", _count_use(e, _p(e, "val"))),
                     e.p("call", e.foreach(_p(e, "args"), "ax", _count_use(e, e.v("ax")))),
                     e.p("ret", e.if_only(e.fld(_p(e, "val"), "is_some"), _count_use(e, e.fld(_p(e, "val"), "value")))),
@@ -3391,18 +3396,22 @@ def module(e):
                     or_b(
                         e,
                         is_const(e, xx(e), src_type(e)),
-                        and_b(
+                        or_b(
                             e,
-                            has(e, xx(e), src_type(e), "wint"),
                             and_b(
                                 e,
-                                e.mb.operator_lt(src_bits(e, "wint"), in_(e, "bits")),
-                                or_b(
+                                has(e, xx(e), src_type(e), "wint"),
+                                and_b(
                                     e,
-                                    e.eq(src_bits(e, "wint"), num(e, 1)),
-                                    e.eq(acc(e, xx(e), src_type(e), "wint", "signed"), in_(e, "signed")),
+                                    e.mb.operator_lt(src_bits(e, "wint"), in_(e, "bits")),
+                                    or_b(
+                                        e,
+                                        e.eq(src_bits(e, "wint"), num(e, 1)),
+                                        e.eq(acc(e, xx(e), src_type(e), "wint", "signed"), in_(e, "signed")),
+                                    ),
                                 ),
                             ),
+                            and_b(e, has(e, xx(e), src_type(e), "wptr"), e.eq(in_(e, "bits"), num(e, 32))),
                         ),
                     ),
                 )
@@ -3412,6 +3421,27 @@ def module(e):
             e,
             e.let("st", cve_type(e, a(e, "cv"))),
             e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.if_only(
+                has(e, xx(e), e.v("st"), "wptr"),
+                e.seq(
+                    e.let(
+                        "pty",
+                        e.if_else(
+                            has(e, xx(e), e.v("st"), "wgtype_m"),
+                            acc(e, xx(e), e.v("st"), "wgtype_m", "base"),
+                            e.v("st"),
+                        ),
+                    ),
+                    e.let(
+                        "pv",
+                        unwrap_cve_m(
+                            e,
+                            try_er(e, _operand(e, xx(e), loc(e), _xmod(e), e.v("pty"), a(e, "cv")), cve_t(e)),
+                        ),
+                    ),
+                    ret_m(e, _retag(e, e.v("pv"), outer(e))),
+                ),
+            ),
             e.if_only(
                 is_const(e, xx(e), e.v("st")),
                 e.seq(
@@ -3833,13 +3863,21 @@ def module(e):
                     or_b(
                         e,
                         is_const(e, xx(e), src_type(e)),
-                        and_b(
+                        or_b(
                             e,
-                            has(e, xx(e), src_type(e), "wptr"),
-                            or_b(
+                            and_b(
                                 e,
-                                has(e, xx(e), in_(e, "pointee"), "wvoid"),
-                                has(e, xx(e), acc(e, xx(e), src_type(e), "wptr", "pointee"), "wvoid"),
+                                has(e, xx(e), src_type(e), "wptr"),
+                                or_b(
+                                    e,
+                                    has(e, xx(e), in_(e, "pointee"), "wvoid"),
+                                    has(e, xx(e), acc(e, xx(e), src_type(e), "wptr", "pointee"), "wvoid"),
+                                ),
+                            ),
+                            and_b(
+                                e,
+                                has(e, xx(e), src_type(e), "wint"),
+                                e.eq(acc(e, xx(e), src_type(e), "wint", "bits"), num(e, 32)),
                             ),
                         ),
                     ),

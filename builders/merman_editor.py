@@ -8,6 +8,15 @@ relative to the editor's directory and answer with `on_fs`), then calls the expo
 down, 1 move, 2 up), `on_button(id)`, `on_key(code, mods) -> handled`, `on_fs(req, status, ptr, len)`
 and `alloc(len) -> ptr` (the host writes file bytes there before `on_fs`). File requests complete by
 callback because every server round trip in the browser is asynchronous.
+
+A document is a file the extension serializes itself, kept in the ide's undo history. `doc_open(name,
+key)` opens the file named `name` next to the module that exported the editor, under an undo tag made
+of that module and `key` (the extension's format version), and the contents arrive by `on_doc(ptr,
+len)`. The extension exposes the document through `doc_ptr() -> ptr` and `doc_len() -> len`; after
+`doc_edit(level)`, where `level` is whatever the extension needs to undo or redo that change, the host
+records the level and reads the new contents from there. Undo and redo hand a level back through
+`on_level(ptr, len, redo)`, after which the host reads the contents again. A change to the file from
+outside arrives as another `on_doc`.
 """
 
 from .wat import bind_types
@@ -27,6 +36,8 @@ IMPORTS = [
     ("fs_write", ["i32", "pu8", "i32", "pu8", "i32"], "void"),
     ("now_ms", [], "f64"),
     ("log", ["pu8", "i32"], "void"),
+    ("doc_open", ["pu8", "i32", "pu8", "i32"], "void"),
+    ("doc_edit", ["pu8", "i32"], "void"),
 ]
 
 WASM = "main.wasm"
