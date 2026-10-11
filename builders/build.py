@@ -55,6 +55,8 @@ MODULES = [
     ("wasi-0.1.atz", "wasi", ()),
     ("hello-wasi.atz", "hello_wasi", ("app",)),
     ("hello-wasi-wat.atz", "hello_wasi", ("wat",)),
+    ("merman-ide.atz", "merman_ide", ()),
+    ("stylus-recorder.atz", "stylus_recorder", ()),
 ]
 
 
