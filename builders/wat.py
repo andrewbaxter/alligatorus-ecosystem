@@ -507,7 +507,7 @@ def _if_branch_stmts(e, cv_var):
     )
 
 
-WGFN_KINDS = ["import_fn", "func_fn", "data_fn", "cstr_fn", "alloc_fn"]
+WGFN_KINDS = ["import_fn", "func_fn", "data_fn", "cstr_fn", "alloc_fn", "loop_fn", "memory_grow_fn", "memory_copy_fn"]
 
 
 def _wgfn_kind(kind):
@@ -1208,6 +1208,30 @@ def _def_render_state(e, x):
         e,
         x,
         "wrs",
+        "open_loop",
+        str_(e),
+        e.seq(
+            e.call_m(outer(e), "control", e.rec(e.p("delta", e.int_of(0)), e.p("text", e.cat(e.s("loop "), e.v("arg"))))),
+            e.incr(in_(e, "depth")),
+            push(
+                e,
+                in_(e, "regions"),
+                mk(
+                    e,
+                    "wregion",
+                    e.p("depth", in_(e, "depth")),
+                    e.p("start", in_(e, "n")),
+                    e.p("valued", e.b(False)),
+                    e.p("closed", e.int_of(0)),
+                ),
+            ),
+            e.mb.set(in_(e, "h"), e.int_of(0)),
+        ),
+    )
+    _vmethod(
+        e,
+        x,
+        "wrs",
         "else_",
         e.tup(),
         e.seq(
@@ -1364,6 +1388,9 @@ def module(e):
     def_iface(e, x, "wvoid")
     def_iface(e, x, "wslot", e.p("base", ty(e)), e.p("name", str_(e)))
     def_iface(e, x, "wunit_m")
+    def_iface(e, x, "wloop_m")
+    def_iface(e, x, "wmem_grow_m")
+    def_iface(e, x, "wmem_copy_m")
     def_iface(e, x, "wgtype_m", e.p("base", ty(e)))
     def_iface(e, x, "wgfn_m", e.p("kind", int_t(e)))
     def_iface(e, x, "wfn", e.p("params", e.list_type(ty(e))), e.p("ret", ty(e)))
@@ -1443,7 +1470,7 @@ def module(e):
     def_obj(e, x, "wmeta", "wasm metadata", e.rec(e.p("k", t(e, "wmeta_u"))))
 
     x.append(e.let("winst_u", e.call_m0(e.v("d"), "union")))
-    for v in [["label", "name"], ["br", "name"]]:
+    for v in [["label", "name"], ["br", "name"], ["loop", "name"]]:
         x.append(
             e.let(
                 "wi_" + v[0],
@@ -1540,6 +1567,29 @@ def module(e):
                 ),
             )
         )
+    x.append(
+        e.let(
+            "wi_mgrow",
+            e.call_m(
+                e.v("winst_u"),
+                "variant",
+                e.rec(e.p("tag", e.s("mgrow")), e.p("type_ref", e.rec(e.p("res", str_(e)), e.p("a", _wval_t(e))))),
+            ),
+        )
+    )
+    x.append(
+        e.let(
+            "wi_mcopy",
+            e.call_m(
+                e.v("winst_u"),
+                "variant",
+                e.rec(
+                    e.p("tag", e.s("mcopy")),
+                    e.p("type_ref", e.rec(e.p("dst", _wval_t(e)), e.p("src", _wval_t(e)), e.p("n", _wval_t(e)))),
+                ),
+            ),
+        )
+    )
     x.append(
         e.let(
             "wi_load",
@@ -1690,6 +1740,9 @@ def module(e):
     def_obj(e, x, "wbinding", "wasm binding", e.rec(e.p("ty", ty(e)), e.p("slot", str_(e))))
     def_obj(e, x, "wbinding_none", "wasm empty binding", e.tup())
     def_obj(e, x, "wunit", "wasm unit", e.tup())
+    def_obj(e, x, "wloop_t", "wasm loop", e.tup())
+    def_obj(e, x, "wmem_grow", "wasm memory.grow", e.tup())
+    def_obj(e, x, "wmem_copy", "wasm memory.copy", e.tup())
     def_obj(
         e,
         x,
@@ -2912,8 +2965,21 @@ def module(e):
                             ),
                         ),
                     ),
+                    e.p("loop", _rs(e, "open_loop", _p(e, "name"))),
                     e.p("else", _rs0(e, "else_")),
                     e.p("end", _rs0(e, "end_if")),
+                    e.p(
+                        "mgrow",
+                        e.seq(
+                            _rs_ops(e, _p(e, "a")),
+                            _rs_line(e, 0, e.s("memory.grow")),
+                            _rs(e, "set_local", _p(e, "res")),
+                        ),
+                    ),
+                    e.p(
+                        "mcopy",
+                        e.seq(_rs_ops(e, _p(e, "dst"), _p(e, "src"), _p(e, "n")), _rs_line(e, -3, e.s("memory.copy"))),
+                    ),
                     e.p(
                         "binop",
                         e.seq(
@@ -4584,6 +4650,187 @@ def module(e):
         )
     )
 
+    # `loop`: iterated with foreach, it runs its body until a `return` to an enclosing label leaves it,
+    # as the llvm target's loop does.
+    self_type(
+        e,
+        x,
+        "wloop_t",
+        e.s("loop"),
+        rt_dispatch(e, e.mb.types_string(), e.aspect_dispatch(lv(e, "wloop_m_id"), asp_id(e, "iterable"))),
+        can_cast_from_self(e),
+        cast_from_self(e),
+        no_cast_to(e),
+        cast_to_panic(e),
+        body(e, e.ret(has(e, xx(e), a(e, "other"), "wloop_m"))),
+    )
+    rt_lift_impl(e, x, "wloop_t")
+    rt_bind_impl(e, x, "wloop_t", lt(e, "wloop_t"))
+    rt_use_impl(e, x, "wloop_t")
+    x.append(e.impl_interface(e.v("wloop_t"), t(e, "wloop_m")))
+    x.append(
+        e.impl_interface(
+            e.v("wloop_t"),
+            asp_iface(e, "iterable"),
+            e.p("element_type", mk_arg(e, "wunit", e.tup())),
+            e.p("loop_binding", mk_arg(e, "wbinding_none", e.tup())),
+            e.p(
+                "element_access",
+                ok_cve(
+                    e,
+                    cv_of(
+                        e,
+                        code_none(e, loc(e)),
+                        e.call(
+                            e.eval_builtin("value_object_const"),
+                            e.rec(e.p("type", mk_arg(e, "wunit", e.tup())), e.p("data", e.tup())),
+                        ),
+                    ),
+                ),
+            ),
+            e.p(
+                "foreach",
+                body(
+                    e,
+                    e.let("mod", _xmod(e)),
+                    e.let("out", _insts_new(e)),
+                    _append_code(e, e.v("out"), cve_code(e, a(e, "base"))),
+                    e.let("head", e.call_m(e.v("mod"), "fresh_label", e.tup())),
+                    push(e, e.v("out"), _inst(e, "loop", e.p("name", e.v("head")))),
+                    _append_code(e, e.v("out"), a(e, "element_bind")),
+                    _append_code(e, e.v("out"), cve_code(e, a(e, "body"))),
+                    e.if_only(e.not_(cve_ended(e, a(e, "body"))), push(e, e.v("out"), _br_inst(e, e.v("head")))),
+                    push(e, e.v("out"), _inst0(e, "end")),
+                    e.ret(ok_cve(e, cv_no(e, _code_of(e, e.v("out"))))),
+                ),
+            ),
+        )
+    )
+
+    # `memory_grow(pages) -> i32` and `memory_copy((dst, src, n))`: the bulk memory instructions as callables.
+    # Their operands are retagged to i32, so pointers pass as they are.
+    for obj, marker in [["wmem_grow", "wmem_grow_m"], ["wmem_copy", "wmem_copy_m"]]:
+        self_type(
+            e,
+            x,
+            obj,
+            e.s(obj),
+            rt_dispatch(e, e.mb.types_string(), e.aspect_dispatch(lv(e, marker + "_id"), asp_id(e, "function"))),
+            can_cast_from_self(e),
+            cast_from_self(e),
+            no_cast_to(e),
+            cast_to_panic(e),
+            body(e, e.ret(has(e, xx(e), a(e, "other"), marker))),
+        )
+        rt_lift_impl(e, x, obj)
+        rt_bind_impl(e, x, obj, lt(e, obj))
+        rt_use_impl(e, x, obj)
+        x.append(e.impl_interface(e.v(obj), t(e, marker)))
+
+    def _i32_operand(cv):
+        return e.seq(
+            e.let("cty", cve_type(e, cv)),
+            e.let(
+                "oty",
+                e.if_else(
+                    is_const(e, xx(e), e.v("cty")),
+                    e.mb.as_(_int_ty(e, "i32"), ty(e)),
+                    e.if_else(
+                        has(e, xx(e), e.v("cty"), "wgtype_m"),
+                        acc(e, xx(e), e.v("cty"), "wgtype_m", "base"),
+                        e.v("cty"),
+                    ),
+                ),
+            ),
+            e.let(
+                "v",
+                unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), e.v("mod"), e.v("oty"), cv), cve_t(e))),
+            ),
+            e.let("w", unwrap_cve_m(e, _retag(e, e.v("v"), _int_ty(e, "i32")))),
+            _append_code(e, e.v("out"), cve_code(e, e.v("w"))),
+            e.ret(_wval_of(e, e.v("w"))),
+        )
+
+    x.append(
+        e.impl_interface(
+            e.v("wmem_grow"),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    e.let("mod", _xmod(e)),
+                    e.let("out", _insts_new(e)),
+                    e.let("pages", _i32_operand(a(e, "argument"))),
+                    e.let("r", _fresh(e, e.v("mod"), _int_ty(e, "i32"))),
+                    push(e, e.v("out"), _inst(e, "mgrow", e.p("res", e.v("r")), e.p("a", e.v("pages")))),
+                    e.ret(
+                        ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _wval_local(e, _int_ty(e, "i32"), e.v("r"))))
+                    ),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+    x.append(
+        e.impl_interface(
+            e.v("wmem_copy"),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    e.let("mod", _xmod(e)),
+                    e.let("out", _insts_new(e)),
+                    e.let("argv", a(e, "argument")),
+                    e.if_only(
+                        e.not_(cve_has(e, e.v("argv"))),
+                        ret_m(e, err_cve(e, loc(e), "memory.copy arguments have no value")),
+                    ),
+                    e.let("tk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "tuple"))),
+                    e.if_only(
+                        e.not_(e.fld(e.v("tk"), "is_some")),
+                        ret_m(e, err_cve(e, loc(e), "memory.copy takes a tuple of destination, source and length")),
+                    ),
+                    e.let("st", e.rec(e.p("i", e.int_of(0)))),
+                    e.let("ops", e.map_new(str_(e), lt(e, "wval"))),
+                    e.foreach(
+                        bim(
+                            e,
+                            asp_iface(e, "tuple"),
+                            "take_elements",
+                            e.fld(e.v("tk"), "value"),
+                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
+                        ),
+                        "er",
+                        e.seq(
+                            e.let("ec", unwrap_cve_m(e, e.v("er"))),
+                            e.call_m(e.v("ops"), "put", e.tup(to_str(e, e.fld(e.v("st"), "i")), _i32_operand(e.v("ec")))),
+                            e.incr(e.fld(e.v("st"), "i")),
+                        ),
+                    ),
+                    e.if_only(
+                        e.not_(e.eq(e.fld(e.v("st"), "i"), num(e, 3))),
+                        ret_m(e, err_cve(e, loc(e), "memory.copy takes a tuple of destination, source and length")),
+                    ),
+                    push(
+                        e,
+                        e.v("out"),
+                        _inst(
+                            e,
+                            "mcopy",
+                            e.p("dst", e.call_m(e.v("ops"), "get", e.s("0"))),
+                            e.p("src", e.call_m(e.v("ops"), "get", e.s("1"))),
+                            e.p("n", e.call_m(e.v("ops"), "get", e.s("2"))),
+                        ),
+                    ),
+                    e.ret(ok_cve(e, cv_no(e, _code_of(e, e.v("out"))))),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+
     self_type(
         e,
         x,
@@ -4642,7 +4889,15 @@ def module(e):
                                     e.if_else(
                                         _wgfn_is(e, "alloc_fn"),
                                         e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("size")),
-                                        e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("elem"), e.s("values")),
+                                        e.if_else(
+                                            or_b(
+                                                e,
+                                                _wgfn_is(e, "loop_fn"),
+                                                or_b(e, _wgfn_is(e, "memory_grow_fn"), _wgfn_is(e, "memory_copy_fn")),
+                                            ),
+                                            e.list_new(str_(e)),
+                                            e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("elem"), e.s("values")),
+                                        ),
                                     ),
                                 ),
                             ),
@@ -4738,6 +4993,57 @@ def module(e):
                                         e.p("module", e.v("module")),
                                         e.p("name", e.v("name")),
                                         e.p("base", e.v("ityv")),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.if_only(
+                        _wgfn_is(e, "loop_fn"),
+                        ret_m(
+                            e,
+                            ok_cve(
+                                e,
+                                cv_of(
+                                    e,
+                                    code_none(e, loc(e)),
+                                    e.call(
+                                        e.eval_builtin("value_object_const"),
+                                        e.rec(e.p("type", mk_arg(e, "wloop_t", e.tup())), e.p("data", e.tup())),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.if_only(
+                        _wgfn_is(e, "memory_grow_fn"),
+                        ret_m(
+                            e,
+                            ok_cve(
+                                e,
+                                cv_of(
+                                    e,
+                                    code_none(e, loc(e)),
+                                    e.call(
+                                        e.eval_builtin("value_object_const"),
+                                        e.rec(e.p("type", mk_arg(e, "wmem_grow", e.tup())), e.p("data", e.tup())),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.if_only(
+                        _wgfn_is(e, "memory_copy_fn"),
+                        ret_m(
+                            e,
+                            ok_cve(
+                                e,
+                                cv_of(
+                                    e,
+                                    code_none(e, loc(e)),
+                                    e.call(
+                                        e.eval_builtin("value_object_const"),
+                                        e.rec(e.p("type", mk_arg(e, "wmem_copy", e.tup())), e.p("data", e.tup())),
                                     ),
                                 ),
                             ),
@@ -5146,7 +5452,7 @@ def module(e):
     defs.append(e.p("meta_new", e.fld(e.v("wmeta"), "new")))
     for name in passthrough:
         defs.append(e.p(name, e.v("c_" + name)))
-    for obj in ["wt_int", "wt_float", "wt_void", "wgfn_t", "wt_ptr", "wt_global"]:
+    for obj in ["wt_int", "wt_float", "wt_void", "wgfn_t", "wt_ptr", "wt_global", "wloop_t", "wmem_grow", "wmem_copy"]:
         defs.append(e.p(obj + "_new", e.fld(e.v(obj), "new")))
     x.append(e.ret(e.rec(*defs)))
 
@@ -5182,6 +5488,9 @@ def module(e):
         if kind != "cstr_fn":
             exported.append(kind)
         y.append(e.let(kind, _lty(e, "wgfn_t", e.rec(e.p("kind", e.int_of(_wgfn_kind(kind)))))))
+    # `loop_fn {}`, `memory_grow_fn {}` and `memory_copy_fn {}` give values whose type is the
+    # instance, as the llvm target's `ref_fn` does for its loop, so a staged body can iterate the
+    # loop and call the intrinsics.
     y.append(e.let("d", e.define()))
     y.append(e.option_type_let())
     y.append(e.let("mod_o", e.def_object(e.v("d"), "wasm module")))
