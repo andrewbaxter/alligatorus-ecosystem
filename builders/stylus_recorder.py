@@ -1,11 +1,11 @@
-"""stylus-recorder.atz: a merman ide pane recording stylus samples and drawing the strokes.
+"""stylus-recorder.atz: a merman editor pane recording stylus samples and drawing the strokes.
 
 Every pointer sample (time since the first sample, position, pressure, tilt) goes into a buffer, and
 while the stylus is down each move draws a segment whose width follows the pressure. The clear
 button empties the canvas and the buffer.
 """
 
-from .merman_ide import FILE as IDE_FILE
+from .merman_editor import FILE as EDITOR_FILE
 from .wat import bind_types
 
 CAPACITY = 4096
@@ -56,10 +56,10 @@ def module(e):
     setup.append(e.let("start_fn_t", _fn_t(e, [], "void")))
     setup.append(e.let("pointer_fn_t", _fn_t(e, ["i32", "f64", "f64", "f64", "f64", "f64", "f64"], "void")))
     setup.append(e.let("button_fn_t", _fn_t(e, ["i32"], "void")))
-    setup.append(e.let("ide", e.import_local("ide", IDE_FILE)))
+    setup.append(e.let("editor", e.import_local("editor", EDITOR_FILE)))
     exported = ["m", "start_fn_t", "pointer_fn_t", "button_fn_t", "t_i32", "t_f64", "t_pf64"]
     for name in HOST:
-        setup.append(e.let(name + "_fn_t", e.call_m(e.fld(e.v("ide"), "fn_types"), "get", e.s(name))))
+        setup.append(e.let(name + "_fn_t", e.call_m(e.fld(e.v("editor"), "fn_types"), "get", e.s(name))))
         exported.append(name + "_fn_t")
     exported_fields = []
     for n in exported:
@@ -68,7 +68,7 @@ def module(e):
 
     top = []
     top.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
-    top.append(e.let("ide", e.import_local("ide", IDE_FILE)))
+    top.append(e.let("editor", e.import_local("editor", EDITOR_FILE)))
     top.append(e.let("k", e.lower(e.mb.seq(setup))))
     for n in exported:
         top.append(e.let(n, e.fld(e.v("k"), n)))
@@ -79,7 +79,7 @@ def module(e):
                 e.call(
                     e.fld(e.v("wasm"), "import_fn"),
                     e.rec(
-                        e.p("module", e.fld(e.v("ide"), "module")),
+                        e.p("module", e.fld(e.v("editor"), "module")),
                         e.p("name", e.s(name)),
                         e.p("ty", e.v(name + "_fn_t")),
                     ),
@@ -203,5 +203,5 @@ def module(e):
             )
         )
         top.append(e.call_m(e.v("m"), "export", e.s(name)))
-    top.append(e.ret(e.call(e.fld(e.v("ide"), "build"), e.call_m0(e.v("m"), "render"))))
+    top.append(e.ret(e.call(e.fld(e.v("editor"), "build"), e.call_m0(e.v("m"), "render"))))
     return top

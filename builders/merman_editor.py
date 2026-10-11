@@ -1,6 +1,6 @@
-"""merman-ide.atz: the `ide` marker merman opens as a pane, and the typed imports of merman's host.
+"""merman-editor.atz: the `editor` marker merman opens as a pane, and the typed imports of merman's host.
 
-A module whose root export is an `ide` instance shows an ide button in merman; the pane instantiates
+A module whose root export is an `editor` instance shows an editor button in merman; the pane instantiates
 the wasm in `files` (`main.wasm`) with the imports below under the module name `merman` (pointers
 are byte offsets into the module's exported memory; `canvas_segment` takes two points, a width and
 a color as 0xRRGGBBAA; `button_add` and `text_set` take utf-8; `fs_read` and `fs_write` take a path
@@ -12,7 +12,7 @@ callback because every server round trip in the browser is asynchronous.
 
 from .wat import bind_types
 
-FILE = "merman-ide.atz"
+FILE = "merman-editor.atz"
 
 MODULE = "merman"
 
@@ -65,8 +65,8 @@ def module(e):
     top.append(e.let("k", e.lower(e.mb.seq(setup))))
     top.append(e.let("d", e.define()))
     top.append(e.option_type_let())
-    top.append(e.let("ide_o", e.def_object(e.v("d"), "ide")))
-    top.append(e.object_impl(e.v("ide_o"), e.rec(e.p("files", e.mb.builtin("types", "dir")))))
+    top.append(e.let("editor_o", e.def_object(e.v("d"), "editor")))
+    top.append(e.object_impl(e.v("editor_o"), e.rec(e.p("files", e.mb.builtin("types", "dir")))))
     top.append(e.let("build_b", e.def_func(e.v("d"), "build")))
     body = []
     body.append(
@@ -101,7 +101,7 @@ def module(e):
     body.append(
         e.ret(
             e.call(
-                e.lower(e.fld(e.v("ide_o"), "new")),
+                e.lower(e.fld(e.v("editor_o"), "new")),
                 e.rec(
                     e.p(
                         "files",
@@ -118,7 +118,7 @@ def module(e):
         e.func_impl(
             e.v("build_b"),
             e.rec(e.p("wat", e.mb.types_string()), e.p("meta", e.list_type(e.fld(e.v("wasm"), "meta_t")))),
-            e.option_type_some(e.fld(e.v("ide_o"), "type")),
+            e.option_type_some(e.fld(e.v("editor_o"), "type")),
             e.mb.opt_none_type(),
             e.stage(e.mb.seq(body)),
         )
@@ -129,7 +129,7 @@ def module(e):
             e.rec(
                 e.p("module", e.s(MODULE)),
                 e.p("fn_types", e.fld(e.v("k"), "fn_types")),
-                e.p("ide_t", e.fld(e.v("ide_o"), "type")),
+                e.p("editor_t", e.fld(e.v("editor_o"), "type")),
                 e.p("build", e.fld(e.v("build_b"), "func")),
             )
         )
