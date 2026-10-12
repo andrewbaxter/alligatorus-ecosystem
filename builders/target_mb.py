@@ -259,6 +259,64 @@ def type_aspect(e, xx_, self_, key):
     return bim(e, e.mb.eval_type(), "aspect", self_, e.rec(p("xx", xx_), p("key", key)))
 
 
+def const_fn(e, out, bind, name, body_):
+    """A const function (`define.const_func`): `body_` runs when the caller compiles, with `arg` = {xx, loc,
+    argument} and an eresult(cve) result, so staged code inside it sees the caller's values."""
+    out.append(e.let(bind, e.call_m(e.v("d"), "const_func", e.s(name))))
+    out.append(
+        e.call_m(
+            e.v(bind),
+            "impl",
+            e.rec(
+                p("impl_body", e.stage(body_)),
+                p("exception_type", e.mb.opt_none_type()),
+                p("description", e.opt_none(str_(e))),
+            ),
+        )
+    )
+
+
+def target_drop_body(e):
+    """Target `drop`: emit the value type's drop aspect when the value has one."""
+    none = e.eresult_ok(code_t(e), code_none(e, loc(e)))
+    return body(
+        e,
+        e.if_only(e.not_(cve_has(e, a(e, "cv"))), ret_m(e, none)),
+        e.let("asp", lookup(e, xx(e), cve_type(e, a(e, "cv")), e.mb.eval_aspect_drop_dynamic())),
+        e.if_only(
+            e.fld(e.v("asp"), "is_some"),
+            ret_m(
+                e,
+                bim(
+                    e,
+                    e.mb.eval_aspect_drop_dynamic(),
+                    "drop",
+                    e.fld(e.v("asp"), "value"),
+                    e.rec(p("xx", xx(e)), p("loc", loc(e)), p("cv", a(e, "cv"))),
+                ),
+            ),
+        ),
+        e.ret(none),
+    )
+
+
+def binding_drop_body(e):
+    """Binding `drop`: consume the binding's value and drop it through the target."""
+    used = bim(
+        e,
+        e.mb.eval_binding(),
+        "use",
+        outer(e),
+        e.rec(
+            p("xx", xx(e)),
+            p("loc", loc(e)),
+            p("setter", e.call(e.mb.eval_binding_setter_consumed(), e.tup())),
+            p("code", code_none(e, loc(e))),
+        ),
+    )
+    return e.call(e.mb.eval_drop_value(), e.rec(p("xx", xx(e)), p("loc", loc(e)), p("cv", used)))
+
+
 def type_can_cast_from(e, xx_, loc_, self_, src):
     return bim(e, e.mb.eval_type(), "can_cast_from", self_, e.rec(p("xx", xx_), p("loc", loc_), p("source_type", src)))
 
@@ -506,7 +564,7 @@ def rt_dispatch(e, under_type, inner):
         e.mb.eval_aspect_drop_dynamic_id(),
     ]
     branches = []
-    for own in ["lift", "bind", "initial_bind_dynamic", "field_use_dynamic", "artifact"]:
+    for own in ["lift", "bind", "initial_bind", "field_use_dynamic", "artifact"]:
         branches.append(rt_branch(e, asp_id(e, own), e.opt_some(e.mb.types_aspect(), outer(e))))
     for id_ in delegated:
         branches.append(rt_branch(e, id_, type_aspect(e, xx(e), under_type, a(e, "key"))))
@@ -657,13 +715,70 @@ def rt_use_impl(e, x, obj):
             ),
         )
     )
+    # A parameter slot of the dynamic target: the binding over that slot, typed as this type.
     x.append(
         e.impl_interface(
             e.v(obj),
-            e.mb.eval_aspect_initial_bind_dynamic(),
+            e.mb.eval_aspect_initial_bind(),
             p(
-                "initial_bind_dynamic",
-                e.call(e.eval_builtin("binding_dynamic"), e.rec(p("dynamic_key", e.v("arg")), p("type", outer(e)))),
+                "initial_bind",
+                e.eresult_ok(
+                    e.mb.eval_binding(),
+                    e.call(
+                        e.eval_builtin("binding_dynamic"),
+                        e.rec(
+                            p(
+                                "dynamic_key",
+                                e.fld(
+                                    e.call(
+                                        e.mb.must_reinterpret(), e.tup(a(e, "slot"), e.mb.eval_binding_slot_dynamic())
+                                    ),
+                                    "id",
+                                ),
+                            ),
+                            p("type", outer(e)),
+                        ),
+                    ),
+                ),
             ),
         )
+    )
+
+
+def ident_of(e, s):
+    """`s` with every byte outside [A-Za-z0-9_] replaced by `_`: a name usable in emitted wat or llvm."""
+
+    def in_range(n, lo, hi):
+        return and_b(e, e.mb.operator_ge(n, num(e, ord(lo))), e.mb.operator_le(n, num(e, ord(hi))))
+
+    n = e.mb.as_(e.v("__b"), int_t(e))
+    ok = or_b(
+        e,
+        or_b(e, in_range(n, "a", "z"), in_range(n, "A", "Z")),
+        or_b(e, in_range(n, "0", "9"), e.eq(n, num(e, ord("_")))),
+    )
+    return e.mb.labeled(
+        "ident",
+        e.seq(
+            e.let("__out", e.list_new(e.mb.types_byte())),
+            e.foreach(
+                e.call(e.mb.eval_str_utf8(), s),
+                "__b",
+                e.if_else(
+                    ok,
+                    push(e, e.v("__out"), e.v("__b")),
+                    e.foreach(e.call(e.mb.eval_str_utf8(), e.s("_")), "__u", push(e, e.v("__out"), e.v("__u"))),
+                ),
+            ),
+            e.mb.return_to(
+                "ident",
+                e.match_of(
+                    e.call(e.eval_builtin("str_from_utf8"), e.v("__out")),
+                    "__s",
+                    None,
+                    p("some", e.v("__s")),
+                    p("none", e.mb.panic(e.s("ident_of: bytes are not valid UTF-8"))),
+                ),
+            ),
+        ),
     )

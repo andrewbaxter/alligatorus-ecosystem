@@ -1,6 +1,6 @@
 """wat-2.0.atz: WebAssembly text target."""
 
-from . import meta
+from . import meta, values
 from . import target_mb as tm
 from .target_mb import (
     a,
@@ -12,6 +12,7 @@ from .target_mb import (
     asp_iface,
     bim,
     bim0,
+    binding_drop_body,
     body,
     bool_t,
     can_cast_from_self,
@@ -83,6 +84,7 @@ from .target_mb import (
     structural_exits,
     t,
     tag_value,
+    target_drop_body,
     throw_err,
     to_str,
     try_er,
@@ -162,6 +164,208 @@ def _int_ty(e, name):
                 e.p("max", e.n(spec.max)),
             )
     raise ValueError("no int type " + name)
+
+
+def _initial_bind_impl(e, x, obj):
+    """`initial_bind`: a parameter slot of this target becomes this target's binding, typed as the object."""
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            e.mb.eval_aspect_initial_bind(),
+            e.p(
+                "initial_bind",
+                e.eresult_ok(
+                    e.mb.eval_binding(),
+                    mk(
+                        e,
+                        "wbinding",
+                        e.p("ty", outer(e)),
+                        e.p(
+                            "slot",
+                            e.call_m(
+                                e.call(e.mb.must_reinterpret(), e.tup(a(e, "slot"), lt(e, "wparam"))), "slot", e.tup()
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+def _value_aspects(e, x, obj, size_expr, hash_stage):
+    """Implements values.atz's `size_i`, `eq_i` and (when `hash_stage` is given) `hash_i` for a type object: eq
+    stages the type's own `==`; hash stages a 32-bit hash of the value `cv`."""
+    x.append(e.impl_interface(e.v(obj), e.fld(e.v("values"), "size_i"), e.p("size", size_expr)))
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            e.fld(e.v("values"), "eq_i"),
+            e.p("eq", const_eval_in(e, a(e, "xx"), e.stage(e.eq(graft(e, a(e, "a")), graft(e, a(e, "b")))))),
+        )
+    )
+    if hash_stage is not None:
+        x.append(e.impl_interface(e.v(obj), e.fld(e.v("values"), "hash_i"), e.p("hash", hash_stage)))
+
+
+def _int_hash_body(e):
+    """values.hash for ints: widened (or kept, at 64 bits) to i64 and SipHashed."""
+    return e.seq(
+        e.let("sh_i64", e.mb.as_(_int_ty(e, "i64"), e.mb.eval_type())),
+        e.let("sh_i32", e.mb.as_(_int_ty(e, "i32"), e.mb.eval_type())),
+        e.let("pi64", mk(e, "wt_ptr", e.p("pointee", e.v("sh_i64")))),
+        e.if_else(
+            e.eq(in_(e, "bits"), num(e, 64)),
+            e.ret(_sip_hash(e, lambda x: x, e.p("size", e.int_of(16)))),
+            e.ret(_sip_hash(e, lambda x: e.call(e.lower(e.v("sh_i64")), x), e.p("size", e.int_of(16)))),
+        ),
+    )
+
+
+def _ptr_hash_body(e):
+    """values.hash for pointers: the address as i64, SipHashed."""
+    return e.seq(
+        e.let("sh_i64", e.mb.as_(_int_ty(e, "i64"), e.mb.eval_type())),
+        e.let("sh_i32", e.mb.as_(_int_ty(e, "i32"), e.mb.eval_type())),
+        e.let("pi64", mk(e, "wt_ptr", e.p("pointee", e.v("sh_i64")))),
+        e.ret(
+            _sip_hash(
+                e,
+                lambda x: e.call(e.lower(e.v("sh_i64")), e.mb.as_(x, e.lower(e.v("sh_i32")))),
+                e.p("size", e.int_of(16)),
+            )
+        ),
+    )
+
+
+# SipHash-1-3 (the hash aspect of ints and pointers): one 64-bit word under a 128-bit key. The key lives in the
+# module's zeroed `siphash_key` block (an `alloc_dep`), so an app may seed it at startup; the function itself is the
+# `siphash13_u64` dependency, defined once per module (the body is staged in the hash method, where types exist).
+SIP_C = [(0x736F6D65, 0x70736575), (0x646F7261, 0x6E646F6D), (0x6C796765, 0x6E657261), (0x74656462, 0x79746573)]
+
+
+def _sip_i64(e, v):
+    return e.call(e.lower(e.v("sh_i64")), e.n(v))
+
+
+def _sip_k(e, hi, lo):
+    """A 64-bit constant from two 32-bit halves (host numbers are doubles)."""
+    return e.mb.operator_or(e.mb.operator_shl(_sip_i64(e, hi), e.n(32)), _sip_i64(e, lo))
+
+
+def _sip_rotl(e, x, n):
+    return e.mb.operator_or(e.mb.operator_shl(x, e.n(n)), e.mb.operator_ushr(x, e.n(64 - n)))
+
+
+def _sip_round(e):
+    v = [e.v("v0"), e.v("v1"), e.v("v2"), e.v("v3")]
+    add, xor = e.mb.operator_add, e.mb.operator_xor
+
+    def s(i, expr):
+        return e.mb.set(v[i], expr)
+
+    return [
+        s(0, add(v[0], v[1])),
+        s(1, _sip_rotl(e, v[1], 13)),
+        s(1, xor(v[1], v[0])),
+        s(0, _sip_rotl(e, v[0], 32)),
+        s(2, add(v[2], v[3])),
+        s(3, _sip_rotl(e, v[3], 16)),
+        s(3, xor(v[3], v[2])),
+        s(0, add(v[0], v[3])),
+        s(3, _sip_rotl(e, v[3], 21)),
+        s(3, xor(v[3], v[0])),
+        s(2, add(v[2], v[1])),
+        s(1, _sip_rotl(e, v[1], 17)),
+        s(1, xor(v[1], v[2])),
+        s(2, _sip_rotl(e, v[2], 32)),
+    ]
+
+
+def _siphash_body(e):
+    """siphash13_u64(m, k0, k1) -> i32: SipHash-1-3 of the 8-byte message `m`, low 32 bits of the 64-bit result."""
+    xor = e.mb.operator_xor
+    return e.mb.labeled(
+        "fn",
+        e.seq(
+            e.let("v0", xor(e.v("k0"), _sip_k(e, *SIP_C[0]))),
+            e.let("v1", xor(e.v("k1"), _sip_k(e, *SIP_C[1]))),
+            e.let("v2", xor(e.v("k0"), _sip_k(e, *SIP_C[2]))),
+            e.let("v3", xor(e.v("k1"), _sip_k(e, *SIP_C[3]))),
+            e.mb.set(e.v("v3"), xor(e.v("v3"), e.v("m"))),
+            *_sip_round(e),
+            e.mb.set(e.v("v0"), xor(e.v("v0"), e.v("m"))),
+            e.let("b", _sip_k(e, 0x08000000, 0)),
+            e.mb.set(e.v("v3"), xor(e.v("v3"), e.v("b"))),
+            *_sip_round(e),
+            e.mb.set(e.v("v0"), xor(e.v("v0"), e.v("b"))),
+            e.mb.set(e.v("v2"), xor(e.v("v2"), _sip_i64(e, 255))),
+            *_sip_round(e),
+            *_sip_round(e),
+            *_sip_round(e),
+            e.mb.return_to(
+                "fn", e.call(e.lower(e.v("sh_i32")), xor(xor(e.v("v0"), e.v("v1")), xor(e.v("v2"), e.v("v3"))))
+            ),
+        ),
+    )
+
+
+def _sip_hash(e, to_i64, key_arg):
+    """In a values.hash impl (host code): the argument `cv`, converted to i64 by `to_i64(x)`, hashed by the SipHash
+    dependency under the module's key block; `key_arg` is the `alloc_dep` size/type field for that block."""
+
+    def key(i):
+        return e.mb.field(e.mb.as_(graft(e, e.v("keyp")), e.lower(e.v("pi64"))), e.n(i))
+
+    return try_er(
+        e,
+        e.mb.labeled(
+            "h",
+            e.seq(
+                e.let(
+                    "siphash_t",
+                    mk(
+                        e,
+                        "wt_fn",
+                        e.p("params", e.list_new(ty(e), e.v("sh_i64"), e.v("sh_i64"), e.v("sh_i64"))),
+                        e.p("ret", e.v("sh_i32")),
+                    ),
+                ),
+                e.let(
+                    "keyp",
+                    hf_rec(
+                        e,
+                        "h_allocdep_call",
+                        e.p("xx", a(e, "xx")),
+                        e.p("loc", a(e, "loc")),
+                        e.p("name", e.s("siphash_key")),
+                        key_arg,
+                    ),
+                ),
+                e.let(
+                    "args",
+                    unwrap_cve_t(
+                        e, const_eval_in(e, a(e, "xx"), e.stage(e.tup(to_i64(graft(e, a(e, "cv"))), key(0), key(1))))
+                    ),
+                ),
+                e.mb.return_to(
+                    "h",
+                    hf_rec(
+                        e,
+                        "h_funcdep_call",
+                        e.p("xx", a(e, "xx")),
+                        e.p("loc", a(e, "loc")),
+                        e.p("name", e.s("siphash13_u64")),
+                        e.p("params", e.list_new(e.mb.types_string(), e.s("m"), e.s("k0"), e.s("k1"))),
+                        e.p("ty", e.v("siphash_t")),
+                        e.p("body", e.stage(_siphash_body(e))),
+                        e.p("argument", e.v("args")),
+                    ),
+                ),
+            ),
+        ),
+        cve_t(e),
+    )
 
 
 def _lty(e, obj, arg):
@@ -248,6 +452,17 @@ def _xmod(e, ret_inner=None):
         "mod",
         e.tup(),
     )
+
+
+def _xmod_must(e):
+    """The current wasm module from `arg.xx`, in a host function that throws its errors."""
+    return e.call_m(
+        _must(e, e.call(e.mb.reinterpret(), e.tup(loc(e), e.fld(xx(e), "target"), lt(e, "wtarget")))), "mod", e.tup()
+    )
+
+
+def _must(e, res):
+    return e.match_of(res, "__r", None, e.p("ok", e.v("__r")), e.p("errs", e.mb.throw_(e.v("__r"))))
 
 
 def _fresh(e, mod, ty_):
@@ -449,13 +664,13 @@ def _conv_impl(e, x, obj, what, *cases):
     )
 
 
-def _binding_impl(e, x, obj, use_body):
+def _binding_impl(e, x, obj, use_body, drop_body):
     x.append(
         e.impl_interface(
             e.v(obj),
             e.mb.eval_binding(),
             e.p("use", use_body),
-            e.p("drop", e.eresult_ok(e.mb.types_code(), code_none(e, loc(e)))),
+            e.p("drop", drop_body),
             e.p("fork", outer(e)),
             e.p("merge", e.eresult_ok(e.mb.eval_binding(), outer(e))),
         )
@@ -507,7 +722,18 @@ def _if_branch_stmts(e, cv_var):
     )
 
 
-WGFN_KINDS = ["import_fn", "func_fn", "data_fn", "cstr_fn", "alloc_fn", "loop_fn", "memory_grow_fn", "memory_copy_fn"]
+WGFN_KINDS = [
+    "import_fn",
+    "func_fn",
+    "data_fn",
+    "cstr_fn",
+    "alloc_fn",
+    "loop_fn",
+    "memory_grow_fn",
+    "memory_copy_fn",
+    "memory_size_fn",
+    "memory_fill_fn",
+]
 
 
 def _wgfn_kind(kind):
@@ -1211,7 +1437,9 @@ def _def_render_state(e, x):
         "open_loop",
         str_(e),
         e.seq(
-            e.call_m(outer(e), "control", e.rec(e.p("delta", e.int_of(0)), e.p("text", e.cat(e.s("loop "), e.v("arg"))))),
+            e.call_m(
+                outer(e), "control", e.rec(e.p("delta", e.int_of(0)), e.p("text", e.cat(e.s("loop "), e.v("arg"))))
+            ),
             e.incr(in_(e, "depth")),
             push(
                 e,
@@ -1372,6 +1600,9 @@ def module(e):
     printable_bytes_map = e.map_new(str_(e), str_(e), *entries)
     x = []
     x.append(e.let("meta", e.import_local("meta", meta.FILE)))
+    x.append(e.let("values", e.import_local("values", values.FILE)))
+    for vid in ["size_id", "hash_id", "eq_id"]:
+        x.append(e.let(vid, e.fld(e.v("values"), vid)))
     x.append(e.let("d", e.define()))
     x.append(e.option_type_let())
     def_iface(
@@ -1391,6 +1622,8 @@ def module(e):
     def_iface(e, x, "wloop_m")
     def_iface(e, x, "wmem_grow_m")
     def_iface(e, x, "wmem_copy_m")
+    def_iface(e, x, "wmem_size_m")
+    def_iface(e, x, "wmem_fill_m")
     def_iface(e, x, "wgtype_m", e.p("base", ty(e)))
     def_iface(e, x, "wgfn_m", e.p("kind", int_t(e)))
     def_iface(e, x, "wfn", e.p("params", e.list_type(ty(e))), e.p("ret", ty(e)))
@@ -1414,6 +1647,13 @@ def module(e):
         )
     )
     def_obj(e, x, "wval", "wasm value", e.rec(e.p("ty", ty(e)), e.p("source", t(e, "wsrc_u"))))
+    x.append(
+        e.impl_interface(
+            e.v("wval"),
+            e.fld(e.v("values"), "retag"),
+            e.p("retag", mk(e, "wval", e.p("ty", e.v("arg")), e.p("source", in_(e, "source")))),
+        )
+    )
     def_obj(
         e,
         x,
@@ -1579,6 +1819,14 @@ def module(e):
     )
     x.append(
         e.let(
+            "wi_msize",
+            e.call_m(
+                e.v("winst_u"), "variant", e.rec(e.p("tag", e.s("msize")), e.p("type_ref", e.rec(e.p("res", str_(e)))))
+            ),
+        )
+    )
+    x.append(
+        e.let(
             "wi_mcopy",
             e.call_m(
                 e.v("winst_u"),
@@ -1586,6 +1834,19 @@ def module(e):
                 e.rec(
                     e.p("tag", e.s("mcopy")),
                     e.p("type_ref", e.rec(e.p("dst", _wval_t(e)), e.p("src", _wval_t(e)), e.p("n", _wval_t(e)))),
+                ),
+            ),
+        )
+    )
+    x.append(
+        e.let(
+            "wi_mfill",
+            e.call_m(
+                e.v("winst_u"),
+                "variant",
+                e.rec(
+                    e.p("tag", e.s("mfill")),
+                    e.p("type_ref", e.rec(e.p("dst", _wval_t(e)), e.p("val", _wval_t(e)), e.p("n", _wval_t(e)))),
                 ),
             ),
         )
@@ -1713,6 +1974,7 @@ def module(e):
             e.p("data", e.list_type(t(e, "wdata"))),
             e.p("data_end", int_t(e)),
             e.p("funcs", e.list_type(str_(e))),
+            e.p("fn_names", e.list_type(str_(e))),
             e.p("exports", e.list_type(str_(e))),
             e.p("labels", e.list_type(t(e, "wlabel"))),
             e.p("locals", e.list_type(t(e, "wlocal"))),
@@ -1738,11 +2000,16 @@ def module(e):
         )
     )
     def_obj(e, x, "wbinding", "wasm binding", e.rec(e.p("ty", ty(e)), e.p("slot", str_(e))))
+    # A parameter's slot, handed to the parameter type's `initial_bind` to make the binding over it.
+    def_obj(e, x, "wparam", "wasm slot", e.rec(e.p("ty", ty(e)), e.p("slot", str_(e))))
+    x.append(e.impl_interface(e.v("wparam"), e.mb.eval_binding_slot()))
     def_obj(e, x, "wbinding_none", "wasm empty binding", e.tup())
     def_obj(e, x, "wunit", "wasm unit", e.tup())
     def_obj(e, x, "wloop_t", "wasm loop", e.tup())
     def_obj(e, x, "wmem_grow", "wasm memory.grow", e.tup())
     def_obj(e, x, "wmem_copy", "wasm memory.copy", e.tup())
+    def_obj(e, x, "wmem_size", "wasm memory.size", e.tup())
+    def_obj(e, x, "wmem_fill", "wasm memory.fill", e.tup())
     def_obj(
         e,
         x,
@@ -2320,6 +2587,456 @@ def module(e):
     fn_impl(e, x, "c_ptr", body(e, e.ret(mk(e, "wt_ptr", e.p("pointee", e.v("arg"))))))
     _fn_def(e, x, "c_fn", e.rec(e.p("params", e.list_type(ty(e))), e.p("ret", ty(e))), ty(e))
     fn_impl(e, x, "c_fn", body(e, e.ret(mk(e, "wt_fn", e.p("params", a(e, "params")), e.p("ret", a(e, "ret"))))))
+    # Dependencies: a function or a zeroed block that a module gets only when code uses it. `func_dep` and
+    # `alloc_dep` make callable const functions; a call defines the item in the current module on first use (by
+    # name), then calls the function or yields the block's pointer. The definition travels in the const function.
+    _fn_def(
+        e,
+        x,
+        "h_funcdep_call",
+        e.rec(
+            e.p("xx", xx_t(e)),
+            e.p("loc", loc_t(e)),
+            e.p("name", str_(e)),
+            e.p("params", e.list_type(str_(e))),
+            e.p("ty", ty(e)),
+            e.p("body", e.mb.types_expr()),
+            e.p("argument", cve_t(e)),
+        ),
+        cve_t(e),
+    )
+    fn_throws(e, "h_funcdep_call", errs_t(e))
+    fn_impl(
+        e,
+        x,
+        "h_funcdep_call",
+        body(
+            e,
+            e.let("mod", _xmod_must(e)),
+            e.if_only(
+                e.not_(e.call_m(e.v("mod"), "has_func", a(e, "name"))),
+                e.seq(
+                    e.let(
+                        "__f",
+                        e.call_m(
+                            e.v("mod"),
+                            "func",
+                            e.rec(
+                                e.p("name", a(e, "name")),
+                                e.p("params", a(e, "params")),
+                                e.p("ty", a(e, "ty")),
+                                e.p("body", a(e, "body")),
+                            ),
+                        ),
+                    )
+                ),
+            ),
+            e.let(
+                "ref", cv_of(e, code_none(e, loc(e)), _wval_new(e, a(e, "ty"), "func", e.cat(e.s("$"), a(e, "name"))))
+            ),
+            e.ret(
+                _must(
+                    e,
+                    bim(
+                        e,
+                        asp_iface(e, "function"),
+                        "call",
+                        lookup_v(e, xx(e), a(e, "ty"), asp_iface(e, "function")),
+                        e.rec(
+                            e.p("xx", xx(e)),
+                            e.p("loc", loc(e)),
+                            e.p("self", e.v("ref")),
+                            e.p("argument", a(e, "argument")),
+                        ),
+                    ),
+                )
+            ),
+        ),
+    )
+    _fn_def(
+        e,
+        x,
+        "c_func_dep",
+        e.rec(
+            e.p("name", str_(e)), e.p("params", e.list_type(str_(e))), e.p("ty", ty(e)), e.p("body", e.mb.types_expr())
+        ),
+        ty(e),
+    )
+    fn_impl(
+        e,
+        x,
+        "c_func_dep",
+        body(
+            e,
+            e.let("h", e.lower_v("h_funcdep_call")),
+            e.let("dn", a(e, "name")),
+            e.let("dp", a(e, "params")),
+            e.let("dt", a(e, "ty")),
+            e.let("db", a(e, "body")),
+            e.let("cf_d", e.define()),
+            e.let("cf", e.call_m(e.v("cf_d"), "const_func", e.cat(e.s("wasm function "), a(e, "name")))),
+            e.call_m(
+                e.v("cf"),
+                "impl",
+                e.rec(
+                    e.p(
+                        "impl_body",
+                        e.stage(
+                            try_er(
+                                e,
+                                e.call(
+                                    e.lower(e.v("h")),
+                                    e.rec(
+                                        e.p("xx", xx(e)),
+                                        e.p("loc", loc(e)),
+                                        e.p("name", e.lower(e.v("dn"))),
+                                        e.p("params", e.lower(e.v("dp"))),
+                                        e.p("ty", e.lower(e.v("dt"))),
+                                        e.p("body", e.lower(e.v("db"))),
+                                        e.p("argument", a(e, "argument")),
+                                    ),
+                                ),
+                                cve_t(e),
+                            )
+                        ),
+                    ),
+                    e.p("exception_type", e.option_type_lowered_none()),
+                    e.p("description", e.opt_none(str_(e))),
+                ),
+            ),
+            e.finish(e.v("cf_d")),
+            e.ret(e.mb.as_(e.fld(e.v("cf"), "func"), ty(e))),
+        ),
+    )
+    _fn_def(
+        e,
+        x,
+        "h_allocdep_call",
+        e.rec(e.p("xx", xx_t(e)), e.p("loc", loc_t(e)), e.p("name", str_(e)), e.p("size", int_t(e))),
+        cve_t(e),
+    )
+    fn_throws(e, "h_allocdep_call", errs_t(e))
+    fn_impl(
+        e,
+        x,
+        "h_allocdep_call",
+        body(
+            e,
+            e.let("mod", _xmod_must(e)),
+            e.let(
+                "ref", e.call_m(e.v("mod"), "alloc_once", e.rec(e.p("name", a(e, "name")), e.p("size", a(e, "size"))))
+            ),
+            e.ret(
+                cv_of(
+                    e,
+                    code_none(e, loc(e)),
+                    e.call(
+                        e.eval_builtin("value_object_const"),
+                        e.rec(
+                            e.p(
+                                "type",
+                                _wgfn_global_t(e, mk(e, "wt_ptr", e.p("pointee", mk_arg(e, "wt_void", e.tup())))),
+                            ),
+                            e.p(
+                                "data",
+                                e.call(e.mb.must_reinterpret(), e.tup(e.v("ref"), e.mb.builtin("types", "object"))),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+        ),
+    )
+    # Constant data as a dependency: `data_dep({name, elem, values})` (little-endian integers of the element type) and
+    # `cstr_dep({name, text})` (NUL-terminated UTF-8) define a data segment on first use and yield its pointer.
+    _fn_def(
+        e,
+        x,
+        "h_datadep_call",
+        e.rec(
+            e.p("xx", xx_t(e)),
+            e.p("loc", loc_t(e)),
+            e.p("name", str_(e)),
+            e.p("elem", ty(e)),
+            e.p("values", e.list_type(int_t(e))),
+        ),
+        cve_t(e),
+    )
+    fn_throws(e, "h_datadep_call", errs_t(e))
+    fn_impl(
+        e,
+        x,
+        "h_datadep_call",
+        body(
+            e,
+            e.let("mod", _xmod_must(e)),
+            e.if_only(
+                e.not_(has(e, xx(e), a(e, "elem"), "wint")),
+                throw_err(
+                    e, loc(e), e.cat(e.s("wasm data_dep elem must be an integer type, not "), ty_desc(e, a(e, "elem")))
+                ),
+            ),
+            e.let("bits", acc(e, xx(e), a(e, "elem"), "wint", "bits")),
+            e.let("width", e.mb.operator_div(e.mb.operator_add(e.v("bits"), e.int_of(7)), e.int_of(8))),
+            e.let("min", acc(e, xx(e), a(e, "elem"), "wint", "min")),
+            e.let("max", acc(e, xx(e), a(e, "elem"), "wint", "max")),
+            e.let("bytes", e.list_new(int_t(e))),
+            e.foreach(
+                a(e, "values"),
+                "v",
+                e.seq(
+                    e.if_only(
+                        or_b(
+                            e,
+                            e.mb.operator_lt(e.mb.as_(e.v("v"), e.types_double()), e.v("min")),
+                            e.mb.operator_gt(e.mb.as_(e.v("v"), e.types_double()), e.v("max")),
+                        ),
+                        throw_err(
+                            e,
+                            loc(e),
+                            e.cat(
+                                e.s("wasm data_dep value "),
+                                to_str(e, e.v("v")),
+                                e.s(" is out of range for "),
+                                ty_desc(e, a(e, "elem")),
+                            ),
+                        ),
+                    ),
+                    e.if_only(
+                        e.eq(e.v("width"), e.int_of(1)),
+                        e.seq(
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(0)), e.int_of(255)),
+                            )
+                        ),
+                    ),
+                    e.if_only(
+                        e.eq(e.v("width"), e.int_of(2)),
+                        e.seq(
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(0)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(8)), e.int_of(255)),
+                            ),
+                        ),
+                    ),
+                    e.if_only(
+                        e.eq(e.v("width"), e.int_of(4)),
+                        e.seq(
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(0)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(8)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(16)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(24)), e.int_of(255)),
+                            ),
+                        ),
+                    ),
+                    e.if_only(
+                        e.eq(e.v("width"), e.int_of(8)),
+                        e.seq(
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(0)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(8)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(16)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(24)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(32)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(40)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(48)), e.int_of(255)),
+                            ),
+                            push(
+                                e,
+                                e.v("bytes"),
+                                e.mb.operator_and(e.mb.operator_shr(e.v("v"), e.int_of(56)), e.int_of(255)),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            e.let(
+                "ref", e.call_m(e.v("mod"), "data_once", e.rec(e.p("name", a(e, "name")), e.p("bytes", e.v("bytes"))))
+            ),
+            e.ret(
+                cv_of(
+                    e,
+                    code_none(e, loc(e)),
+                    e.call(
+                        e.eval_builtin("value_object_const"),
+                        e.rec(
+                            e.p("type", _wgfn_global_t(e, mk(e, "wt_ptr", e.p("pointee", a(e, "elem"))))),
+                            e.p(
+                                "data",
+                                e.call(e.mb.must_reinterpret(), e.tup(e.v("ref"), e.mb.builtin("types", "object"))),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+        ),
+    )
+    _fn_def(
+        e,
+        x,
+        "c_data_dep",
+        e.rec(e.p("name", str_(e)), e.p("elem", ty(e)), e.p("values", e.list_type(int_t(e)))),
+        ty(e),
+    )
+    fn_impl(
+        e,
+        x,
+        "c_data_dep",
+        body(
+            e,
+            e.let("h", e.lower_v("h_datadep_call")),
+            e.let("dn", a(e, "name")),
+            e.let("de", a(e, "elem")),
+            e.let("dv", a(e, "values")),
+            e.let("cf_d", e.define()),
+            e.let("cf", e.call_m(e.v("cf_d"), "const_func", e.cat(e.s("wasm data "), a(e, "name")))),
+            e.call_m(
+                e.v("cf"),
+                "impl",
+                e.rec(
+                    e.p(
+                        "impl_body",
+                        e.stage(
+                            try_er(
+                                e,
+                                e.call(
+                                    e.lower(e.v("h")),
+                                    e.rec(
+                                        e.p("xx", xx(e)),
+                                        e.p("loc", loc(e)),
+                                        e.p("name", e.lower(e.v("dn"))),
+                                        e.p("elem", e.lower(e.v("de"))),
+                                        e.p("values", e.lower(e.v("dv"))),
+                                    ),
+                                ),
+                                cve_t(e),
+                            )
+                        ),
+                    ),
+                    e.p("exception_type", e.option_type_lowered_none()),
+                    e.p("description", e.opt_none(str_(e))),
+                ),
+            ),
+            e.finish(e.v("cf_d")),
+            e.ret(e.mb.as_(e.fld(e.v("cf"), "func"), ty(e))),
+        ),
+    )
+    _fn_def(e, x, "c_cstr_dep", e.rec(e.p("name", str_(e)), e.p("text", str_(e))), ty(e))
+    fn_impl(
+        e,
+        x,
+        "c_cstr_dep",
+        body(
+            e,
+            e.let("values", e.list_new(int_t(e))),
+            e.foreach(
+                e.call(e.mb.eval_str_utf8(), a(e, "text")),
+                "b",
+                push(e, e.v("values"), e.mb.operator_and(e.mb.as_(e.v("b"), int_t(e)), e.int_of(255))),
+            ),
+            push(e, e.v("values"), e.int_of(0)),
+            e.ret(
+                hf_rec(
+                    e,
+                    "c_data_dep",
+                    e.p("name", a(e, "name")),
+                    e.p("elem", _int_ty(e, "u8")),
+                    e.p("values", e.v("values")),
+                )
+            ),
+        ),
+    )
+    _fn_def(e, x, "c_alloc_dep", e.rec(e.p("name", str_(e)), e.p("size", int_t(e))), ty(e))
+    fn_impl(
+        e,
+        x,
+        "c_alloc_dep",
+        body(
+            e,
+            e.let("h", e.lower_v("h_allocdep_call")),
+            e.let("dn", a(e, "name")),
+            e.let("ds", a(e, "size")),
+            e.let("cf_d", e.define()),
+            e.let("cf", e.call_m(e.v("cf_d"), "const_func", e.cat(e.s("wasm block "), a(e, "name")))),
+            e.call_m(
+                e.v("cf"),
+                "impl",
+                e.rec(
+                    e.p(
+                        "impl_body",
+                        e.stage(
+                            try_er(
+                                e,
+                                e.call(
+                                    e.lower(e.v("h")),
+                                    e.rec(
+                                        e.p("xx", xx(e)),
+                                        e.p("loc", loc(e)),
+                                        e.p("name", e.lower(e.v("dn"))),
+                                        e.p("size", e.lower(e.v("ds"))),
+                                    ),
+                                ),
+                                cve_t(e),
+                            )
+                        ),
+                    ),
+                    e.p("exception_type", e.option_type_lowered_none()),
+                    e.p("description", e.opt_none(str_(e))),
+                ),
+            ),
+            e.finish(e.v("cf_d")),
+            e.ret(e.mb.as_(e.fld(e.v("cf"), "func"), ty(e))),
+        ),
+    )
     _fn_def(e, x, "c_global_t", ty(e), ty(e))
     fn_impl(e, x, "c_global_t", body(e, e.ret(mk(e, "wt_global", e.p("base", e.v("arg"))))))
     _fn_def(e, x, "c_import_t", e.rec(e.p("module", str_(e)), e.p("name", str_(e)), e.p("ty", ty(e))), ty(e))
@@ -2633,6 +3350,82 @@ def module(e):
         e,
         x,
         "wmod",
+        "has_func",
+        str_(e),
+        bool_t(e),
+        e.seq(
+            e.let("hit", e.rec(e.p("v", e.int_of(0)))),
+            e.foreach(
+                in_(e, "fn_names"),
+                "n0",
+                e.if_only(e.eq(e.v("n0"), e.v("arg")), e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1))),
+            ),
+            e.ret(e.eq(e.fld(e.v("hit"), "v"), num(e, 1))),
+        ),
+    )
+    # A zeroed block defined on first use (dependencies ask for it from every use site).
+    # A data segment defined on first use (dependencies ask for it from every use site).
+    method(
+        e,
+        x,
+        "wmod",
+        "data_once",
+        e.rec(e.p("name", str_(e)), e.p("bytes", e.list_type(int_t(e)))),
+        str_(e),
+        e.seq(
+            e.let("hit", e.rec(e.p("v", e.int_of(0)))),
+            e.foreach(
+                in_(e, "data"),
+                "d0",
+                e.if_only(
+                    e.eq(e.call_m(e.v("d0"), "name", e.tup()), a(e, "name")),
+                    e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1)),
+                ),
+            ),
+            e.if_only(
+                e.eq(e.fld(e.v("hit"), "v"), num(e, 0)),
+                e.seq(
+                    e.let(
+                        "__d",
+                        e.call_m(outer(e), "data", e.rec(e.p("name", a(e, "name")), e.p("bytes", a(e, "bytes")))),
+                    )
+                ),
+            ),
+            e.ret(a(e, "name")),
+        ),
+    )
+    method(
+        e,
+        x,
+        "wmod",
+        "alloc_once",
+        e.rec(e.p("name", str_(e)), e.p("size", int_t(e))),
+        str_(e),
+        e.seq(
+            e.let("hit", e.rec(e.p("v", e.int_of(0)))),
+            e.foreach(
+                in_(e, "data"),
+                "d0",
+                e.if_only(
+                    e.eq(e.call_m(e.v("d0"), "name", e.tup()), a(e, "name")),
+                    e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1)),
+                ),
+            ),
+            e.if_only(
+                e.eq(e.fld(e.v("hit"), "v"), num(e, 0)),
+                e.seq(
+                    e.let(
+                        "__a", e.call_m(outer(e), "alloc", e.rec(e.p("name", a(e, "name")), e.p("size", a(e, "size"))))
+                    )
+                ),
+            ),
+            e.ret(a(e, "name")),
+        ),
+    )
+    method(
+        e,
+        x,
+        "wmod",
         "sig_ir",
         ty(e),
         str_(e),
@@ -2924,9 +3717,14 @@ def module(e):
                     e.p("store", _count_use(e, _p(e, "val"))),
                     e.p("mstore", e.seq(_count_name(e, _p(e, "addr")), _count_use(e, _p(e, "val")))),
                     e.p("mgrow", _count_use(e, _p(e, "a"))),
+                    e.p("msize", e.seq()),
                     e.p(
                         "mcopy",
                         e.seq(_count_use(e, _p(e, "dst")), _count_use(e, _p(e, "src")), _count_use(e, _p(e, "n"))),
+                    ),
+                    e.p(
+                        "mfill",
+                        e.seq(_count_use(e, _p(e, "dst")), _count_use(e, _p(e, "val")), _count_use(e, _p(e, "n"))),
                     ),
                     e.p("push", _count_use(e, _p(e, "val"))),
                     e.p("call", e.foreach(_p(e, "args"), "ax", _count_use(e, e.v("ax")))),
@@ -2980,6 +3778,11 @@ def module(e):
                             _rs_line(e, 0, e.s("memory.grow")),
                             _rs(e, "set_local", _p(e, "res")),
                         ),
+                    ),
+                    e.p("msize", e.seq(_rs_line(e, 1, e.s("memory.size")), _rs(e, "set_local", _p(e, "res")))),
+                    e.p(
+                        "mfill",
+                        e.seq(_rs_ops(e, _p(e, "dst"), _p(e, "val"), _p(e, "n")), _rs_line(e, -3, e.s("memory.fill"))),
                     ),
                     e.p(
                         "mcopy",
@@ -3217,7 +4020,21 @@ def module(e):
                         "put",
                         e.tup(
                             e.call_m(e.v("pnames"), "get", to_str(e, e.fld(e.v("pi"), "i"))),
-                            mk(e, "wbinding", e.p("ty", e.v("pty")), e.p("slot", e.v("an"))),
+                            _must_v(
+                                e,
+                                bim(
+                                    e,
+                                    e.mb.eval_aspect_initial_bind(),
+                                    "initial_bind",
+                                    lookup_v(e, in_(e, "xx", "value"), e.v("pty"), e.mb.eval_aspect_initial_bind()),
+                                    e.rec(
+                                        e.p("xx", in_(e, "xx", "value")),
+                                        e.p("loc", e.v("loc")),
+                                        e.p("slot", mk(e, "wparam", e.p("ty", e.v("pty")), e.p("slot", e.v("an")))),
+                                    ),
+                                ),
+                                "parameter binding",
+                            ),
                         ),
                     ),
                     e.incr(e.fld(e.v("pi"), "i")),
@@ -3276,6 +4093,64 @@ def module(e):
                 ),
             ),
             _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
+            # The callee owns its parameters: when the body falls through, drop them, last first (an exit inside the
+            # body dropped them through its cleanup chain). The drops are collected by position and emitted in reverse.
+            e.if_only(
+                e.not_(e.v("ended")),
+                e.seq(
+                    e.let("drops", e.map_new(str_(e), code_t(e))),
+                    count_let(e, "pn"),
+                    count_loop(e, "pn", e.v("entries")),
+                    e.let("di", e.rec(e.p("v", e.int_of(0)))),
+                    e.foreach(
+                        e.v("entries"),
+                        "en",
+                        e.seq(
+                            e.call_m(
+                                e.v("drops"),
+                                "put",
+                                e.tup(
+                                    to_str(e, e.fld(e.v("di"), "v")),
+                                    _must_v(
+                                        e,
+                                        bim(
+                                            e,
+                                            e.mb.eval_binding(),
+                                            "drop",
+                                            e.fld(e.v("en"), "value"),
+                                            e.rec(e.p("xx", e.v("ctx")), e.p("loc", e.v("loc"))),
+                                        ),
+                                        "parameter drop",
+                                    ),
+                                ),
+                            ),
+                            e.incr(e.fld(e.v("di"), "v")),
+                        ),
+                    ),
+                    e.let("dj", e.rec(e.p("v", e.int_of(0)))),
+                    e.foreach(
+                        e.v("entries"),
+                        "_",
+                        e.seq(
+                            _append_code(
+                                e,
+                                e.v("out"),
+                                e.call_m(
+                                    e.v("drops"),
+                                    "get",
+                                    to_str(
+                                        e,
+                                        e.mb.operator_sub(
+                                            e.mb.operator_sub(e.fld(e.v("pn"), "v"), e.int_of(1)), e.fld(e.v("dj"), "v")
+                                        ),
+                                    ),
+                                ),
+                            ),
+                            e.incr(e.fld(e.v("dj"), "v")),
+                        ),
+                    ),
+                ),
+            ),
             e.if_only(
                 e.v("need_cast"),
                 push(e, e.v("out"), _inst(e, "ret", e.p("val", e.opt_some(lt(e, "wval"), _wval_of(e, e.v("v")))))),
@@ -3340,6 +4215,7 @@ def module(e):
                 ),
             ),
             e.foreach(e.fld(e.v("rendered"), "lines"), "l", push(e, e.v("all"), e.cat(e.s("    "), e.v("l")))),
+            push(e, in_(e, "fn_names"), a(e, "name")),
             push(
                 e,
                 in_(e, "funcs"),
@@ -3356,6 +4232,9 @@ def module(e):
         ),
     )
 
+    _value_aspects(e, x, "wt_int", e.mb.operator_div(in_(e, "bits"), num(e, 8)), _int_hash_body(e))
+    _value_aspects(e, x, "wt_float", e.mb.operator_div(in_(e, "bits"), num(e, 8)), None)
+    _value_aspects(e, x, "wt_ptr", num(e, 4), _ptr_hash_body(e))
     self_type(
         e,
         x,
@@ -3363,7 +4242,11 @@ def module(e):
         e.cat(e.if_else(in_(e, "signed"), e.dstr("i"), e.dstr("u")), to_str(e, in_(e, "bits"))),
         e.aspect_dispatch(
             lv(e, "wtype_id"),
+            asp_id(e, "initial_bind"),
             lv(e, "wint_id"),
+            lv(e, "size_id"),
+            lv(e, "hash_id"),
+            lv(e, "eq_id"),
             op_id(e, "add"),
             op_id(e, "sub"),
             op_id(e, "mul"),
@@ -3676,7 +4559,10 @@ def module(e):
         e.cat(e.s("f"), to_str(e, in_(e, "bits"))),
         e.aspect_dispatch(
             lv(e, "wtype_id"),
+            asp_id(e, "initial_bind"),
             lv(e, "wfloat_id"),
+            lv(e, "size_id"),
+            lv(e, "eq_id"),
             op_id(e, "add"),
             op_id(e, "sub"),
             op_id(e, "mul"),
@@ -3843,7 +4729,11 @@ def module(e):
         e.cat(e.s("ptr("), bim0(e, ty(e), "desc", in_(e, "pointee")), e.s(")")),
         e.aspect_dispatch(
             lv(e, "wtype_id"),
+            asp_id(e, "initial_bind"),
             lv(e, "wptr_id"),
+            lv(e, "size_id"),
+            lv(e, "hash_id"),
+            lv(e, "eq_id"),
             op_id(e, "eq"),
             op_id(e, "ne"),
             op_id(e, "lt"),
@@ -4666,8 +5556,16 @@ def module(e):
 
     accessor(e, x, "wbinding", "ty", ty(e))
     accessor(e, x, "wbinding", "slot", str_(e))
-    _binding_impl(e, x, "wbinding", cv_of(e, a(e, "code"), _wval_slot(e, in_(e, "ty"), in_(e, "slot"))))
-    _binding_impl(e, x, "wbinding_none", e.mb.panic(e.s("wasm: unit binding has no value")))
+    _binding_impl(
+        e, x, "wbinding", cv_of(e, a(e, "code"), _wval_slot(e, in_(e, "ty"), in_(e, "slot"))), binding_drop_body(e)
+    )
+    _binding_impl(
+        e,
+        x,
+        "wbinding_none",
+        e.mb.panic(e.s("wasm: unit binding has no value")),
+        e.eresult_ok(e.mb.types_code(), code_none(e, loc(e))),
+    )
 
     marker_type(e, x, "wunit", "unit", "wunit_m", e.aspect_dispatch(lv(e, "wunit_m_id"), asp_id(e, "bind")))
     x.append(e.impl_interface(e.v("wunit"), t(e, "wunit_m")))
@@ -4747,7 +5645,12 @@ def module(e):
 
     # `memory_grow(pages) -> i32` and `memory_copy((dst, src, n))`: the bulk memory instructions as callables.
     # Their operands are retagged to i32, so pointers pass as they are.
-    for obj, marker in [["wmem_grow", "wmem_grow_m"], ["wmem_copy", "wmem_copy_m"]]:
+    for obj, marker in [
+        ["wmem_grow", "wmem_grow_m"],
+        ["wmem_copy", "wmem_copy_m"],
+        ["wmem_size", "wmem_size_m"],
+        ["wmem_fill", "wmem_fill_m"],
+    ]:
         self_type(
             e,
             x,
@@ -4802,9 +5705,25 @@ def module(e):
                     e.let("pages", _i32_operand(a(e, "argument"))),
                     e.let("r", _fresh(e, e.v("mod"), _int_ty(e, "i32"))),
                     push(e, e.v("out"), _inst(e, "mgrow", e.p("res", e.v("r")), e.p("a", e.v("pages")))),
-                    e.ret(
-                        ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _wval_local(e, _int_ty(e, "i32"), e.v("r"))))
-                    ),
+                    e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _wval_local(e, _int_ty(e, "i32"), e.v("r"))))),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+    x.append(
+        e.impl_interface(
+            e.v("wmem_size"),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    e.let("mod", _xmod(e)),
+                    e.let("out", _insts_new(e)),
+                    e.let("r", _fresh(e, e.v("mod"), _int_ty(e, "i32"))),
+                    push(e, e.v("out"), _inst(e, "msize", e.p("res", e.v("r")))),
+                    e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _wval_local(e, _int_ty(e, "i32"), e.v("r"))))),
                 ),
             ),
             e.p("exception_type", e.option_type_lowered_none()),
@@ -4843,7 +5762,9 @@ def module(e):
                         "er",
                         e.seq(
                             e.let("ec", unwrap_cve_m(e, e.v("er"))),
-                            e.call_m(e.v("ops"), "put", e.tup(to_str(e, e.fld(e.v("st"), "i")), _i32_operand(e.v("ec")))),
+                            e.call_m(
+                                e.v("ops"), "put", e.tup(to_str(e, e.fld(e.v("st"), "i")), _i32_operand(e.v("ec")))
+                            ),
                             e.incr(e.fld(e.v("st"), "i")),
                         ),
                     ),
@@ -4859,6 +5780,91 @@ def module(e):
                             "mcopy",
                             e.p("dst", e.call_m(e.v("ops"), "get", e.s("0"))),
                             e.p("src", e.call_m(e.v("ops"), "get", e.s("1"))),
+                            e.p("n", e.call_m(e.v("ops"), "get", e.s("2"))),
+                        ),
+                    ),
+                    e.ret(ok_cve(e, cv_no(e, _code_of(e, e.v("out"))))),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+
+    self_type(
+        e,
+        x,
+        "wgfn_t",
+        e.cat(e.s("wasm global definition function "), to_str(e, in_(e, "kind"))),
+        rt_dispatch(e, lt(e, "wmod"), e.aspect_dispatch(lv(e, "wgfn_m_id"), asp_id(e, "function"))),
+        can_cast_from_self(e),
+        cast_from_self(e),
+        no_cast_to(e),
+        cast_to_panic(e),
+        body(
+            e,
+            e.ret(
+                and_b(
+                    e,
+                    has(e, xx(e), a(e, "other"), "wgfn_m"),
+                    e.eq(acc(e, xx(e), a(e, "other"), "wgfn_m", "kind"), in_(e, "kind")),
+                )
+            ),
+        ),
+    )
+    rt_lift_impl(e, x, "wgfn_t")
+    rt_bind_impl(e, x, "wgfn_t", lt(e, "wmod"))
+    rt_use_impl(e, x, "wgfn_t")
+    x.append(
+        e.impl_interface(
+            e.v("wmem_fill"),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    e.let("mod", _xmod(e)),
+                    e.let("out", _insts_new(e)),
+                    e.let("argv", a(e, "argument")),
+                    e.if_only(
+                        e.not_(cve_has(e, e.v("argv"))),
+                        ret_m(e, err_cve(e, loc(e), "memory.copy arguments have no value")),
+                    ),
+                    e.let("tk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "tuple"))),
+                    e.if_only(
+                        e.not_(e.fld(e.v("tk"), "is_some")),
+                        ret_m(e, err_cve(e, loc(e), "memory.copy takes a tuple of destination, source and length")),
+                    ),
+                    e.let("st", e.rec(e.p("i", e.int_of(0)))),
+                    e.let("ops", e.map_new(str_(e), lt(e, "wval"))),
+                    e.foreach(
+                        bim(
+                            e,
+                            asp_iface(e, "tuple"),
+                            "take_elements",
+                            e.fld(e.v("tk"), "value"),
+                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
+                        ),
+                        "er",
+                        e.seq(
+                            e.let("ec", unwrap_cve_m(e, e.v("er"))),
+                            e.call_m(
+                                e.v("ops"), "put", e.tup(to_str(e, e.fld(e.v("st"), "i")), _i32_operand(e.v("ec")))
+                            ),
+                            e.incr(e.fld(e.v("st"), "i")),
+                        ),
+                    ),
+                    e.if_only(
+                        e.not_(e.eq(e.fld(e.v("st"), "i"), num(e, 3))),
+                        ret_m(e, err_cve(e, loc(e), "memory.copy takes a tuple of destination, source and length")),
+                    ),
+                    push(
+                        e,
+                        e.v("out"),
+                        _inst(
+                            e,
+                            "mfill",
+                            e.p("dst", e.call_m(e.v("ops"), "get", e.s("0"))),
+                            e.p("val", e.call_m(e.v("ops"), "get", e.s("1"))),
                             e.p("n", e.call_m(e.v("ops"), "get", e.s("2"))),
                         ),
                     ),
@@ -4931,7 +5937,19 @@ def module(e):
                                             or_b(
                                                 e,
                                                 _wgfn_is(e, "loop_fn"),
-                                                or_b(e, _wgfn_is(e, "memory_grow_fn"), _wgfn_is(e, "memory_copy_fn")),
+                                                or_b(
+                                                    e,
+                                                    _wgfn_is(e, "memory_grow_fn"),
+                                                    or_b(
+                                                        e,
+                                                        _wgfn_is(e, "memory_copy_fn"),
+                                                        or_b(
+                                                            e,
+                                                            _wgfn_is(e, "memory_size_fn"),
+                                                            _wgfn_is(e, "memory_fill_fn"),
+                                                        ),
+                                                    ),
+                                                ),
                                             ),
                                             e.list_new(str_(e)),
                                             e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("elem"), e.s("values")),
@@ -5065,6 +6083,40 @@ def module(e):
                                     e.call(
                                         e.eval_builtin("value_object_const"),
                                         e.rec(e.p("type", mk_arg(e, "wmem_grow", e.tup())), e.p("data", e.tup())),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.if_only(
+                        _wgfn_is(e, "memory_fill_fn"),
+                        ret_m(
+                            e,
+                            ok_cve(
+                                e,
+                                cv_of(
+                                    e,
+                                    code_none(e, loc(e)),
+                                    e.call(
+                                        e.eval_builtin("value_object_const"),
+                                        e.rec(e.p("type", mk_arg(e, "wmem_fill", e.tup())), e.p("data", e.tup())),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.if_only(
+                        _wgfn_is(e, "memory_size_fn"),
+                        ret_m(
+                            e,
+                            ok_cve(
+                                e,
+                                cv_of(
+                                    e,
+                                    code_none(e, loc(e)),
+                                    e.call(
+                                        e.eval_builtin("value_object_const"),
+                                        e.rec(e.p("type", mk_arg(e, "wmem_size", e.tup())), e.p("data", e.tup())),
                                     ),
                                 ),
                             ),
@@ -5277,8 +6329,20 @@ def module(e):
             ),
             e.p("guarded", e.mb.panic(e.s("wasm target: exceptions are not supported"))),
             e.p("exc_cleanup", e.mb.panic(e.s("wasm target: exceptions are not supported"))),
-            e.p("exit_trampoline", e.mb.panic(e.s("wasm target: cleanup blocks are not supported"))),
-            e.p("drop", e.eresult_ok(code_t(e), code_none(e, loc(e)))),
+            # A cleanup block: land, run the cleanup, continue to the next block; the carried value already sits in
+            # the slot its return stored it in.
+            e.p(
+                "exit_trampoline",
+                body(
+                    e,
+                    e.let("out", _insts_new(e)),
+                    push(e, e.v("out"), _inst(e, "label", e.p("name", e.call_m(_mod(e), "label_of", a(e, "self"))))),
+                    _append_code(e, e.v("out"), a(e, "cleanup")),
+                    push(e, e.v("out"), _br_inst(e, e.call_m(_mod(e), "label_of", a(e, "next")))),
+                    e.ret(e.eresult_ok(code_t(e), _code_of(e, e.v("out")))),
+                ),
+            ),
+            e.p("drop", target_drop_body(e)),
             e.p(
                 "return",
                 body(
@@ -5445,6 +6509,7 @@ def module(e):
                             e.p("data", e.list_new(lt(e, "wdata"))),
                             e.p("data_end", e.int_of(8)),
                             e.p("funcs", e.list_new(str_(e))),
+                            e.p("fn_names", e.list_new(str_(e))),
                             e.p("exports", e.list_new(str_(e))),
                             e.p("labels", e.list_new(lt(e, "wlabel"))),
                             e.p("locals", e.list_new(lt(e, "wlocal"))),
@@ -5480,8 +6545,14 @@ def module(e):
             ),
         )
     )
+    accessor(e, x, "wparam", "slot", str_(e))
+    _initial_bind_impl(e, x, "wt_int")
+    _initial_bind_impl(e, x, "wt_float")
+    _initial_bind_impl(e, x, "wt_ptr")
+    _initial_bind_impl(e, x, "wt_fn")
+    _initial_bind_impl(e, x, "wt_void")
     x.append(e.finish(e.v("d")))
-    passthrough = ["ptr", "fn", "global_t", "import_t"]
+    passthrough = ["ptr", "fn", "global_t", "import_t", "func_dep", "alloc_dep", "data_dep", "cstr_dep"]
     defs = []
     defs.append(e.p("new", e.fld(e.v("wasm_b"), "func")))
     defs.append(e.p("mod_t", t(e, "wmod")))
@@ -5490,7 +6561,19 @@ def module(e):
     defs.append(e.p("meta_new", e.fld(e.v("wmeta"), "new")))
     for name in passthrough:
         defs.append(e.p(name, e.v("c_" + name)))
-    for obj in ["wt_int", "wt_float", "wt_void", "wgfn_t", "wt_ptr", "wt_global", "wloop_t", "wmem_grow", "wmem_copy"]:
+    for obj in [
+        "wt_int",
+        "wt_float",
+        "wt_void",
+        "wgfn_t",
+        "wt_ptr",
+        "wt_global",
+        "wloop_t",
+        "wmem_grow",
+        "wmem_copy",
+        "wmem_size",
+        "wmem_fill",
+    ]:
         defs.append(e.p(obj + "_new", e.fld(e.v(obj), "new")))
     x.append(e.ret(e.rec(*defs)))
 

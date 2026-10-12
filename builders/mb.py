@@ -207,8 +207,14 @@ class Mb:
     def eval_aspect_bind(self):
         return self.builtin("eval", "aspect_bind")
 
-    def eval_aspect_initial_bind_dynamic(self):
-        return self.builtin("eval", "aspect_initial_bind_dynamic")
+    def eval_aspect_initial_bind(self):
+        return self.builtin("eval", "aspect_initial_bind")
+
+    def eval_binding_slot(self):
+        return self.builtin("eval", "binding_slot")
+
+    def eval_binding_slot_dynamic(self):
+        return self.builtin("eval", "binding_slot_dynamic")
 
     def eval_aspect_lift(self):
         return self.builtin("eval", "aspect_lift")
@@ -230,6 +236,15 @@ class Mb:
 
     def eval_aspect_bind_dynamic_id(self):
         return self.builtin("eval", "aspect_bind_dynamic_id")
+
+    def eval_aspect_drop_dynamic(self):
+        return self.builtin("eval", "aspect_drop_dynamic")
+
+    def eval_drop_value(self):
+        return self.builtin("eval", "drop_value")
+
+    def eval_binding_setter_consumed(self):
+        return self.builtin("eval", "binding_setter_consumed")
 
     def eval_exit_value(self):
         return self.builtin("eval", "exit_value")

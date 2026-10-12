@@ -1,6 +1,6 @@
 """js-es2020.atz: JavaScript target (one `any` value type, globals, `new`, and definition functions)."""
 
-from . import target_mb
+from . import target_mb, values
 from .target_mb import (
     a,
     acc,
@@ -10,10 +10,12 @@ from .target_mb import (
     asp_iface,
     bim,
     bim0,
+    binding_drop_body,
     body,
     can_cast_from_self,
     cast_from_self,
     cast_to_panic,
+    cast_value,
     code_none,
     code_t,
     const_eval_in,
@@ -27,7 +29,6 @@ from .target_mb import (
     cve_t,
     cve_type,
     cve_value,
-    cast_value,
     def_iface,
     def_obj,
     dfalse,
@@ -76,6 +77,7 @@ from .target_mb import (
     structural_exits,
     t,
     tag_value,
+    target_drop_body,
     throw_err,
     to_str,
     try_er,
@@ -221,6 +223,7 @@ def module(e):
             text = ""
         entries.append(e.p(str(b), e.s(text)))
     escape_table = e.map_new(str_(e), str_(e), *entries)
+    x.append(e.let("values", e.import_local("values", values.FILE)))
     x.append(e.let("d", e.define()))
     x.append(e.option_type_let())
     def_iface(e, x, "jany_m")
@@ -235,6 +238,13 @@ def module(e):
     x.append(e.impl_interface(e.v("jcode"), e.mb.builtin("eval", "code_dyn")))
     method(e, x, "jcode", "insts", e.tup(), _insts_t(e), in_(e, "insts"))
     def_obj(e, x, "jval", "js value", e.rec(e.p("ty", ty(e)), e.p("expr", str_(e))))
+    x.append(
+        e.impl_interface(
+            e.v("jval"),
+            e.fld(e.v("values"), "retag"),
+            e.p("retag", mk(e, "jval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")))),
+        )
+    )
     def_obj(
         e,
         x,
@@ -453,7 +463,7 @@ def module(e):
             e.v("jbinding"),
             e.mb.eval_binding(),
             e.p("use", cv_of(e, a(e, "code"), _jval_new(e, in_(e, "name")))),
-            e.p("drop", e.eresult_ok(e.mb.types_code(), code_none(e, loc(e)))),
+            e.p("drop", binding_drop_body(e)),
             e.p("fork", outer(e)),
             e.p("merge", e.eresult_ok(e.mb.eval_binding(), outer(e))),
         )
@@ -683,7 +693,7 @@ def module(e):
             e.p("guarded", e.mb.panic(e.s("js target: exceptions are not supported"))),
             e.p("exc_cleanup", e.mb.panic(e.s("js target: exceptions are not supported"))),
             e.p("exit_trampoline", e.mb.panic(e.s("js target: cleanup blocks are not supported"))),
-            e.p("drop", e.eresult_ok(code_t(e), code_none(e, loc(e)))),
+            e.p("drop", target_drop_body(e)),
             e.p(
                 "return",
                 body(

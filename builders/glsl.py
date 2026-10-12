@@ -1,6 +1,7 @@
 """glsl-es-3.00.atz: GLSL ES 3.00 shader target."""
 
 from . import target_mb as tm
+from . import values
 from .target_mb import (
     a,
     acc,
@@ -11,6 +12,7 @@ from .target_mb import (
     asp_iface,
     bim,
     bim0,
+    binding_drop_body,
     body,
     bool_t,
     can_cast_from_self,
@@ -83,6 +85,7 @@ from .target_mb import (
     structural_exits,
     t,
     tag_value,
+    target_drop_body,
     throw_err,
     to_str,
     try_er,
@@ -1958,7 +1961,7 @@ def _def_target(e, x):
             e.p("guarded", e.mb.panic(e.s("glsl target: exceptions are not supported"))),
             e.p("exc_cleanup", e.mb.panic(e.s("glsl target: exceptions are not supported"))),
             e.p("exit_trampoline", e.mb.panic(e.s("glsl target: cleanup blocks are not supported"))),
-            e.p("drop", e.eresult_ok(code_t(e), code_none(e, loc(e)))),
+            e.p("drop", target_drop_body(e)),
             e.p(
                 "return",
                 body(
@@ -2908,6 +2911,7 @@ def _def_builtins(e, x):
 
 def module(e):
     x = []
+    x.append(e.let("values", e.import_local("values", values.FILE)))
     x.append(e.let("d", e.define()))
     x.append(e.option_type_let())
     _def_data(e, x)
@@ -3087,6 +3091,13 @@ def _def_data(e, x):
     x.append(e.impl_interface(e.v("gcode"), e.mb.builtin("eval", "code_dyn")))
     method(e, x, "gcode", "insts", e.tup(), _insts_t(e), in_(e, "insts"))
     def_obj(e, x, "gval", "glsl value", e.rec(e.p("ty", ty(e)), e.p("expr", str_(e))))
+    x.append(
+        e.impl_interface(
+            e.v("gval"),
+            e.fld(e.v("values"), "retag"),
+            e.p("retag", mk(e, "gval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")))),
+        )
+    )
     accessor(e, x, "gval", "expr", str_(e))
     accessor(e, x, "gval", "ty", ty(e))
     x.append(e.impl_interface(e.v("gval"), e.mb.eval_value(), e.p("type", in_(e, "ty"))))
@@ -3110,7 +3121,7 @@ def _def_data(e, x):
             e.v("gbinding"),
             e.mb.eval_binding(),
             e.p("use", cv_of(e, a(e, "code"), _gval_new(e, in_(e, "ty"), in_(e, "name")))),
-            e.p("drop", e.eresult_ok(e.mb.types_code(), code_none(e, loc(e)))),
+            e.p("drop", binding_drop_body(e)),
             e.p("fork", outer(e)),
             e.p("merge", e.eresult_ok(e.mb.eval_binding(), outer(e))),
         )
