@@ -154,6 +154,10 @@ def _st_is(e, field, value):
     return e.eq(e.fld(e.v("st"), field), num(e, value))
 
 
+def _entry(e, key, value):
+    return e.call(e.eval_builtin("expr_record_entry"), e.rec(p("key", key), p("value", value)))
+
+
 def _exports_const_fn(e, x):
     """`wasi.exports ()`: the module's export record, `module` and `<name>_t` for each function of the spec, built as
     a record expression from the parsed spec and evaluated in the caller's context."""
@@ -165,18 +169,17 @@ def _exports_const_fn(e, x):
         e.call(e.v("h_types"), e.rec(p("root", e.v("typenames")), p("types", e.v("types")))),
         e.let("fns", e.map_new(str_(e), ty(e))),
         e.call(e.v("h_fn_types"), e.rec(p("root", e.v("preview1")), p("types", e.v("types")), p("fns", e.v("fns")))),
-        e.let("entries", e.map_new(e.mb.types_constkey(), e.mb.types_expr())),
-        e.call_m(
-            e.v("entries"), "put", e.tup(e.mb.as_(e.s("module"), e.mb.types_constkey()), e.stage(e.s(MODULE)))
-        ),
+        e.let("entries", e.list_new(e.mb.builtin("types", "expr_record_entry"))),
+        push(e, e.v("entries"), _entry(e, e.stage(e.s("module")), e.stage(e.s(MODULE)))),
         e.foreach(
             e.v("fns"),
             "fn",
-            e.call_m(
+            push(
+                e,
                 e.v("entries"),
-                "put",
-                e.tup(
-                    e.mb.as_(e.cat(e.fld(e.v("fn"), "key"), e.s("_t")), e.mb.types_constkey()),
+                _entry(
+                    e,
+                    e.stage(e.lower(e.cat(e.fld(e.v("fn"), "key"), e.s("_t")))),
                     e.stage(e.lower(e.fld(e.v("fn"), "value"))),
                 ),
             ),
