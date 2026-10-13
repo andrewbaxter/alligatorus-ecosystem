@@ -1,8 +1,9 @@
 """wasi-0.1.atz: WASI preview1 function types, derived from the upstream witx spec.
 
 Exports `module`, the import module name, and one field per function of the spec, `<name>_t`, its wasm
-function type (a constant: an app passes `wasi.fd_write_t` to `import_fn` directly). The functions are those
-of the pinned spec commit; a spec without one of them fails to build.
+function type (a constant: an app passes `wasi.fd_write_t` to `import_fn` directly). The spec is parsed when
+this module is built, and the export record is built from the parsed names by a const function, with the
+compiler's expression constructors.
 """
 
 from ..eco_mb import p
@@ -12,6 +13,7 @@ from ..target_mb import (
     and_b,
     body,
     bool_t,
+    const_fn,
     count_let,
     count_loop,
     def_obj,
@@ -21,6 +23,7 @@ from ..target_mb import (
     hf,
     hf_rec,
     int_t,
+    loc,
     lt,
     mk,
     num,
@@ -31,6 +34,7 @@ from ..target_mb import (
     t,
     to_str,
     ty,
+    xx,
 )
 
 MODULE = "wasi_snapshot_preview1"
@@ -39,7 +43,6 @@ SPEC_REPO = "https://github.com/WebAssembly/WASI"
 
 SPEC_COMMIT = "fae981bae14809d91f9bc2d63852d461f331d161"
 
-FUNCTIONS = ['args_get', 'args_sizes_get', 'environ_get', 'environ_sizes_get', 'clock_res_get', 'clock_time_get', 'fd_advise', 'fd_allocate', 'fd_close', 'fd_datasync', 'fd_fdstat_get', 'fd_fdstat_set_flags', 'fd_fdstat_set_rights', 'fd_filestat_get', 'fd_filestat_set_size', 'fd_filestat_set_times', 'fd_pread', 'fd_prestat_get', 'fd_prestat_dir_name', 'fd_pwrite', 'fd_read', 'fd_readdir', 'fd_renumber', 'fd_seek', 'fd_sync', 'fd_tell', 'fd_write', 'path_create_directory', 'path_filestat_get', 'path_filestat_set_times', 'path_link', 'path_open', 'path_readlink', 'path_remove_directory', 'path_rename', 'path_symlink', 'path_unlink_file', 'poll_oneoff', 'proc_exit', 'proc_raise', 'sched_yield', 'random_get', 'sock_accept', 'sock_recv', 'sock_send', 'sock_shutdown']
 
 
 def _fn_def(e, out, name, arg_type, ret):
@@ -149,6 +152,49 @@ def _set_st(e, field, value):
 
 def _st_is(e, field, value):
     return e.eq(e.fld(e.v("st"), field), num(e, value))
+
+
+def _exports_const_fn(e, x):
+    """`wasi.exports ()`: the module's export record, `module` and `<name>_t` for each function of the spec, built as
+    a record expression from the parsed spec and evaluated in the caller's context."""
+    parts = [
+        *[e.let(name, e.lower(e.v(name))) for name in ["h_parse", "h_types", "h_fn_types"]],
+        e.let("typenames", e.call(e.v("h_parse"), _spec_text(e, "typenames.witx"))),
+        e.let("preview1", e.call(e.v("h_parse"), _spec_text(e, "wasi_snapshot_preview1.witx"))),
+        e.let("types", e.map_new(str_(e), e.lower(t(e, "wt")))),
+        e.call(e.v("h_types"), e.rec(p("root", e.v("typenames")), p("types", e.v("types")))),
+        e.let("fns", e.map_new(str_(e), ty(e))),
+        e.call(e.v("h_fn_types"), e.rec(p("root", e.v("preview1")), p("types", e.v("types")), p("fns", e.v("fns")))),
+        e.let("entries", e.map_new(e.mb.types_constkey(), e.mb.types_expr())),
+        e.call_m(
+            e.v("entries"), "put", e.tup(e.mb.as_(e.s("module"), e.mb.types_constkey()), e.stage(e.s(MODULE)))
+        ),
+        e.foreach(
+            e.v("fns"),
+            "fn",
+            e.call_m(
+                e.v("entries"),
+                "put",
+                e.tup(
+                    e.mb.as_(e.cat(e.fld(e.v("fn"), "key"), e.s("_t")), e.mb.types_constkey()),
+                    e.stage(e.lower(e.fld(e.v("fn"), "value"))),
+                ),
+            ),
+        ),
+        e.ret(
+            e.call(
+                e.eval_builtin("const_eval"),
+                e.rec(
+                    p("xx", xx(e)),
+                    p(
+                        "staged",
+                        e.call(e.eval_builtin("expr_record"), e.rec(p("loc", loc(e)), p("entries", e.v("entries")))),
+                    ),
+                ),
+            )
+        ),
+    ]
+    const_fn(e, x, "exports_b", "wasi.exports", body(e, *parts))
 
 
 def module(e):
@@ -592,34 +638,11 @@ def module(e):
             ),
         ),
     )
+    _exports_const_fn(e, x)
     x.append(e.finish(e.v("d")))
-    x.append(
-        e.ret(
-            e.rec(
-                p("parse", e.v("h_parse")),
-                p("types", e.v("h_types")),
-                p("fn_types", e.v("h_fn_types")),
-                p("wt_t", t(e, "wt")),
-            )
-        )
-    )
-
-    y = []
-    y.append(e.let("k", e.lower(e.mb.seq(x))))
-    y.append(e.let("typenames", e.call(e.fld(e.v("k"), "parse"), _spec_text(e, "typenames.witx"))))
-    y.append(e.let("preview1", e.call(e.fld(e.v("k"), "parse"), _spec_text(e, "wasi_snapshot_preview1.witx"))))
-    y.append(e.let("types", e.map_new(str_(e), e.fld(e.v("k"), "wt_t"))))
-    y.append(e.call(e.fld(e.v("k"), "types"), e.rec(p("root", e.v("typenames")), p("types", e.v("types")))))
-    y.append(e.let("fns", e.map_new(str_(e), ty(e))))
-    y.append(
-        e.call(
-            e.fld(e.v("k"), "fn_types"),
-            e.rec(p("root", e.v("preview1")), p("types", e.v("types")), p("fns", e.v("fns"))),
-        )
-    )
-    y.append(e.ret(e.rec(*[p(name + "_t", e.call_m(e.v("fns"), "get", e.s(name))) for name in FUNCTIONS])))
+    x.append(e.ret(e.rec(p("exports", e.fld(e.v("exports_b"), "func")))))
 
     top = []
-    top.append(e.let("k", e.lower(e.mb.seq(y))))
-    top.append(e.ret(e.rec(p("module", e.s(MODULE)), *[p(name + "_t", e.fld(e.v("k"), name + "_t")) for name in FUNCTIONS])))
+    top.append(e.let("k", e.lower(e.mb.seq(x))))
+    top.append(e.ret(e.call(e.fld(e.v("k"), "exports"), e.tup())))
     return top
