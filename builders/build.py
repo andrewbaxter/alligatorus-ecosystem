@@ -3,7 +3,8 @@
     python3 -m builders [--check] [FILE.atz ...]   (run from the ecosystem root)
 
 Writes each module whose JSON changed (unchanged files are left untouched). With `--check`, writes nothing and
-exits non-zero if any file's JSON differs from what the builders produce. FILE arguments restrict the run.
+exits non-zero if any file's JSON differs from what the builders produce. FILE arguments restrict the run. A
+module whose builder package is not present (a project kept outside the repository) is skipped.
 """
 
 import argparse
@@ -30,10 +31,16 @@ def _compress(text):
 
 
 def build_text(file):
-    """The compact module JSON the builders produce for `file`."""
+    """The compact module JSON the builders produce for `file`, or None when its builder is absent."""
     for project, known_file, module_name, builder_args in modules():
         if known_file == file:
-            builder = importlib.import_module("." + project + "." + module_name, __package__)
+            name = __package__ + "." + project + "." + module_name
+            try:
+                builder = importlib.import_module(name)
+            except ModuleNotFoundError as e:
+                if e.name not in (name, __package__ + "." + project):
+                    raise
+                return None
             return module_json(builder.module(EcoMb(project), *builder_args))
     raise KeyError(file)
 
@@ -54,6 +61,9 @@ def main():
             continue
         text = build_text(file)
         path = code / project / file
+        if text is None:
+            print(f"skipped (no builder): {file}", file=sys.stderr)
+            continue
         if path.exists() and _decompress(path) == text:
             continue
         if args.check:

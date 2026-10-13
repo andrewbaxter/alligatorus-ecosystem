@@ -7281,6 +7281,20 @@ def module(e):
             ),
             e.p("stage", err_cve(e, loc(e), "wasm target: nested staging is not supported")),
             e.p("if", _if_hook(e)),
+            e.p(
+                "loop",
+                body(
+                    e,
+                    e.let("mod", _mod(e)),
+                    e.let("out", _insts_new(e)),
+                    e.let("head", e.call_m(e.v("mod"), "fresh_label", e.tup())),
+                    push(e, e.v("out"), _inst(e, "loop", e.p("name", e.v("head")))),
+                    _append_code(e, e.v("out"), cve_code(e, a(e, "body"))),
+                    e.if_only(e.not_(cve_ended(e, a(e, "body"))), push(e, e.v("out"), _br_inst(e, e.v("head")))),
+                    push(e, e.v("out"), _inst0(e, "end")),
+                    e.ret(ok_cve(e, e.call(e.eval_builtin("codevalue_control_ended"), _code_of(e, e.v("out"))))),
+                ),
+            ),
             e.p("try_catch_finally", err_cve(e, loc(e), "wasm target: try/catch/finally is not supported")),
             e.p("match", _match_hook(e)),
         )

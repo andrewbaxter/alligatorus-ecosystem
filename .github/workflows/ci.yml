@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The compiler is built from the alligatorus repository, from the branch
+      # named like this one when it has one (a change needing a compiler change
+      # pairs the two) and from master otherwise. Its main module generates the
+      # language server bindings from the merman submodule's schema with
+      # schemask at build time.
+      - name: Pick the compiler branch
+        id: compiler
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/andrewbaxter/alligatorus "$BRANCH" >/dev/null; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=master" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          repository: andrewbaxter/alligatorus
+          ref: ${{ steps.compiler.outputs.ref }}
+          path: alligatorus
+          submodules: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - uses: actions/cache@v4
+        id: schemask
+        with:
+          path: ~/.cargo/bin/schemask
+          key: schemask-0.1.6
+
+      - if: steps.schemask.outputs.cache-hit != 'true'
+        run: cargo install schemask --version 0.1.6 --locked
+
+      - name: Build the compiler
+        working-directory: alligatorus
+        run: >
+          mvn -B -q -pl main -am package -DskipTests -Dspotless.check.skip=true
+          dependency:copy-dependencies -DincludeScope=runtime
+
+      - name: Install the at command
+        run: |
+          mkdir -p "$HOME/bin"
+          cat > "$HOME/bin/at" <<EOF
+          #!/bin/sh
+          exec java -cp "$GITHUB_WORKSPACE/alligatorus/main/target/allig3-main-0.0.0-SNAPSHOT.jar:$GITHUB_WORKSPACE/alligatorus/main/target/dependency/*" compilerxyz.main.langhelp.Main "\$@"
+          EOF
+          chmod +x "$HOME/bin/at"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      # zstd reads and writes the modules; the roots' artifacts need wat2wasm
+      # (wabt) for the web and editor apps, clang for the llvm apps, libpipewire
+      # for the synth, and wasmtime runs the wasi apps under test.
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd wabt clang libpipewire-0.3-dev
+          curl -sSL https://github.com/bytecodealliance/wasmtime/releases/download/v27.0.0/wasmtime-v27.0.0-x86_64-linux.tar.xz | tar -xJ -C "$HOME/bin" --strip-components=1 wasmtime-v27.0.0-x86_64-linux/wasmtime
+
+      - name: Check the modules match their builders
+        run: python3 -m builders --check
+
+      - name: Build every root and run the tests
+        run: python3 -m tests --build

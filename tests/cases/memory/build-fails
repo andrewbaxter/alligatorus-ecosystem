@@ -1,0 +1,4 @@
+memory/destructor-test-err.atz
+memory/lifetimes-test-err.atz
+memory/readonly-test-err-ro.atz
+memory/readonly-test-err-sealed.atz

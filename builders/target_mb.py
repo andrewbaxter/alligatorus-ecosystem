@@ -426,7 +426,7 @@ def returns_to(expr, label):
         return returns_to(v["base"], label) or returns_to(v["key"], label)
     if kind == "foreach":
         return returns_to(v["base"], label) or returns_to(v["element_key"], label) or returns_to(v["body"], label)
-    if kind in ("graft", "lower", "stage"):
+    if kind in ("graft", "lower", "stage", "loop"):
         return returns_to(v, label)
     if kind == "if":
         for branch in v["conditions"]:
