@@ -98,6 +98,8 @@ PROJECTS = {
         ("json-two-wasi.atz", "json_two", ("wasm",)),
         ("json-two-libc.atz", "json_two", ("llvm",)),
         ("json-two-libc-ir.atz", "json_two", ("llvm", "ir")),
+        ("json-dynamic.atz", "json_dynamic", ()),
+        ("json-echo-dynamic.atz", "json_echo_dynamic", ()),
     ],
     "collections": [
         ("slice-wasm.atz", "slice", ("wasm",)),

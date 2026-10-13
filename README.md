@@ -33,5 +33,11 @@ union (`end`, `error(code)`, `null`, `bool(v)`, `number(s)`, `string(s)`, `key(s
 `s` a byte slice of the parser's data vec), read with `match`. There is no depth limit. `slice_reader` reads a
 document in memory and `vec_writer` collects output in a byte vec.
 
+`json-dynamic.atz` gives the same logic to the dynamic target (the one `builtins.define` builds for): a
+`bytebuf` object over a `list(ubyte)`, a `reader` over one, a `parser` object whose `next()` yields a source
+union event, and a `writer` object collecting compact json.
+
 The apps `json-echo-wasi.atz` and `json-echo-libc.atz` read a document from stdin and write it back out
-compactly; `json-two-*.atz` parse two documents at once through one parser definition.
+compactly; `json-two-*.atz` parse two documents at once through one parser definition;
+`json-echo-dynamic.atz` echoes `json-echo-dynamic.json` at compile time and prints the result through a wasm
+app.
