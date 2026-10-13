@@ -88,6 +88,14 @@ PROJECTS = {
         ("shared-test-wasm.atz", "shared_test_wasm", ()),
         ("shared-test.atz", "shared_test", ()),
     ],
+    "json": [
+        ("json.atz", "json", ()),
+        ("json-wasm.atz", "json_target", ("wasm",)),
+        ("json-llvm.atz", "json_target", ("llvm",)),
+        ("json-echo-wasi.atz", "json_echo", ("wasm",)),
+        ("json-echo-libc.atz", "json_echo", ("llvm",)),
+        ("json-echo-libc-ir.atz", "json_echo", ("llvm", "ir")),
+    ],
     "collections": [
         ("slice-wasm.atz", "slice", ("wasm",)),
         ("slice-llvm.atz", "slice", ("llvm",)),

@@ -28,6 +28,8 @@ EXTERNS = [
     Extern("memset", ["pv", "i32", "u64"], "pv", False),
     Extern("memcpy", ["pv", "pv", "u64"], "pv", False),
     Extern("puts", ["pu8"], "i32", False),
+    Extern("getchar", [], "i32", False),
+    Extern("putchar", ["i32"], "i32", False),
     Extern("exit", ["i32"], "void", False),
     Extern("printf", ["pu8"], "i32", True),
     Extern("malloc", ["u64"], "pv", False),
@@ -38,7 +40,7 @@ EXTERNS = [
 
 MATH_LIB = "m"
 
-NOT_MATH = ["memset", "memcpy", "puts", "exit", "printf", "malloc", "calloc", "realloc", "free"]
+NOT_MATH = ["memset", "memcpy", "puts", "getchar", "putchar", "exit", "printf", "malloc", "calloc", "realloc", "free"]
 
 
 def module(e):
