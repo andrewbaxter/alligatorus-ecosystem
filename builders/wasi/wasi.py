@@ -16,8 +16,11 @@ from ..target_mb import (
     const_fn,
     count_let,
     count_loop,
+    cve_has,
+    cve_value,
     def_obj,
     dfalse,
+    err_cve,
     fn_def,
     fn_impl,
     hf,
@@ -34,6 +37,7 @@ from ..target_mb import (
     t,
     to_str,
     ty,
+    voc_t,
     xx,
 )
 
@@ -159,16 +163,13 @@ def _entry(e, key, value):
 
 
 def _exports_const_fn(e, x):
-    """`wasi.exports ()`: the module's export record, `module` and `<name>_t` for each function of the spec, built as
-    a record expression from the parsed spec and evaluated in the caller's context."""
+    """`wasi.exports fns`: the module's export record, `module` and `<name>_t` for each function in the parsed map
+    `fns` (a constant `map(str, type)`), built as a record expression and evaluated in the caller's context."""
     parts = [
-        *[e.let(name, e.lower(e.v(name))) for name in ["h_parse", "h_types", "h_fn_types"]],
-        e.let("typenames", e.call(e.v("h_parse"), _spec_text(e, "typenames.witx"))),
-        e.let("preview1", e.call(e.v("h_parse"), _spec_text(e, "wasi_snapshot_preview1.witx"))),
-        e.let("types", e.map_new(str_(e), e.lower(t(e, "wt")))),
-        e.call(e.v("h_types"), e.rec(p("root", e.v("typenames")), p("types", e.v("types")))),
-        e.let("fns", e.map_new(str_(e), ty(e))),
-        e.call(e.v("h_fn_types"), e.rec(p("root", e.v("preview1")), p("types", e.v("types")), p("fns", e.v("fns")))),
+        e.let("argv", a(e, "argument")),
+        e.if_only(e.not_(cve_has(e, e.v("argv"))), ret_m(e, err_cve(e, loc(e), "wasi.exports: argument has no value"))),
+        e.let("host", e.fld(e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, e.v("argv")), voc_t(e))), "data")),
+        e.let("fns", e.call(e.mb.must_reinterpret(), e.tup(e.v("host"), e.map_type(str_(e), ty(e))))),
         e.let("entries", e.list_new(e.mb.builtin("types", "expr_record_entry"))),
         push(e, e.v("entries"), _entry(e, e.stage(e.s("module")), e.stage(e.s(MODULE)))),
         e.foreach(
@@ -643,9 +644,34 @@ def module(e):
     )
     _exports_const_fn(e, x)
     x.append(e.finish(e.v("d")))
-    x.append(e.ret(e.rec(p("exports", e.fld(e.v("exports_b"), "func")))))
+    x.append(
+        e.ret(
+            e.rec(
+                p("parse", e.v("h_parse")),
+                p("types", e.v("h_types")),
+                p("fn_types", e.v("h_fn_types")),
+                p("exports", e.fld(e.v("exports_b"), "func")),
+                p("wt_t", t(e, "wt")),
+            )
+        )
+    )
+
+    y = []
+    y.append(e.let("k", e.lower(e.mb.seq(x))))
+    y.append(e.let("typenames", e.call(e.fld(e.v("k"), "parse"), _spec_text(e, "typenames.witx"))))
+    y.append(e.let("preview1", e.call(e.fld(e.v("k"), "parse"), _spec_text(e, "wasi_snapshot_preview1.witx"))))
+    y.append(e.let("types", e.map_new(str_(e), e.fld(e.v("k"), "wt_t"))))
+    y.append(e.call(e.fld(e.v("k"), "types"), e.rec(p("root", e.v("typenames")), p("types", e.v("types")))))
+    y.append(e.let("fns", e.map_new(str_(e), ty(e))))
+    y.append(
+        e.call(
+            e.fld(e.v("k"), "fn_types"),
+            e.rec(p("root", e.v("preview1")), p("types", e.v("types")), p("fns", e.v("fns"))),
+        )
+    )
+    y.append(e.ret(e.rec(p("fns", e.v("fns")), p("exports", e.fld(e.v("k"), "exports")))))
 
     top = []
-    top.append(e.let("k", e.lower(e.mb.seq(x))))
-    top.append(e.ret(e.call(e.fld(e.v("k"), "exports"), e.tup())))
+    top.append(e.let("k", e.lower(e.mb.seq(y))))
+    top.append(e.ret(e.call(e.fld(e.v("k"), "exports"), e.fld(e.v("k"), "fns"))))
     return top
