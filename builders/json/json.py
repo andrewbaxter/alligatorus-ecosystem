@@ -9,7 +9,7 @@ staged per use.
 `next {ops}` stages the body of a pull parser's `next`: it consumes one value or structural token from the
 reader and yields the event for it. The ops:
 
-    int, byte                  the target's int and byte types
+    int                        the target's int type
     read                       (ctx) -> int: the next byte of input, or a negative int at its end
     event                      the event constructors (per-target union): end, error, null, bool, number,
                                string, key, object_begin, object_end, array_begin, array_end
@@ -19,8 +19,11 @@ reader and yields the event for it. The ops:
     p.ctx                      the value passed to every read
     p.c                        the lookahead byte, assignable; UNREAD before the first read
     p.state, p.fresh, p.err, p.is_key, p.cp, p.lo, p.h, p.i, p.flag     the registers, assignable ints
-    p.data                     a byte vec (vec.atz): the current token's content; uses clear, push, slice
-    p.stack                    a byte vec: one byte per open container (1 object, 0 array); uses len, push, at
+    p.data                     a byte buffer (below): the current token's content
+    p.stack                    a byte buffer: one byte per open container (1 object, 0 array)
+
+A byte buffer is a value with the methods `push(b)` (b an int), `clear()`, `pop()`, `len() -> int`,
+`at(i) -> int` and `slice()`, the buffer's bytes as the target's payload for `number`, `string` and `key`.
 
 `next` returns `end` once the document is complete (and at every call after), `error(code)` when the document is
 malformed (and at every call after; the codes are 1 unexpected byte, 2 unexpected end of input, 4 data after the
@@ -35,7 +38,7 @@ value and never touched again by the caller):
     write_null          {write, w}
     write_bool          {write, w, value}       value: 0 false, else true
     write_int           {write, w, int, value}  int: the target's int type
-    write_number        {write, w, int, s}      s: the raw bytes of a number (a byte slice)
+    write_number        {write, w, int, s}      s: the raw bytes of a number (a byte view: len() and at(i))
     write_string        {write, w, int, s}      s: utf-8 bytes, escaped as json needs
     write_key           {write, w, int, s}      an object key, with its colon
     write_object_begin, write_object_end, write_array_begin, write_array_end   {write, w}
@@ -95,7 +98,7 @@ EVENTS = [
     "array_end",
 ]
 
-NEXT_OPS = ["int", "byte", "read", "event", "p"]
+NEXT_OPS = ["int", "read", "event", "p"]
 
 WRITE_OPS = ["write", "w"]
 
@@ -229,20 +232,20 @@ def _vec(e, name, method, *args):
 
 def _push(e, b):
     """Appends `b` (an int) to the data."""
-    return _vec(e, "data", "push", e.call(_op(e, "byte"), b))
+    return _vec(e, "data", "push", b)
 
 
 def _stack_len(e):
-    return e.fld(_reg(e, "stack"), "len")
+    return e.call(e.fld(_reg(e, "stack"), "len"), e.tup())
 
 
 def _stack_top(e):
-    """The kind of the innermost container, as an int."""
-    return e.call(_op(e, "int"), e.call(e.fld(_reg(e, "stack"), "at"), e.mb.operator_sub(_stack_len(e), e.n(1))))
+    """The kind of the innermost container."""
+    return e.call(e.fld(_reg(e, "stack"), "at"), e.mb.operator_sub(_stack_len(e), e.n(1)))
 
 
 def _stack_pop(e):
-    return e.mb.set(_stack_len(e), e.mb.operator_sub(_stack_len(e), e.n(1)))
+    return _vec(e, "stack", "pop", e.tup())
 
 
 def _data_slice(e):
@@ -546,8 +549,8 @@ def _w(e, byte):
 
 
 def _wv(e, value):
-    """Writes `value`, an int or a byte."""
-    return _stmt(e, e.call(_op(e, "write"), e.tup(_wf(e, "ctx"), e.call(_op(e, "int"), value))))
+    """Writes `value`, an int."""
+    return _stmt(e, e.call(_op(e, "write"), e.tup(_wf(e, "ctx"), value)))
 
 
 def _w_text(e, text):
@@ -630,7 +633,7 @@ def _escaped_byte(e, b):
 def _each_byte(e, label, then):
     """`then` for each byte `b` of the slice `s`."""
     return e.seq(
-        e.let("n", e.fld(_op(e, "s"), "len")),
+        e.let("n", e.call(e.fld(_op(e, "s"), "len"), e.tup())),
         e.let("i", _int(e, 0)),
         _loop(
             e,

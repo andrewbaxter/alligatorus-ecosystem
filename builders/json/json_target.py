@@ -248,10 +248,10 @@ def _cell(e, h, index, depth):
     return e.mb.field(e.mb.as_(h, _up(e, e.v("pi32"), depth)), e.n(index))
 
 
-def _pointer_type(e, x, obj, iface, desc, fields, places, methods):
-    """A handle type over a pointer: its field aspect gives the places (`places` maps a name to the staged place over
-    `self_as`, the handle as one of its pointer types) and the methods; it delegates the rest to ptr(void) and retags
-    from a raw pointer."""
+def _handle_type(e, x, obj, iface, desc, fields, places, methods, under="pv"):
+    """A handle type over a representation (the field `under`: a pointer, or a tuple): its field aspect gives the
+    places (`places` maps a name to the staged place over `self_as`, the handle as one of its types) and the methods;
+    it delegates the rest to the representation and retags from its values."""
     def_iface(e, x, iface, *fields)
     def_obj(e, x, obj, desc, e.rec(*fields))
     x.append(e.impl_interface(e.v(obj), t(e, iface), *[p(k, in_(e, k)) for k, _ in fields]))
@@ -265,7 +265,7 @@ def _pointer_type(e, x, obj, iface, desc, fields, places, methods):
                 (e.eq(a(e, "key"), asp_id(e, "field")), e.opt_some(e.mb.types_aspect(), outer(e))),
                 (e.eq(a(e, "key"), lv(e, iface + "_id")), e.opt_some(e.mb.types_aspect(), outer(e))),
             ],
-            type_aspect(e, xx(e), in_(e, "pv"), a(e, "key")),
+            type_aspect(e, xx(e), in_(e, under), a(e, "key")),
         ),
         body(
             e,
@@ -273,7 +273,7 @@ def _pointer_type(e, x, obj, iface, desc, fields, places, methods):
                 or_b(
                     e,
                     is_equal(e, xx(e), outer(e), a(e, "source_type")),
-                    is_equal(e, xx(e), in_(e, "pv"), a(e, "source_type")),
+                    is_equal(e, xx(e), in_(e, under), a(e, "source_type")),
                 )
             ),
         ),
@@ -301,7 +301,7 @@ def _pointer_type(e, x, obj, iface, desc, fields, places, methods):
                         ),
                     ),
                 ),
-                p("errs", ret_m(e, err_cve(e, loc(e), desc + ": only runtime pointers can become one"))),
+                p("errs", ret_m(e, err_cve(e, loc(e), desc + ": only runtime values can become one"))),
             ),
         ),
         e.mb.as_(e.b(False), bool_t(e)),
@@ -408,9 +408,9 @@ def _pointer_type(e, x, obj, iface, desc, fields, places, methods):
     return meth
 
 
-def _method_impl(e, x, meth, iface, fields, methods, method_body):
+def _method_impl(e, x, meth, iface, fields, methods, method_body, prelude=()):
     """The call of a handle method: `method_body(kind)` is the staged operation over the handle's fields (host
-    locals of the field names) and `self_v`, the handle value."""
+    locals of the field names) and `self_v`, the handle value; `prelude` are host statements run first."""
 
     def dispatch(kind):
         return e.if_only(e.eq(in_(e, "kind"), e.s(kind)), e.seq(*call_result(e, _staged(e, method_body(kind)))))
@@ -424,6 +424,7 @@ def _method_impl(e, x, meth, iface, fields, methods, method_body):
                 body(
                     e,
                     *[e.let(f, acc(e, xx(e), in_(e, "ht"), iface, f)) for f, _ in fields],
+                    *prelude,
                     *[dispatch(kind) for kind in methods],
                     e.ret(err_cve(e, loc(e), e.cat(e.s("json: unknown method "), in_(e, "kind")))),
                 ),
@@ -679,9 +680,64 @@ def _fn_t(e, params, ret, depth):
     )
 
 
+# ---- byte buffers and views: what json.atz touches bytes through ----
+
+BUF_FIELDS = ["pv", "pi32", "ppv", "bytes_raw", "i32", "u8"]
+BUF_METHODS = ["push", "clear", "pop", "len", "at", "slice"]
+VIEW_FIELDS = ["pu8", "i32", "pt2"]
+VIEW_METHODS = ["len", "at"]
+
+
+def _buffer_types(e, x):
+    """`jbuf`, a byte vec's pointer with json.atz's buffer methods (bytes as ints), and `jview`, a (pointer, length)
+    tuple with its view methods."""
+    fields = [p(f, ty(e)) for f in BUF_FIELDS]
+    meth = _handle_type(e, x, "jbuf", "jbuf_m", "json byte buffer", fields, {}, BUF_METHODS)
+
+    def vec():
+        return e.mb.as_(_self_v(e), e.lower(e.v("bytes_raw")))
+
+    def buf_body(kind):
+        if kind == "push":
+            return e.call(e.fld(vec(), "push"), e.call(e.lower(e.v("u8")), graft(e, a(e, "argument"))))
+        if kind == "clear":
+            return e.call(e.fld(vec(), "clear"), e.tup())
+        if kind == "pop":
+            return e.mb.set(e.fld(vec(), "len"), e.mb.operator_sub(e.fld(vec(), "len"), e.n(1)))
+        if kind == "len":
+            return e.fld(vec(), "len")
+        if kind == "at":
+            return e.call(e.lower(e.v("i32")), e.call(e.fld(vec(), "at"), graft(e, a(e, "argument"))))
+        if kind == "slice":
+            return e.call(e.fld(vec(), "slice"), e.tup())
+        raise AssertionError(kind)
+
+    _method_impl(e, x, meth, "jbuf_m", fields, BUF_METHODS, buf_body)
+
+    fields = [p(f, ty(e)) for f in VIEW_FIELDS]
+    meth = _handle_type(e, x, "jview", "jview_m", "json byte view", fields, {}, VIEW_METHODS, under="pt2")
+
+    def tv():
+        return graft(e, e.v("tv"))
+
+    def view_body(kind):
+        if kind == "len":
+            return e.mb.field(tv(), e.n(1))
+        if kind == "at":
+            return e.call(
+                e.lower(e.v("i32")),
+                e.mb.field(e.mb.as_(e.mb.field(tv(), e.n(0)), e.lower(e.v("pu8"))), graft(e, a(e, "argument"))),
+            )
+        raise AssertionError(kind)
+
+    _method_impl(
+        e, x, meth, "jview_m", fields, VIEW_METHODS, view_body, prelude=[e.let("tv", _retag(e, in_(e, "self"), e.v("pt2")))]
+    )
+
+
 # ---- the parser ----
 
-PARSER_FIELDS = ["pv", "pi32", "ppv", "bytes_raw", "next"]
+PARSER_FIELDS = ["pv", "pi32", "ppv", "buf", "next"]
 
 
 def _parser_new_body(e, tg):
@@ -717,7 +773,6 @@ def _parser_next_body(e, tg):
     d = BODY_MOD
     ops = [
         p("int", _up(e, e.v("i32"), d)),
-        p("byte", _up(e, e.v("u8"), d)),
         p("read", _up(e, e.v("read"), BODY_HOST)),
         p("event", e.rec(*[p(kind, _up(e, e.v("ev_" + kind), BODY_HOST)) for kind in EVENTS])),
         p("p", e.mb.as_(e.v("p"), _up(e, e.v("places"), BODY_HOST))),
@@ -730,8 +785,9 @@ def _parser_setup(e):
     out = []
     for name in ["new", "free", "next", "event_t"] + ["ev_" + kind for kind in EVENTS]:
         out.append(e.let(name, e.lower(e.v(name))))
-    for name in ["pv", "pi32", "ppv", "bytes_raw"]:
+    for name in ["pv", "pi32", "ppv"]:
         out.append(e.let(name, _up(e, e.v(name), SETUP_MOD)))
+    out.append(e.let("buf", e.lower(e.v("buf"))))
     out.append(
         e.let(
             "raw",
@@ -771,9 +827,7 @@ def _handle_places(e, slots, cells, vec_slots=()):
     for name, index in cells.items():
         places[name] = lambda self_as, index=index: e.mb.field(self_as("pi32"), e.n(index))
     for name, slot in vec_slots:
-        places[name] = lambda self_as, slot=slot: e.mb.as_(
-            e.mb.field(self_as("ppv"), e.n(slot)), e.lower(in_(e, "bytes_raw"))
-        )
+        places[name] = lambda self_as, slot=slot: e.mb.as_(e.mb.field(self_as("ppv"), e.n(slot)), e.lower(in_(e, "buf")))
     return places
 
 
@@ -782,7 +836,7 @@ def _parser_const_fn(e, x, tg):
     places = _handle_places(
         e, {"ctx": PTR_SLOT["ctx"]}, REGISTER_CELL, [("data", PTR_SLOT["data"]), ("stack", PTR_SLOT["stack"])]
     )
-    meth = _pointer_type(e, x, "jpt", "jpt_m", "json parser", fields, places, ["next"])
+    meth = _handle_type(e, x, "jpt", "jpt_m", "json parser", fields, places, ["next"])
 
     def method_body(kind):
         return e.call(e.lower(e.v("next")), _self_v(e))
@@ -862,8 +916,16 @@ def _parser_const_fn(e, x, tg):
     parts.append(e.let("new_t", _fn_t(e, [e.v("pv")], e.v("pv"), 1)))
     parts.append(e.let("free_t", _fn_t(e, [e.v("pv")], e.v("void"), 1)))
     parts.append(e.let("next_t", _fn_t(e, [e.v("pv")], e.v("event_t"), 1)))
-    for name in ["pi32", "ppv", "bytes_raw"]:
+    for name in ["pi32", "ppv", "bytes_raw", "u8"]:
         parts.append(e.let(name, e.lower(e.v(name))))
+    parts.append(
+        e.let(
+            "buf",
+            e.mb.as_(
+                e.call(e.lower(e.fld(e.v("jbuf"), "new")), e.rec(*[p(f, e.v(f)) for f in BUF_FIELDS])), e.mb.eval_type()
+            ),
+        )
+    )
     # The handle the dependencies use for the state's places: it never calls `next`, so that field is a stand-in.
     parts.append(
         e.let(
@@ -900,9 +962,18 @@ def _writer_piece_body(e, tg, piece):
         ops.append(p("int", _up(e, e.v("i32"), d)))
     if params == ["v"]:
         ops.append(p("value", e.v("v")))
-    elif params:
-        ops.append(p("s", e.call(_up(e, e.v("slice_of"), d), e.tup(e.v("ptr"), e.v("len")))))
-    return e.call(_up(e, e.fld(e.v("json"), "write_" + piece), d), e.rec(*ops))
+    if params != ["ptr", "len"]:
+        return e.call(_up(e, e.fld(e.v("json"), "write_" + piece), d), e.rec(*ops))
+    # The view is bound first: json.atz splices `s` wherever it touches the bytes, so it must carry no code.
+    ops.append(p("s", e.v("sv")))
+    call = e.call(_up(e, e.fld(e.v("json"), "write_" + piece), d), e.rec(*ops))
+    return e.seq(
+        e.let(
+            "sv",
+            e.mb.as_(e.mb.as_(e.tup(e.v("ptr"), e.v("len")), _up(e, e.v("pt2"), d)), _up(e, e.v("view"), BODY_HOST)),
+        ),
+        call,
+    )
 
 
 def _writer_new_body(e, tg):
@@ -946,7 +1017,7 @@ def _writer_setup(e):
 def _writer_const_fn(e, x, tg):
     fields = [p(f, ty(e)) for f in WRITER_FIELDS]
     places = _handle_places(e, {"ctx": 0}, {"pending": PENDING_CELL})
-    meth = _pointer_type(e, x, "jwt", "jwt_m", "json writer", fields, places, WRITER_METHODS)
+    meth = _handle_type(e, x, "jwt", "jwt_m", "json writer", fields, places, WRITER_METHODS)
 
     def method_body(kind):
         if kind == "clear":
@@ -1011,8 +1082,17 @@ def _writer_const_fn(e, x, tg):
         parts.append(e.let(name, e.lower(e.v(name))))
     parts.append(e.let("new_t", _fn_t(e, [e.v("pv")], e.v("pv"), 1)))
     parts.append(e.let("w_t", _fn_t(e, [e.v("pv")], e.v("void"), 1)))
-    for name in ["pi32", "ppv"]:
+    for name in ["pi32", "ppv", "pt2"]:
         parts.append(e.let(name, e.lower(e.v(name))))
+    parts.append(
+        e.let(
+            "view",
+            e.mb.as_(
+                e.call(e.lower(e.fld(e.v("jview"), "new")), e.rec(*[p(f, e.v(f)) for f in VIEW_FIELDS])),
+                e.mb.eval_type(),
+            ),
+        )
+    )
     # The handle the dependencies use for the state's places: it never calls the pieces, so those are stand-ins.
     parts.append(
         e.let(
@@ -1156,12 +1236,14 @@ def module(e, kind):
             ),
         )
     )
+    x.append(e.let("pt2", e.call(e.fld(e.v("lib"), "tuple"), e.list_new(e.mb.eval_type(), e.v("pu8"), e.v("i32")))))
     tg.module_lets(e, x)
     x.append(e.let("bytes", e.call(e.fld(e.v("vec"), "type"), e.v("u8"))))
     for f in ["type", "raw", "new"]:
         x.append(e.let("bytes_" + f, e.fld(e.v("bytes"), f)))
     x.append(e.let("slice_of", e.fld(e.call(e.fld(e.v("slice"), "type"), e.v("u8")), "of")))
     _event_objs(e, x, tg)
+    _buffer_types(e, x)
     _parser_const_fn(e, x, tg)
     _writer_const_fn(e, x, tg)
     _readers(e, x, tg)
