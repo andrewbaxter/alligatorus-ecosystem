@@ -37,6 +37,10 @@ document in memory and `vec_writer` collects output in a byte vec.
 `bytebuf` object over a `list(ubyte)`, a `reader` over one, a `parser` object whose `next()` yields a source
 union event, and a `writer` object collecting compact json.
 
+`json-stdio-wasi.atz` and `json-stdio-libc.atz` specialize them over `stdio-wasi.atz` and `stdio-libc.atz`
+(stdin and stdout as byte functions): each imports the reader and the sink, calls the const functions, and
+exports the parser and the writer, which an app imports and calls like any target functions.
+
 The apps `json-echo-wasi.atz` and `json-echo-libc.atz` read a document from stdin and write it back out
 compactly; `json-two-*.atz` parse two documents at once through one parser definition;
 `json-echo-dynamic.atz` echoes `json-echo-dynamic.json` at compile time and prints the result through a wasm

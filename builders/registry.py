@@ -14,12 +14,14 @@ PROJECTS = {
         ("wasi-0.1.atz", "wasi", ()),
         ("hello-wasi.atz", "hello_wasi", ("app",)),
         ("hello-wasi-wat.atz", "hello_wasi", ("wat",)),
+        ("stdio-wasi.atz", "stdio", ()),
     ],
     "llvm": [
         ("llvm-ir-22.atz", "llvm_ir", ()),
     ],
     "libc": [
         ("libc-2.42.atz", "libc", ()),
+        ("stdio-libc.atz", "stdio", ()),
     ],
     "javascript": [
         ("js-es2020.atz", "js", ()),
@@ -92,6 +94,8 @@ PROJECTS = {
         ("json.atz", "json", ()),
         ("json-wasm.atz", "json_target", ("wasm",)),
         ("json-llvm.atz", "json_target", ("llvm",)),
+        ("json-stdio-wasi.atz", "json_stdio", ("wasm",)),
+        ("json-stdio-libc.atz", "json_stdio", ("llvm",)),
         ("json-echo-wasi.atz", "json_echo", ("wasm",)),
         ("json-echo-libc.atz", "json_echo", ("llvm",)),
         ("json-echo-libc-ir.atz", "json_echo", ("llvm", "ir")),
