@@ -95,6 +95,9 @@ PROJECTS = {
         ("json-echo-wasi.atz", "json_echo", ("wasm",)),
         ("json-echo-libc.atz", "json_echo", ("llvm",)),
         ("json-echo-libc-ir.atz", "json_echo", ("llvm", "ir")),
+        ("json-two-wasi.atz", "json_two", ("wasm",)),
+        ("json-two-libc.atz", "json_two", ("llvm",)),
+        ("json-two-libc-ir.atz", "json_two", ("llvm", "ir")),
     ],
     "collections": [
         ("slice-wasm.atz", "slice", ("wasm",)),

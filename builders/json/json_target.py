@@ -17,8 +17,8 @@ next byte of input or a negative int at its end; the value passed to it is whate
   call or the parser's drop; keys arrive before their values, strings decoded), `object_begin`, `object_end`,
   `array_begin`, `array_end`. `event` also holds the constructors, one per variant, as callable types. There is
   no depth limit.
-The functions `json_<name>_new`, `_free` and `_next` are dependencies (`func_dep`): a module gets them when its
-code first uses them, once per reader however many parsers it makes. Memory comes from wasm-alloc.atz (wasm) or
+The functions `json_parser_<name>_new`, `_free` and `_next` are dependencies (`func_dep`): a module gets them when
+its code first uses them, once per reader however many parsers it makes. Memory comes from wasm-alloc.atz (wasm) or
 libc (llvm).
 
 `writer({name, write})` yields `{type, raw, new}` for a constant sink `write`, a target function
@@ -30,7 +30,12 @@ libc (llvm).
   `string(s)` and `key(s)` (utf-8 bytes, escaped as json needs; a key ends with its colon), `object_begin()`,
   `object_end()`, `array_begin()`, `array_end()` each write one piece of compact json, with the comma a value
   needs before it; `clear()` forgets the comma state so a new document may start.
-The functions `json_<name>_<piece>`, `_new` and `_free` are dependencies.
+The functions `json_writer_<name>_<piece>`, `_new` and `_free` are dependencies.
+
+`slice_reader` is a reader over bytes in memory: `{read, new, free}`, where `new((ptr, len))` yields the value
+`read` takes (a block holding the pointer, the length and the position) and `free` releases it. `vec_writer` is a
+sink appending to a byte vec: `{write}`, taking the vec's pointer. Both are dependencies (`json_slice_reader_*`,
+`json_vec_writer_write`).
 """
 
 from ..collections.vec import const_type_arg
@@ -815,7 +820,7 @@ def _parser_const_fn(e, x, tg):
         e.let(
             "name",
             e.cat(
-                e.s("json_"),
+                e.s("json_parser_"),
                 ident_of(
                     e,
                     bim(
@@ -988,7 +993,7 @@ def _writer_const_fn(e, x, tg):
         e.let(
             "name",
             e.cat(
-                e.s("json_"),
+                e.s("json_writer_"),
                 ident_of(
                     e,
                     bim(
@@ -1034,6 +1039,99 @@ def _writer_const_fn(e, x, tg):
     const_fn(e, x, "writer_b", "json.writer", body(e, *parts))
 
 
+# ---- a reader over memory and a sink into a vec ----
+
+SR_LEN_CELL = 2
+SR_POS_CELL = 3
+SR_HEADER = 16
+
+
+def _readers(e, x, tg):
+    """The slice reader and vec writer dependencies, module-level values (their bodies see the module one up)."""
+    d = 1
+
+    def dep(name, fn_t, params, fbody):
+        x.append(
+            e.let(
+                name,
+                e.call(
+                    e.fld(e.v("lib"), "func_dep"),
+                    e.rec(
+                        p("name", e.s(name)),
+                        p("params", e.list_new(e.mb.types_string(), *[e.s(pn) for pn in params])),
+                        p("ty", e.v(fn_t)),
+                        p("body", e.stage(fbody)),
+                    ),
+                ),
+            )
+        )
+
+    x.append(e.let("sr_read_t", _fn_t(e, [e.v("pv")], e.v("i32"), 0)))
+    x.append(e.let("sr_new_t", _fn_t(e, [e.v("pu8"), e.v("i32")], e.v("pv"), 0)))
+    x.append(e.let("sr_free_t", _fn_t(e, [e.v("pv")], e.v("void"), 0)))
+    x.append(e.let("vw_write_t", _fn_t(e, [e.v("pv"), e.v("i32")], e.v("void"), 0)))
+    dep(
+        "json_slice_reader_read",
+        "sr_read_t",
+        ["r"],
+        e.seq(
+            e.let("b", e.mb.as_(e.n(-1), _up(e, e.v("i32"), d))),
+            e.if_only(
+                e.mb.operator_lt(_cell(e, e.v("r"), SR_POS_CELL, d), _cell(e, e.v("r"), SR_LEN_CELL, d)),
+                e.seq(
+                    e.mb.set(
+                        e.v("b"),
+                        e.call(
+                            _up(e, e.v("i32"), d),
+                            e.mb.field(
+                                e.mb.as_(_pcell(e, e.v("r"), 0, d), _up(e, e.v("pu8"), d)),
+                                _cell(e, e.v("r"), SR_POS_CELL, d),
+                            ),
+                        ),
+                    ),
+                    e.mb.set(
+                        _cell(e, e.v("r"), SR_POS_CELL, d), e.mb.operator_add(_cell(e, e.v("r"), SR_POS_CELL, d), e.n(1))
+                    ),
+                ),
+            ),
+            e.ret(e.v("b")),
+        ),
+    )
+    dep(
+        "json_slice_reader_new",
+        "sr_new_t",
+        ["ptr", "len"],
+        e.seq(
+            e.let("r", tg.malloc(e, e.n(SR_HEADER), d)),
+            e.mb.set(_pcell(e, e.v("r"), 0, d), e.v("ptr")),
+            e.mb.set(_cell(e, e.v("r"), SR_LEN_CELL, d), e.v("len")),
+            e.mb.set(_cell(e, e.v("r"), SR_POS_CELL, d), e.n(0)),
+            e.ret(e.v("r")),
+        ),
+    )
+    dep("json_slice_reader_free", "sr_free_t", ["r"], tg.free(e, e.v("r"), d))
+    dep(
+        "json_vec_writer_write",
+        "vw_write_t",
+        ["v", "b"],
+        e.call(
+            e.fld(e.mb.as_(e.v("v"), _up(e, e.v("bytes_raw"), d)), "push"),
+            e.call(_up(e, e.v("u8"), d), e.v("b")),
+        ),
+    )
+    x.append(
+        e.let(
+            "slice_reader",
+            e.rec(
+                p("read", e.v("json_slice_reader_read")),
+                p("new", e.v("json_slice_reader_new")),
+                p("free", e.v("json_slice_reader_free")),
+            ),
+        )
+    )
+    x.append(e.let("vec_writer", e.rec(p("write", e.v("json_vec_writer_write")))))
+
+
 def module(e, kind):
     tg = _Target(kind)
     x = []
@@ -1066,10 +1164,21 @@ def module(e, kind):
     _event_objs(e, x, tg)
     _parser_const_fn(e, x, tg)
     _writer_const_fn(e, x, tg)
+    _readers(e, x, tg)
     x.append(e.finish(e.v("d")))
-    x.append(e.ret(e.rec(p("parser", e.fld(e.v("parser_b"), "func")), p("writer", e.fld(e.v("writer_b"), "func")))))
+    exports = ["parser", "writer", "slice_reader", "vec_writer"]
+    x.append(
+        e.ret(
+            e.rec(
+                p("parser", e.fld(e.v("parser_b"), "func")),
+                p("writer", e.fld(e.v("writer_b"), "func")),
+                p("slice_reader", e.v("slice_reader")),
+                p("vec_writer", e.v("vec_writer")),
+            )
+        )
+    )
 
     top = []
     top.append(e.let("k", e.lower(e.mb.seq(x))))
-    top.append(e.ret(e.rec(p("parser", e.fld(e.v("k"), "parser")), p("writer", e.fld(e.v("k"), "writer")))))
+    top.append(e.ret(e.rec(*[p(n, e.fld(e.v("k"), n)) for n in exports])))
     return top
