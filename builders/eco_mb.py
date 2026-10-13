@@ -1,6 +1,7 @@
 """Shorthand builders over `Mb` shared by every ecosystem module."""
 
 from .mb import Mb
+from .registry import project_of
 
 
 def p(key, value):
@@ -9,7 +10,11 @@ def p(key, value):
 
 
 class EcoMb:
-    def __init__(self):
+    """Expression shorthands for the builders. `project` is the building module's project (registry.py), which
+    `import_local` uses to place other modules; None for a builder outside the registry."""
+
+    def __init__(self, project=None):
+        self.project = project
         self.fn_sigs = {}
         self.mb = Mb()
 
@@ -169,8 +174,19 @@ class EcoMb:
         )
 
     def import_local(self, key, path):
-        entry = (self.mb.str(key), self.mb.source_local(self.mb.str(path)))
-        return self.mb.field(self.mb.import_record([entry]), self.mb.str(key))
+        """Imports a local file: a registered module by its bare file name (its project's directory comes from the
+        registry, relative to this builder's project), or any other file by a path relative to this module's."""
+        return self.mb.field(self.mb.import_record([(self.mb.str(key), self.source_local(path))]), self.mb.str(key))
+
+    def source_local(self, path):
+        try:
+            target = project_of(path)
+        except KeyError:
+            return self.mb.source_local(self.mb.str(path))
+        if self.project is None:
+            raise ValueError("import of the module " + path + " from a builder with no project")
+        rel = path if target == self.project else "../" + target + "/" + path
+        return self.mb.source_local(self.mb.str(rel))
 
     def import_git(self, key, url, commit):
         entry = (self.mb.str(key), self.mb.source_git(self.mb.str(url), self.mb.str(commit)))

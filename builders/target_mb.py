@@ -276,6 +276,40 @@ def const_fn(e, out, bind, name, body_):
     )
 
 
+def code_seq(e, *codes):
+    """The target's sequence of the host code values `codes`: an eresult(code)."""
+    return bim(
+        e,
+        e.mb.eval_target(),
+        "seq",
+        e.fld(xx(e), "target"),
+        e.rec(p("loc", loc(e)), p("entries", e.list_new(code_t(e), *codes))),
+    )
+
+
+def call_result(e, result_expr):
+    """Statements ending a function `call` body: return the code-value `result_expr`, with the callee's own code
+    (`self`, which a field access may have given hoisted code) run first."""
+    return [
+        e.let("__r", result_expr),
+        e.let(
+            "__c",
+            unwrap_m(e, code_seq(e, cve_code(e, a(e, "self")), cve_code(e, e.v("__r"))), e.mb.types_cve()),
+        ),
+        ret_m(
+            e,
+            ok_cve(
+                e,
+                e.if_else(
+                    cve_has(e, e.v("__r")),
+                    cv_of(e, e.v("__c"), cve_value(e, e.v("__r"))),
+                    cv_no(e, e.v("__c")),
+                ),
+            ),
+        ),
+    ]
+
+
 def target_drop_body(e):
     """Target `drop`: emit the value type's drop aspect when the value has one."""
     none = e.eresult_ok(code_t(e), code_none(e, loc(e)))
