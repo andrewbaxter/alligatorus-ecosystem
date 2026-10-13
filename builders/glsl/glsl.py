@@ -2118,6 +2118,7 @@ def _def_target(e, x):
                     ),
                 ),
             ),
+            e.p("loop", err_cve(e, loc(e), "glsl target: loops are not supported")),
             e.p("try_catch_finally", err_cve(e, loc(e), "glsl target: try is not supported")),
             e.p("match", err_cve(e, loc(e), "glsl target: match is not supported")),
         )

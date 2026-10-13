@@ -13,7 +13,7 @@ def module(e):
     setup.append(e.let("wasi", e.import_local("wasi", "wasi-0.1.atz")))
     setup.append(e.let("m", e.call(e.fld(e.v("wasm"), "new"), e.tup())))
     bind_types(e, setup)
-    setup.append(e.let("proc_exit_fn_t", e.call_m(e.fld(e.v("wasi"), "fn_types"), "get", e.s("proc_exit"))))
+    setup.append(e.let("proc_exit_fn_t", e.fld(e.v("wasi"), "proc_exit_t")))
     for name, params, ret in [
         ("start_fn_t", [], "t_void"),
         ("destroy_fn_t", ["t_pv"], "t_void"),

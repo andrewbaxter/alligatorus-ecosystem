@@ -75,7 +75,7 @@ def _wasm(e):
     setup.append(e.let("option", e.import_local("option", "option-wasm.atz")))
     setup.append(e.let("m", e.call(e.fld(e.v("wasm"), "new"), e.tup())))
     bind_types(e, setup)
-    setup.append(e.let("proc_exit_fn_t", e.call_m(e.fld(e.v("wasi"), "fn_types"), "get", e.s("proc_exit"))))
+    setup.append(e.let("proc_exit_fn_t", e.fld(e.v("wasi"), "proc_exit_t")))
     _option_lets(e, setup)
     setup.append(
         e.let(

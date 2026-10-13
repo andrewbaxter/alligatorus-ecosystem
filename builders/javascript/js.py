@@ -718,6 +718,7 @@ def module(e):
             ),
             e.p("stage", err_cve(e, loc(e), "js target: nested staging is not supported")),
             e.p("if", err_cve(e, loc(e), "js target: if is not supported")),
+            e.p("loop", err_cve(e, loc(e), "js target: loop is not supported")),
             e.p("try_catch_finally", err_cve(e, loc(e), "js target: try is not supported")),
             e.p("match", err_cve(e, loc(e), "js target: match is not supported")),
         )

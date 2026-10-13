@@ -1,4 +1,10 @@
-"""wasi-0.1.atz: WASI preview1 function types, derived from the upstream witx spec."""
+"""wasi-0.1.atz: WASI preview1 function types, derived from the upstream witx spec.
+
+Exports `module`, the import module name, and one field per function of the spec, `<name>_t`, its wasm
+function type (a constant: an app passes `wasi.fd_write_t` to `import_fn` directly). The spec is parsed when
+this module is built, and the export record is built from the parsed names by a const function, with the
+compiler's expression constructors.
+"""
 
 from ..eco_mb import p
 from ..target_mb import (
@@ -7,15 +13,20 @@ from ..target_mb import (
     and_b,
     body,
     bool_t,
+    const_fn,
     count_let,
     count_loop,
+    cve_has,
+    cve_value,
     def_obj,
     dfalse,
+    err_cve,
     fn_def,
     fn_impl,
     hf,
     hf_rec,
     int_t,
+    loc,
     lt,
     mk,
     num,
@@ -26,6 +37,8 @@ from ..target_mb import (
     t,
     to_str,
     ty,
+    voc_t,
+    xx,
 )
 
 MODULE = "wasi_snapshot_preview1"
@@ -33,6 +46,7 @@ MODULE = "wasi_snapshot_preview1"
 SPEC_REPO = "https://github.com/WebAssembly/WASI"
 
 SPEC_COMMIT = "fae981bae14809d91f9bc2d63852d461f331d161"
+
 
 
 def _fn_def(e, out, name, arg_type, ret):
@@ -142,6 +156,49 @@ def _set_st(e, field, value):
 
 def _st_is(e, field, value):
     return e.eq(e.fld(e.v("st"), field), num(e, value))
+
+
+def _entry(e, key, value):
+    return e.call(e.eval_builtin("expr_record_entry"), e.rec(p("key", key), p("value", value)))
+
+
+def _exports_const_fn(e, x):
+    """`wasi.exports fns`: the module's export record, `module` and `<name>_t` for each function in the parsed map
+    `fns` (a constant `map(str, type)`), built as a record expression and evaluated in the caller's context."""
+    parts = [
+        e.let("argv", a(e, "argument")),
+        e.if_only(e.not_(cve_has(e, e.v("argv"))), ret_m(e, err_cve(e, loc(e), "wasi.exports: argument has no value"))),
+        e.let("host", e.fld(e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, e.v("argv")), voc_t(e))), "data")),
+        e.let("fns", e.call(e.mb.must_reinterpret(), e.tup(e.v("host"), e.map_type(str_(e), ty(e))))),
+        e.let("entries", e.list_new(e.mb.builtin("types", "expr_record_entry"))),
+        push(e, e.v("entries"), _entry(e, e.stage(e.s("module")), e.stage(e.s(MODULE)))),
+        e.foreach(
+            e.v("fns"),
+            "fn",
+            push(
+                e,
+                e.v("entries"),
+                _entry(
+                    e,
+                    e.stage(e.lower(e.cat(e.fld(e.v("fn"), "key"), e.s("_t")))),
+                    e.stage(e.lower(e.fld(e.v("fn"), "value"))),
+                ),
+            ),
+        ),
+        e.ret(
+            e.call(
+                e.eval_builtin("const_eval"),
+                e.rec(
+                    p("xx", xx(e)),
+                    p(
+                        "staged",
+                        e.call(e.eval_builtin("expr_record"), e.rec(p("loc", loc(e)), p("entries", e.v("entries")))),
+                    ),
+                ),
+            )
+        ),
+    ]
+    const_fn(e, x, "exports_b", "wasi.exports", body(e, *parts))
 
 
 def module(e):
@@ -585,6 +642,7 @@ def module(e):
             ),
         ),
     )
+    _exports_const_fn(e, x)
     x.append(e.finish(e.v("d")))
     x.append(
         e.ret(
@@ -592,6 +650,7 @@ def module(e):
                 p("parse", e.v("h_parse")),
                 p("types", e.v("h_types")),
                 p("fn_types", e.v("h_fn_types")),
+                p("exports", e.fld(e.v("exports_b"), "func")),
                 p("wt_t", t(e, "wt")),
             )
         )
@@ -610,9 +669,9 @@ def module(e):
             e.rec(p("root", e.v("preview1")), p("types", e.v("types")), p("fns", e.v("fns"))),
         )
     )
-    y.append(e.ret(e.rec(p("fn_types", e.v("fns")))))
+    y.append(e.ret(e.rec(p("fns", e.v("fns")), p("exports", e.fld(e.v("k"), "exports")))))
 
     top = []
     top.append(e.let("k", e.lower(e.mb.seq(y))))
-    top.append(e.ret(e.rec(p("module", e.s(MODULE)), p("fn_types", e.fld(e.v("k"), "fn_types")))))
+    top.append(e.ret(e.call(e.fld(e.v("k"), "exports"), e.fld(e.v("k"), "fns"))))
     return top

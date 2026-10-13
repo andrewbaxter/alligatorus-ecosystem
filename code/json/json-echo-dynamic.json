@@ -1,0 +1,8 @@
+{
+  "name": "dynamic",
+  "tags": ["compile", "time"],
+  "n": -12.5e3,
+  "ok": true,
+  "nothing": null,
+  "text": "tab\there \u00e9"
+}

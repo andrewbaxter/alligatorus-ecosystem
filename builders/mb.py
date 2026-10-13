@@ -60,6 +60,9 @@ class Mb:
         """`entries`: list of (key expr, value expr)."""
         return self.call(self.builtin("import"), self.record(entries))
 
+    def loop(self, body):
+        return self._node("loop", body)
+
     def labeled(self, label, inner):
         return self._node("labeled", {"label": label, "inner": inner})
 
