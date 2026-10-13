@@ -64,7 +64,7 @@ def module(e, kind):
         setup.append(e.let("m", e.call(e.fld(e.v("wasm"), "new"), e.tup())))
         lib = e.v("wasm")
         bind_types(e, setup)
-        setup.append(e.let("proc_exit_fn_t", e.call_m(e.fld(e.v("wasi"), "fn_types"), "get", e.s("proc_exit"))))
+        setup.append(e.let("proc_exit_fn_t", e.fld(e.v("wasi"), "proc_exit_t")))
         setup.append(
             e.let(
                 "start_fn_t",

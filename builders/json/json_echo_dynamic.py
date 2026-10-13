@@ -96,7 +96,7 @@ def module(e):
     setup.append(e.let("m", e.call(e.fld(e.v("wasm"), "new"), e.tup())))
     bind_types(e, setup)
     for name in ["fd_write", "proc_exit"]:
-        setup.append(e.let(name + "_fn_t", e.call_m(e.fld(e.v("wasi"), "fn_types"), "get", e.s(name))))
+        setup.append(e.let(name + "_fn_t", e.fld(e.v("wasi"), name + "_t")))
     setup.append(
         e.let(
             "start_fn_t",

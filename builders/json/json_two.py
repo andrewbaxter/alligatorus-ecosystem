@@ -180,7 +180,7 @@ def _wasm(e):
     setup.append(e.let("m", e.call(e.fld(e.v("wasm"), "new"), e.tup())))
     bind_types(e, setup)
     setup.append(e.let("start_fn_t", _fn_t(e, "wasm", [], "t_void")))
-    setup.append(e.let("fd_write_fn_t", e.call_m(e.fld(e.v("wasi"), "fn_types"), "get", e.s("fd_write"))))
+    setup.append(e.let("fd_write_fn_t", e.fld(e.v("wasi"), "fd_write_t")))
     for name, size in [("ch", 4), ("iov", 8), ("nwritten", 4)]:
         setup.append(
             e.let(

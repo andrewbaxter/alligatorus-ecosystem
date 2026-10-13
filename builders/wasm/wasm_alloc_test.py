@@ -13,7 +13,7 @@ def module(e):
     bind_types(e, setup)
     setup.append(e.let("t_pv", e.call(e.fld(e.v("wasm"), "ptr"), e.v("t_void"))))
     setup.append(e.let("t_pi32", e.call(e.fld(e.v("wasm"), "ptr"), e.v("t_i32"))))
-    setup.append(e.let("proc_exit_fn_t", e.call_m(e.fld(e.v("wasi"), "fn_types"), "get", e.s("proc_exit"))))
+    setup.append(e.let("proc_exit_fn_t", e.fld(e.v("wasi"), "proc_exit_t")))
     setup.append(
         e.let(
             "start_fn_t",

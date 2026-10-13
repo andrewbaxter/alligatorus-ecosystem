@@ -115,21 +115,20 @@ def _error_report(e, null, write_byte, code):
 
 
 def _llvm(e, mode):
+    # One lowered block: the module, the reader and sink dependencies (typed by the library's contract) and the
+    # entry point's type, computed so the parser and `func_fn` take them as constants.
     setup = []
     setup.append(e.let("llvm", e.import_local("llvm", "llvm-ir-22.atz")))
-    setup.append(e.let("ll", e.call(e.fld(e.v("llvm"), "new"), e.tup())))
     setup.append(e.let("c", e.import_local("libc", "libc-2.42.atz")))
-    for prim in ["i32", "void"]:
-        setup.append(e.let("t_" + prim, e.fld(e.v("llvm"), prim)))
-    setup.append(e.let("t_pv", e.call(e.fld(e.v("llvm"), "ptr"), e.v("t_void"))))
+    setup.append(e.let("json", e.import_local("json", "json-llvm.atz")))
+    setup.append(e.let("ll", e.call(e.fld(e.v("llvm"), "new"), e.tup())))
+    setup.append(e.let("t_i32", e.fld(e.v("llvm"), "i32")))
     setup.append(e.let("main_fn_t", _fn_t(e, "llvm", [], "t_i32")))
-    setup.append(e.let("read_fn_t", _fn_t(e, "llvm", ["t_pv"], "t_i32")))
-    setup.append(e.let("write_fn_t", _fn_t(e, "llvm", ["t_pv", "t_i32"], "t_void")))
     setup.append(e.let("null", e.call_m(e.v("ll"), "null", e.tup())))
+    setup.append(e.let("read_t", e.fld(e.v("json"), "read_t")))
+    setup.append(e.let("write_t", e.fld(e.v("json"), "write_t")))
     setup.append(
-        _dep(
-            e, "llvm", "stdin_read", ["ctx"], "read_fn_t", e.seq(e.ret(e.call(e.lower(e.fld(e.v("c"), "getchar")), e.tup())))
-        )
+        _dep(e, "llvm", "stdin_read", ["ctx"], "read_t", e.seq(e.ret(e.call(e.lower(e.fld(e.v("c"), "getchar")), e.tup()))))
     )
     setup.append(
         _dep(
@@ -137,24 +136,11 @@ def _llvm(e, mode):
             "llvm",
             "stdout_write",
             ["ctx", "b"],
-            "write_fn_t",
+            "write_t",
             e.seq(e.call(e.lower(e.fld(e.v("c"), "putchar")), e.v("b")), e.seq()),
         )
     )
-    exported = [
-        "llvm",
-        "ll",
-        "c",
-        "t_i32",
-        "t_void",
-        "t_pv",
-        "main_fn_t",
-        "read_fn_t",
-        "write_fn_t",
-        "null",
-        "stdin_read",
-        "stdout_write",
-    ]
+    exported = ["llvm", "ll", "c", "main_fn_t", "null", "stdin_read", "stdout_write"]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
@@ -190,18 +176,33 @@ def _llvm(e, mode):
 
 
 def _wasm(e):
+    # One lowered block: the module, the wasi imports (typed by wasi's exports), the stdio blocks, the reader,
+    # sink and flush dependencies (typed by the library's contract) and the entry point's type.
     setup = []
     setup.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
     setup.append(e.let("wasi", e.import_local("wasi", "wasi-0.1.atz")))
+    setup.append(e.let("json", e.import_local("json", "json-wasm.atz")))
     setup.append(e.let("m", e.call(e.fld(e.v("wasm"), "new"), e.tup())))
     bind_types(e, setup)
     setup.append(e.let("t_pi32", e.call(e.fld(e.v("wasm"), "ptr"), e.v("t_i32"))))
     setup.append(e.let("start_fn_t", _fn_t(e, "wasm", [], "t_void")))
-    setup.append(e.let("read_fn_t", _fn_t(e, "wasm", ["t_pv"], "t_i32")))
-    setup.append(e.let("write_fn_t", _fn_t(e, "wasm", ["t_pv", "t_i32"], "t_void")))
     setup.append(e.let("flush_fn_t", _fn_t(e, "wasm", [], "t_void")))
+    setup.append(e.let("read_t", e.fld(e.v("json"), "read_t")))
+    setup.append(e.let("write_t", e.fld(e.v("json"), "write_t")))
     for name in ["fd_read", "fd_write", "proc_exit"]:
-        setup.append(e.let(name + "_fn_t", e.call_m(e.fld(e.v("wasi"), "fn_types"), "get", e.s(name))))
+        setup.append(
+            e.let(
+                name,
+                e.call(
+                    e.fld(e.v("wasm"), "import_fn"),
+                    e.rec(
+                        e.p("module", e.fld(e.v("wasi"), "module")),
+                        e.p("name", e.s(name)),
+                        e.p("ty", e.fld(e.v("wasi"), name + "_t")),
+                    ),
+                ),
+            )
+        )
     for name, size in [
         ("cells", 4 * CELLS),
         ("inbuf", BUF),
@@ -215,55 +216,6 @@ def _wasm(e):
             e.let(
                 name,
                 e.call(e.fld(e.v("wasm"), "alloc_dep"), e.rec(e.p("name", e.s("stdio_" + name)), e.p("size", e.int_of(size)))),
-            )
-        )
-    setup_exported = [
-        "m",
-        "t_i32",
-        "t_u8",
-        "t_u32",
-        "t_void",
-        "t_pv",
-        "t_pu8",
-        "t_pu32",
-        "t_pi32",
-        "start_fn_t",
-        "read_fn_t",
-        "write_fn_t",
-        "flush_fn_t",
-        "fd_read_fn_t",
-        "fd_write_fn_t",
-        "proc_exit_fn_t",
-        "cells",
-        "inbuf",
-        "outbuf",
-        "in_iov",
-        "out_iov",
-        "nread",
-        "nwritten",
-    ]
-    setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in setup_exported])))
-
-    # The imports need constant types (the setup's, lowered), and the parser needs constant functions (this
-    # block's, lowered in turn).
-    mid = []
-    mid.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
-    mid.append(e.let("wasi", e.import_local("wasi", "wasi-0.1.atz")))
-    mid.append(e.let("k", e.lower(e.mb.seq(setup))))
-    for n in setup_exported:
-        mid.append(e.let(n, e.fld(e.v("k"), n)))
-    for name in ["fd_read", "fd_write", "proc_exit"]:
-        mid.append(
-            e.let(
-                name,
-                e.call(
-                    e.fld(e.v("wasm"), "import_fn"),
-                    e.rec(
-                        e.p("module", e.fld(e.v("wasi"), "module")),
-                        e.p("name", e.s(name)),
-                        e.p("ty", e.v(name + "_fn_t")),
-                    ),
-                ),
             )
         )
 
@@ -337,26 +289,15 @@ def _wasm(e):
         e.mb.set(byte_at("outbuf", cell(CELL_OUT_LEN)), conv("t_u8", e.v("b"))),
         e.mb.set(cell(CELL_OUT_LEN), e.mb.operator_add(cell(CELL_OUT_LEN), e.n(1))),
     )
-    mid.append(_dep(e, "wasm", "stdin_read", ["ctx"], "read_fn_t", read_body))
-    mid.append(_dep(e, "wasm", "stdout_flush", [], "flush_fn_t", flush_body))
-    mid.append(_dep(e, "wasm", "stdout_write", ["ctx", "b"], "write_fn_t", write_body))
-    exported = [
-        "m",
-        "t_i32",
-        "t_u32",
-        "t_void",
-        "t_pv",
-        "start_fn_t",
-        "proc_exit",
-        "stdin_read",
-        "stdout_flush",
-        "stdout_write",
-    ]
-    mid.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
+    setup.append(_dep(e, "wasm", "stdin_read", ["ctx"], "read_t", read_body))
+    setup.append(_dep(e, "wasm", "stdout_flush", [], "flush_fn_t", flush_body))
+    setup.append(_dep(e, "wasm", "stdout_write", ["ctx", "b"], "write_t", write_body))
+    exported = ["m", "t_i32", "t_u32", "t_void", "t_pv", "start_fn_t", "proc_exit", "stdin_read", "stdout_flush", "stdout_write"]
+    setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
     top.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
-    top.append(e.let("k", e.lower(e.mb.seq(mid))))
+    top.append(e.let("k", e.lower(e.mb.seq(setup))))
     for n in exported:
         top.append(e.let(n, e.fld(e.v("k"), n)))
     _json_lets(e, top, "json-wasm.atz", "stdin_read", "stdout_write")

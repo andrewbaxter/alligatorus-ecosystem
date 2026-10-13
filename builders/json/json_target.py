@@ -32,6 +32,9 @@ libc (llvm).
   needs before it; `clear()` forgets the comma state so a new document may start.
 The functions `json_writer_<name>_<piece>`, `_new` and `_free` are dependencies.
 
+`read_t` and `write_t` are the reader's and the sink's function types, so an app defines them against the
+library's contract.
+
 `slice_reader` is a reader over bytes in memory: `{read, new, free}`, where `new((ptr, len))` yields the value
 `read` takes (a block holding the pointer, the length and the position) and `free` releases it. `vec_writer` is a
 sink appending to a byte vec: `{write}`, taking the vec's pointer. Both are dependencies (`json_slice_reader_*`,
@@ -1146,13 +1149,11 @@ def _readers(e, x, tg):
             )
         )
 
-    x.append(e.let("sr_read_t", _fn_t(e, [e.v("pv")], e.v("i32"), 0)))
     x.append(e.let("sr_new_t", _fn_t(e, [e.v("pu8"), e.v("i32")], e.v("pv"), 0)))
     x.append(e.let("sr_free_t", _fn_t(e, [e.v("pv")], e.v("void"), 0)))
-    x.append(e.let("vw_write_t", _fn_t(e, [e.v("pv"), e.v("i32")], e.v("void"), 0)))
     dep(
         "json_slice_reader_read",
-        "sr_read_t",
+        "read_t",
         ["r"],
         e.seq(
             e.let("b", e.mb.as_(e.n(-1), _up(e, e.v("i32"), d))),
@@ -1192,7 +1193,7 @@ def _readers(e, x, tg):
     dep("json_slice_reader_free", "sr_free_t", ["r"], tg.free(e, e.v("r"), d))
     dep(
         "json_vec_writer_write",
-        "vw_write_t",
+        "write_t",
         ["v", "b"],
         e.call(
             e.fld(e.mb.as_(e.v("v"), _up(e, e.v("bytes_raw"), d)), "push"),
@@ -1237,6 +1238,8 @@ def module(e, kind):
         )
     )
     x.append(e.let("pt2", e.call(e.fld(e.v("lib"), "tuple"), e.list_new(e.mb.eval_type(), e.v("pu8"), e.v("i32")))))
+    x.append(e.let("read_t", _fn_t(e, [e.v("pv")], e.v("i32"), 0)))
+    x.append(e.let("write_t", _fn_t(e, [e.v("pv"), e.v("i32")], e.v("void"), 0)))
     tg.module_lets(e, x)
     x.append(e.let("bytes", e.call(e.fld(e.v("vec"), "type"), e.v("u8"))))
     for f in ["type", "raw", "new"]:
@@ -1248,14 +1251,13 @@ def module(e, kind):
     _writer_const_fn(e, x, tg)
     _readers(e, x, tg)
     x.append(e.finish(e.v("d")))
-    exports = ["parser", "writer", "slice_reader", "vec_writer"]
+    exports = ["parser", "writer", "read_t", "write_t", "slice_reader", "vec_writer"]
     x.append(
         e.ret(
             e.rec(
                 p("parser", e.fld(e.v("parser_b"), "func")),
                 p("writer", e.fld(e.v("writer_b"), "func")),
-                p("slice_reader", e.v("slice_reader")),
-                p("vec_writer", e.v("vec_writer")),
+                *[p(n, e.v(n)) for n in ["read_t", "write_t", "slice_reader", "vec_writer"]],
             )
         )
     )

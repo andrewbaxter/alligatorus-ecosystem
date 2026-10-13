@@ -15,7 +15,7 @@ def module(e, mode):
     setup.append(e.let("wasi", e.import_local("wasi", "wasi-0.1.atz")))
     setup.append(e.let("m", e.call(e.fld(e.v("wasm"), "new"), e.tup())))
     bind_types(e, setup)
-    setup.append(e.let("fd_write_fn_t", e.call_m(e.fld(e.v("wasi"), "fn_types"), "get", e.s("fd_write"))))
+    setup.append(e.let("fd_write_fn_t", e.fld(e.v("wasi"), "fd_write_t")))
     setup.append(
         e.let(
             "start_fn_t",
