@@ -885,9 +885,9 @@ def module(e):
     _ro(e, x)
     _sealed(e, x)
     fn_def(e, x, TARGET, "c_ro", ty(e), ty(e))
-    fn_impl(e, x, "c_ro", body(e, e.ret(e.mb.as_(mk(e, "ro", p("under", e.v("arg"))), ty(e)))))
+    fn_impl(e, x, "c_ro", body(e, e.ret(mk(e, "ro", p("under", e.v("arg"))))))
     fn_def(e, x, TARGET, "c_sealed", ty(e), ty(e))
-    fn_impl(e, x, "c_sealed", body(e, e.ret(e.mb.as_(mk(e, "sealed", p("under", e.v("arg"))), ty(e)))))
+    fn_impl(e, x, "c_sealed", body(e, e.ret(mk(e, "sealed", p("under", e.v("arg"))))))
     x.append(e.finish(e.v("d")))
     x.append(e.ret(e.rec(p("type", e.fld(e.v("c_ro_b"), "func")), p("sealed", e.fld(e.v("c_sealed_b"), "func")))))
 

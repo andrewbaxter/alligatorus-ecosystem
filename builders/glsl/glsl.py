@@ -3007,7 +3007,7 @@ def module(e):
     y.append(e.let("void", _lty(e, "gt_void", e.tup())))
     for kind in GGFN_KINDS:
         exported.append(kind)
-        y.append(e.let(kind, _lty(e, "ggfn_t", e.rec(e.p("kind", e.int_of(_ggfn_kind(kind)))))))
+        y.append(e.let(kind, e.call(e.fld(e.v("k"), "ggfn_t_new"), e.rec(e.p("kind", e.int_of(_ggfn_kind(kind)))))))
     builtins = []
     for row in BUILTINS:
         builtins.append(e.p(row[0], _lty(e, "gbuiltin_t", e.rec(e.p("name", e.s(row[0]))))))
@@ -3066,7 +3066,7 @@ def module(e):
 
 
 def _lty(e, obj, arg):
-    return e.mb.as_(e.call(e.fld(e.v("k"), obj + "_new"), arg), ty(e))
+    return e.call(e.fld(e.v("k"), obj + "_new"), arg)
 
 
 def _def_data(e, x):
@@ -3389,7 +3389,7 @@ def _def_helpers(e, x):
         "h_type_of",
         body(
             e,
-            e.if_only(a(e, "mat"), ret_m(e, e.mb.as_(mk(e, "gt_mat", e.p("n", a(e, "n"))), ty(e)))),
+            e.if_only(a(e, "mat"), ret_m(e, mk(e, "gt_mat", e.p("n", a(e, "n"))))),
             e.if_only(e.eq(a(e, "n"), num(e, 1)), ret_m(e, e.mb.as_(_scalar_t(e, a(e, "kind")), ty(e)))),
             e.ret(e.mb.as_(_vec_t(e, a(e, "kind"), a(e, "n")), ty(e))),
         ),

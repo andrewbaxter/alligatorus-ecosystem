@@ -783,7 +783,7 @@ def module(e):
         exports.append(
             e.p(
                 kind,
-                e.mb.as_(e.call(e.fld(e.v("k"), "ugfn_t_new"), e.rec(e.p("kind", e.int_of(_ugfn_kind(kind))))), ty(e)),
+                e.call(e.fld(e.v("k"), "ugfn_t_new"), e.rec(e.p("kind", e.int_of(_ugfn_kind(kind))))),
             )
         )
     top.append(e.ret(e.rec(*exports)))

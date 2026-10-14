@@ -463,8 +463,8 @@ def _value_aspects(e, x, obj, size_expr, hash_stage):
 def _int_hash_body(e):
     """values.hash for ints: widened (or kept, at 64 bits) to i64 and SipHashed."""
     return e.seq(
-        e.let("sh_i64", e.mb.as_(_int_ty(e, "i64"), e.mb.eval_type())),
-        e.let("sh_i32", e.mb.as_(_int_ty(e, "i32"), e.mb.eval_type())),
+        e.let("sh_i64", _int_ty(e, "i64")),
+        e.let("sh_i32", _int_ty(e, "i32")),
         e.let("pi64", mk(e, "lt_ptr", e.p("pointee", e.v("sh_i64")))),
         e.if_else(
             e.eq(in_(e, "bits"), num(e, 64)),
@@ -487,8 +487,8 @@ def _int_hash_body(e):
 def _ptr_hash_body(e):
     """values.hash for pointers: the address as i64, SipHashed."""
     return e.seq(
-        e.let("sh_i64", e.mb.as_(_int_ty(e, "i64"), e.mb.eval_type())),
-        e.let("sh_i32", e.mb.as_(_int_ty(e, "i32"), e.mb.eval_type())),
+        e.let("sh_i64", _int_ty(e, "i64")),
+        e.let("sh_i32", _int_ty(e, "i32")),
         e.let("pi64", mk(e, "lt_ptr", e.p("pointee", e.v("sh_i64")))),
         e.ret(
             _sip_hash(
@@ -632,7 +632,7 @@ def _sip_hash(e, to_i64, key_arg):
 
 
 def _lty(e, obj, arg):
-    return e.mb.as_(e.call(e.fld(e.v("k"), obj + "_new"), arg), ty(e))
+    return e.call(e.fld(e.v("k"), obj + "_new"), arg)
 
 
 def _lval_of(e, cve_tp):
@@ -7478,7 +7478,7 @@ def module(e):
     for kind in LGFN_KINDS:
         if kind != "cstr_fn":
             exported.append(kind)
-        y.append(e.let(kind, _lty(e, "lgfn_t", e.rec(e.p("kind", e.int_of(_lgfn_kind(kind)))))))
+        y.append(e.let(kind, e.call(e.fld(e.v("k"), "lgfn_t_new"), e.rec(e.p("kind", e.int_of(_lgfn_kind(kind)))))))
     exported.append("gref_t")
     y.append(e.let("gref_t", _lty(e, "lt_gref", e.tup())))
     y.append(e.let("d", e.define()))

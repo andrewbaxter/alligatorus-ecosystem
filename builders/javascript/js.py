@@ -1357,15 +1357,15 @@ def module(e):
     y.append(e.let("k", e.lower(e.mb.seq(x))))
     exported = []
     exported.append("any")
-    y.append(e.let("any", e.mb.as_(e.call(e.fld(e.v("k"), "jany_new"), e.tup()), ty(e))))
+    y.append(e.let("any", e.call(e.fld(e.v("k"), "jany_new"), e.tup())))
     exported.append("global")
-    y.append(e.let("global", e.mb.as_(e.call(e.fld(e.v("k"), "jglobal_new"), e.tup()), ty(e))))
+    y.append(e.let("global", e.call(e.fld(e.v("k"), "jglobal_new"), e.tup())))
     for kind in JGFN_KINDS:
         exported.append(kind)
         y.append(
             e.let(
                 kind,
-                e.mb.as_(e.call(e.fld(e.v("k"), "jgfn_t_new"), e.rec(e.p("kind", e.int_of(_jgfn_kind(kind))))), ty(e)),
+                e.call(e.fld(e.v("k"), "jgfn_t_new"), e.rec(e.p("kind", e.int_of(_jgfn_kind(kind))))),
             )
         )
     y.append(e.let("d", e.define()))
