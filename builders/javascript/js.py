@@ -453,7 +453,20 @@ def module(e):
     accessor(e, x, "jinst", "text", str_(e))
     accessor(e, x, "jval", "expr", str_(e))
     accessor(e, x, "jval", "ty", ty(e))
-    x.append(e.impl_interface(e.v("jval"), e.mb.eval_value(), e.p("type", in_(e, "ty"))))
+    x.append(
+        e.impl_interface(
+            e.v("jval"),
+            e.mb.eval_value(),
+            e.p("type", in_(e, "ty")),
+            e.p(
+                "exporter",
+                e.eresult_ok(
+                    e.mb.builtin("eval", "artifact_exporter"),
+                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("jval"), "type"))),
+                ),
+            ),
+        )
+    )
     accessor(e, x, "jtarget", "mod", _jmod_t(e))
     accessor(e, x, "jbinding", "name", str_(e))
     for vo in ["jinst", "jmod"]:

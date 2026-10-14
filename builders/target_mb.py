@@ -530,6 +530,13 @@ def self_type(e, x, obj, desc, dispatch, can_cast_from, cast_from, can_cast_to, 
             e.v(obj),
             e.mb.eval_type(),
             p("desc", desc),
+            p(
+                "exporter",
+                e.opt_some(
+                    e.mb.builtin("eval", "artifact_exporter"),
+                    e.call(e.eval_builtin("source_object_exporter"), e.lower(t(e, obj))),
+                ),
+            ),
             p("aspect", dispatch),
             p("can_cast_from", can_cast_from),
             p("cast_from", cast_from),

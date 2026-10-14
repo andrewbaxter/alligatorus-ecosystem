@@ -3101,7 +3101,20 @@ def _def_data(e, x):
     )
     accessor(e, x, "gval", "expr", str_(e))
     accessor(e, x, "gval", "ty", ty(e))
-    x.append(e.impl_interface(e.v("gval"), e.mb.eval_value(), e.p("type", in_(e, "ty"))))
+    x.append(
+        e.impl_interface(
+            e.v("gval"),
+            e.mb.eval_value(),
+            e.p("type", in_(e, "ty")),
+            e.p(
+                "exporter",
+                e.eresult_ok(
+                    e.mb.builtin("eval", "artifact_exporter"),
+                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("gval"), "type"))),
+                ),
+            ),
+        )
+    )
     def_obj(
         e,
         x,

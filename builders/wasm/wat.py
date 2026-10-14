@@ -3937,7 +3937,20 @@ def module(e):
             e.p("mem", e.rec(e.p("addr", e.fld(e.v("s"), "addr")), e.p("offset", e.fld(e.v("s"), "offset")))),
         ),
     )
-    x.append(e.impl_interface(e.v("wval"), e.mb.eval_value(), e.p("type", in_(e, "ty"))))
+    x.append(
+        e.impl_interface(
+            e.v("wval"),
+            e.mb.eval_value(),
+            e.p("type", in_(e, "ty")),
+            e.p(
+                "exporter",
+                e.eresult_ok(
+                    e.mb.builtin("eval", "artifact_exporter"),
+                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("wval"), "type"))),
+                ),
+            ),
+        )
+    )
     accessor(e, x, "wtarget", "mod", _wmod_t(e))
     accessor(e, x, "wirctx", "xx", xx_t(e))
     accessor(e, x, "winst", "k", t(e, "winst_u"))

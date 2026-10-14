@@ -3876,7 +3876,20 @@ def module(e):
         e.mb.types_int(),
         e.match_of(in_(e, "source"), "s", None, e.p("mem", e.int_of(1)), e.p("ssa", e.int_of(0))),
     )
-    x.append(e.impl_interface(e.v("lval"), e.mb.eval_value(), e.p("type", in_(e, "ty"))))
+    x.append(
+        e.impl_interface(
+            e.v("lval"),
+            e.mb.eval_value(),
+            e.p("type", in_(e, "ty")),
+            e.p(
+                "exporter",
+                e.eresult_ok(
+                    e.mb.builtin("eval", "artifact_exporter"),
+                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("lval"), "type"))),
+                ),
+            ),
+        )
+    )
     accessor(e, x, "lfield", "name", str_(e))
     accessor(e, x, "lfield", "ty", ty(e))
     accessor(e, x, "ltail", "views", e.list_type(t(e, "lfield")))
@@ -6190,7 +6203,20 @@ def module(e):
     )
     accessor(e, x, "lrange", "code", code_t(e))
     accessor(e, x, "lrange", "n", _lval_t(e))
-    x.append(e.impl_interface(e.v("lrange"), e.mb.eval_value(), e.p("type", in_(e, "t"))))
+    x.append(
+        e.impl_interface(
+            e.v("lrange"),
+            e.mb.eval_value(),
+            e.p("type", in_(e, "t")),
+            e.p(
+                "exporter",
+                e.eresult_ok(
+                    e.mb.builtin("eval", "artifact_exporter"),
+                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("lrange"), "type"))),
+                ),
+            ),
+        )
+    )
     self_type(
         e,
         x,
