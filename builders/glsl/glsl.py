@@ -2273,7 +2273,7 @@ def _def_hooks(e, x):
         x,
         "ggfn_t",
         e.cat(e.s("glsl definition function "), to_str(e, in_(e, "kind"))),
-        rt_dispatch(e, lt(e, "gmod"), e.aspect_dispatch(lv(e, "ggfn_m_id"), asp_id(e, "function"))),
+        rt_dispatch(e, lt(e, "gmod"), e.aspect_dispatch(lv(e, "ggfn_m_id"))),
         can_cast_from_self(e),
         cast_from_self(e),
         no_cast_to(e),
@@ -2296,315 +2296,313 @@ def _def_hooks(e, x):
     gl_vars = []
     for gv in GL_VARS:
         gl_vars.append(e.p(gv[0], e.s(gv[1] + gv[2])))
-    x.append(
-        e.impl_interface(
-            e.v("ggfn_t"),
-            asp_iface(e, "function"),
-            e.p(
-                "call",
-                body(
-                    e,
-                    e.let("argv", a(e, "argument")),
-                    e.if_only(
-                        e.not_(cve_has(e, e.v("argv"))),
-                        ret_m(e, err_cve(e, loc(e), "glsl definition argument has no value")),
-                    ),
-                    e.let("rk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "record"))),
-                    e.if_only(
-                        e.not_(e.fld(e.v("rk"), "is_some")),
-                        ret_m(e, err_cve(e, loc(e), "glsl definition argument must be a record")),
-                    ),
-                    e.let(
-                        "want",
-                        e.if_else(
-                            _ggfn_is(e, "func_fn"),
-                            _want_list(e, "mod", "name", "params", "ty", "body"),
-                            e.if_else(
-                                _ggfn_is(e, "uniform_block_fn"),
-                                _want_list(e, "mod", "name", "layout", "fields"),
-                                e.if_else(
-                                    _ggfn_is(e, "gl_fn"), _want_list(e, "name"), _want_list(e, "mod", "name", "ty")
-                                ),
-                            ),
-                        ),
-                    ),
-                    e.let("kc", e.rec(e.p("n", e.int_of(0)), e.p("bad", e.dstr("")))),
-                    e.foreach(
-                        bim0(e, asp_iface(e, "record"), "field_types", e.fld(e.v("rk"), "value")),
-                        "en",
-                        e.seq(
-                            e.incr(e.fld(e.v("kc"), "n")),
-                            e.let("ks", key_str(e, e.fld(e.v("en"), "key"))),
-                            e.let("hit", e.rec(e.p("v", e.int_of(0)))),
-                            e.foreach(
-                                e.v("want"),
-                                "w",
-                                e.if_only(e.eq(e.v("w"), e.v("ks")), e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1))),
-                            ),
-                            e.if_only(
-                                e.eq(e.fld(e.v("hit"), "v"), num(e, 0)),
-                                e.mb.set(e.fld(e.v("kc"), "bad"), e.v("ks")),
-                            ),
-                        ),
-                    ),
-                    e.if_only(
-                        e.not_(e.eq(e.fld(e.v("kc"), "bad"), e.s(""))),
-                        ret_m(
-                            e,
-                            err_cve(
-                                e,
-                                loc(e),
-                                e.cat(e.s("glsl definition has no argument "), e.fld(e.v("kc"), "bad")),
-                            ),
-                        ),
-                    ),
-                    count_let(e, "wn"),
-                    count_loop(e, "wn", e.v("want")),
-                    e.if_only(
-                        e.not_(e.eq(e.fld(e.v("kc"), "n"), e.fld(e.v("wn"), "v"))),
-                        ret_m(
-                            e,
-                            err_cve(
-                                e,
-                                loc(e),
-                                e.cat(e.s("glsl definition requires arguments "), e.join(e.v("want"), ", ")),
-                            ),
-                        ),
-                    ),
-                    e.let(
-                        "fields",
-                        bim(
-                            e,
-                            asp_iface(e, "record"),
-                            "take_fields",
-                            e.fld(e.v("rk"), "value"),
-                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
-                        ),
-                    ),
-                    e.let("namecv", _ggfn_staged(e, graft(e, _ggfn_field(e, "name")))),
-                    e.if_only(
-                        is_runtime(e, e.v("namecv")),
-                        ret_m(e, err_cve(e, loc(e), "glsl definition name must be constant")),
-                    ),
-                    e.let("name", _const_str(e, e.v("namecv"))),
-                    e.if_only(
-                        _ggfn_is(e, "gl_fn"),
-                        e.seq(
-                            e.let("vars", e.map_new(str_(e), str_(e), *gl_vars)),
-                            e.if_only(
-                                e.not_(e.call_m(e.v("vars"), "has", e.v("name"))),
-                                ret_m(e, err_cve(e, loc(e), e.cat(e.s("glsl: no builtin variable "), e.v("name")))),
-                            ),
-                            e.let(
-                                "vty",
-                                _type_of(
-                                    e,
-                                    hf(
-                                        e,
-                                        "h_parse_desc",
-                                        hf(e, "h_var_code", e.call_m(e.v("vars"), "get", e.v("name"))),
-                                    ),
-                                ),
-                            ),
-                            ret_m(e, tag_value(e, e.v("namecv"), _global_t(e, e.v("vty")))),
-                        ),
-                    ),
-                    e.let("modcv", _ggfn_field(e, "mod")),
-                    e.if_only(
+    tm.method(
+        e,
+        x,
+        "ggfn_t",
+        "call",
+        e.rec(e.p("xx", e.types_expr_context()), e.p("loc", loc_t(e)), e.p("argument", cve_t(e))),
+        e.mb.call(e.mb.types_eresult(), cve_t(e)),
+        body(
+            e,
+            e.let("argv", a(e, "argument")),
+            e.if_only(
+                e.not_(cve_has(e, e.v("argv"))),
+                ret_m(e, err_cve(e, loc(e), "glsl definition argument has no value")),
+            ),
+            e.let("rk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "record"))),
+            e.if_only(
+                e.not_(e.fld(e.v("rk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), "glsl definition argument must be a record")),
+            ),
+            e.let(
+                "want",
+                e.if_else(
+                    _ggfn_is(e, "func_fn"),
+                    _want_list(e, "mod", "name", "params", "ty", "body"),
+                    e.if_else(
                         _ggfn_is(e, "uniform_block_fn"),
-                        e.seq(
-                            e.let("layoutcv", _ggfn_staged(e, graft(e, _ggfn_field(e, "layout")))),
-                            e.if_only(
-                                is_runtime(e, e.v("layoutcv")),
-                                ret_m(e, err_cve(e, loc(e), "glsl block layout must be constant")),
-                            ),
-                            e.let(
-                                "fieldsv",
-                                unwrap_m(
-                                    e,
-                                    try_er(
-                                        e,
-                                        hf_rec(
-                                            e,
-                                            "h_fields",
-                                            e.p("xx", xx(e)),
-                                            e.p("loc", loc(e)),
-                                            e.p("cv", _ggfn_field(e, "fields")),
-                                        ),
-                                        e.list_type(lt(e, "gfield")),
-                                    ),
-                                    cve_t(e),
-                                ),
-                            ),
-                            e.let(
-                                "refcv",
-                                _ggfn_staged(
-                                    e,
-                                    e.call_m(
-                                        _ggfn_mod(e),
-                                        "block",
-                                        e.rec(
-                                            e.p("name", graft(e, e.v("namecv"))),
-                                            e.p("layout", graft(e, e.v("layoutcv"))),
-                                            e.p("fields", e.lower(e.v("fieldsv"))),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                            ret_m(
-                                e,
-                                tag_value(
-                                    e,
-                                    e.v("refcv"),
-                                    mk(e, "gt_block", e.p("name", e.v("name")), e.p("fields", e.v("fieldsv"))),
-                                ),
-                            ),
+                        _want_list(e, "mod", "name", "layout", "fields"),
+                        e.if_else(
+                            _ggfn_is(e, "gl_fn"), _want_list(e, "name"), _want_list(e, "mod", "name", "ty")
                         ),
                     ),
-                    e.let("tycv", _ggfn_field(e, "ty")),
-                    e.let(
-                        "tyv",
-                        e.seq(
-                            e.let("tk", lookup(e, xx(e), cve_type(e, e.v("tycv")), asp_iface(e, "type"))),
-                            e.if_only(
-                                or_b(e, is_runtime(e, e.v("tycv")), e.not_(e.fld(e.v("tk"), "is_some"))),
-                                ret_m(e, err_cve(e, loc(e), "glsl ty must be a constant type")),
-                            ),
-                            e.ret(
-                                bim(
-                                    e,
-                                    asp_iface(e, "type"),
-                                    "type",
-                                    e.fld(e.v("tk"), "value"),
-                                    cve_value(e, e.v("tycv")),
-                                ),
-                            ),
-                        ),
-                    ),
-                    e.if_only(
-                        or_b(e, _ggfn_is(e, "in_fn"), _ggfn_is(e, "out_fn")),
-                        e.seq(
-                            e.if_only(
-                                e.not_(
-                                    or_b(
-                                        e,
-                                        has(e, xx(e), e.v("tyv"), "gscalar"),
-                                        or_b(e, has(e, xx(e), e.v("tyv"), "gvec"), has(e, xx(e), e.v("tyv"), "gmat")),
-                                    )
-                                ),
-                                ret_m(
-                                    e,
-                                    err_cve(
-                                        e,
-                                        loc(e),
-                                        e.cat(
-                                            e.s("glsl: a variable cannot have type "),
-                                            ty_desc(e, e.v("tyv")),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                            e.let(
-                                "decl",
-                                e.cat(
-                                    e.if_else(_ggfn_is(e, "in_fn"), e.dstr("in "), e.dstr("out ")),
-                                    _ir_of(e, xx(e), e.v("tyv")),
-                                    e.s(" "),
-                                    e.v("name"),
-                                    e.s(";"),
-                                ),
-                            ),
-                            e.let(
-                                "refcv",
-                                _ggfn_staged(
-                                    e,
-                                    e.call_m(
-                                        _ggfn_mod(e),
-                                        "declare",
-                                        e.rec(e.p("text", e.lower(e.v("decl"))), e.p("name", graft(e, e.v("namecv")))),
-                                    ),
-                                ),
-                            ),
-                            ret_m(e, tag_value(e, e.v("refcv"), _global_t(e, e.v("tyv")))),
-                        ),
-                    ),
-                    e.if_only(
-                        e.not_(has(e, xx(e), e.v("tyv"), "gfn")),
-                        ret_m(
-                            e,
-                            err_cve(
-                                e, loc(e), e.cat(e.s("glsl ty must be a function type, not "), ty_desc(e, e.v("tyv")))
-                            ),
-                        ),
-                    ),
-                    e.let("pcv", _ggfn_field(e, "params")),
-                    e.let("ptk", lookup(e, xx(e), cve_type(e, e.v("pcv")), asp_iface(e, "tuple"))),
-                    e.if_only(
-                        e.not_(e.fld(e.v("ptk"), "is_some")),
-                        ret_m(e, err_cve(e, loc(e), "glsl function params must be a tuple of parameter names")),
-                    ),
-                    e.let("names", e.list_new(str_(e))),
+                ),
+            ),
+            e.let("kc", e.rec(e.p("n", e.int_of(0)), e.p("bad", e.dstr("")))),
+            e.foreach(
+                bim0(e, asp_iface(e, "record"), "field_types", e.fld(e.v("rk"), "value")),
+                "en",
+                e.seq(
+                    e.incr(e.fld(e.v("kc"), "n")),
+                    e.let("ks", key_str(e, e.fld(e.v("en"), "key"))),
+                    e.let("hit", e.rec(e.p("v", e.int_of(0)))),
                     e.foreach(
-                        bim(
-                            e,
-                            asp_iface(e, "tuple"),
-                            "take_elements",
-                            e.fld(e.v("ptk"), "value"),
-                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("pcv")))),
-                        ),
-                        "er",
-                        e.seq(
-                            e.let("ncv", unwrap_cve_m(e, e.v("er"))),
-                            e.if_only(
-                                e.not_(has_b(e, xx(e), cve_type(e, e.v("ncv")), e.mb.eval_aspect_string_const())),
-                                ret_m(e, err_cve(e, loc(e), "glsl function parameter names must be constant strings")),
-                            ),
-                            push(e, e.v("names"), _const_str(e, e.v("ncv"))),
-                        ),
+                        e.v("want"),
+                        "w",
+                        e.if_only(e.eq(e.v("w"), e.v("ks")), e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1))),
                     ),
-                    count_let(e, "pn"),
-                    count_loop(e, "pn", e.v("names")),
-                    count_let(e, "tn"),
-                    count_loop(e, "tn", acc(e, xx(e), e.v("tyv"), "gfn", "params")),
                     e.if_only(
-                        e.not_(e.eq(e.fld(e.v("pn"), "v"), e.fld(e.v("tn"), "v"))),
-                        ret_m(
+                        e.eq(e.fld(e.v("hit"), "v"), num(e, 0)),
+                        e.mb.set(e.fld(e.v("kc"), "bad"), e.v("ks")),
+                    ),
+                ),
+            ),
+            e.if_only(
+                e.not_(e.eq(e.fld(e.v("kc"), "bad"), e.s(""))),
+                ret_m(
+                    e,
+                    err_cve(
+                        e,
+                        loc(e),
+                        e.cat(e.s("glsl definition has no argument "), e.fld(e.v("kc"), "bad")),
+                    ),
+                ),
+            ),
+            count_let(e, "wn"),
+            count_loop(e, "wn", e.v("want")),
+            e.if_only(
+                e.not_(e.eq(e.fld(e.v("kc"), "n"), e.fld(e.v("wn"), "v"))),
+                ret_m(
+                    e,
+                    err_cve(
+                        e,
+                        loc(e),
+                        e.cat(e.s("glsl definition requires arguments "), e.join(e.v("want"), ", ")),
+                    ),
+                ),
+            ),
+            e.let(
+                "fields",
+                bim(
+                    e,
+                    asp_iface(e, "record"),
+                    "take_fields",
+                    e.fld(e.v("rk"), "value"),
+                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
+                ),
+            ),
+            e.let("namecv", _ggfn_staged(e, graft(e, _ggfn_field(e, "name")))),
+            e.if_only(
+                is_runtime(e, e.v("namecv")),
+                ret_m(e, err_cve(e, loc(e), "glsl definition name must be constant")),
+            ),
+            e.let("name", _const_str(e, e.v("namecv"))),
+            e.if_only(
+                _ggfn_is(e, "gl_fn"),
+                e.seq(
+                    e.let("vars", e.map_new(str_(e), str_(e), *gl_vars)),
+                    e.if_only(
+                        e.not_(e.call_m(e.v("vars"), "has", e.v("name"))),
+                        ret_m(e, err_cve(e, loc(e), e.cat(e.s("glsl: no builtin variable "), e.v("name")))),
+                    ),
+                    e.let(
+                        "vty",
+                        _type_of(
                             e,
-                            err_cve(
+                            hf(
                                 e,
-                                loc(e),
-                                e.cat(
-                                    e.s("glsl function has "),
-                                    to_str(e, e.fld(e.v("pn"), "v")),
-                                    e.s(" parameter names but its type has "),
-                                    to_str(e, e.fld(e.v("tn"), "v")),
-                                    e.s(" parameters"),
-                                ),
+                                "h_parse_desc",
+                                hf(e, "h_var_code", e.call_m(e.v("vars"), "get", e.v("name"))),
                             ),
                         ),
                     ),
-                    e.let("bodycv", _ggfn_field(e, "body")),
+                    ret_m(e, tag_value(e, e.v("namecv"), _global_t(e, e.v("vty")))),
+                ),
+            ),
+            e.let("modcv", _ggfn_field(e, "mod")),
+            e.if_only(
+                _ggfn_is(e, "uniform_block_fn"),
+                e.seq(
+                    e.let("layoutcv", _ggfn_staged(e, graft(e, _ggfn_field(e, "layout")))),
+                    e.if_only(
+                        is_runtime(e, e.v("layoutcv")),
+                        ret_m(e, err_cve(e, loc(e), "glsl block layout must be constant")),
+                    ),
+                    e.let(
+                        "fieldsv",
+                        unwrap_m(
+                            e,
+                            try_er(
+                                e,
+                                hf_rec(
+                                    e,
+                                    "h_fields",
+                                    e.p("xx", xx(e)),
+                                    e.p("loc", loc(e)),
+                                    e.p("cv", _ggfn_field(e, "fields")),
+                                ),
+                                e.list_type(lt(e, "gfield")),
+                            ),
+                            cve_t(e),
+                        ),
+                    ),
                     e.let(
                         "refcv",
                         _ggfn_staged(
                             e,
                             e.call_m(
                                 _ggfn_mod(e),
-                                "func",
+                                "block",
                                 e.rec(
                                     e.p("name", graft(e, e.v("namecv"))),
-                                    e.p("params", e.lower(e.v("names"))),
-                                    e.p("ty", e.lower(e.v("tyv"))),
-                                    e.p("body", graft(e, e.v("bodycv"))),
+                                    e.p("layout", graft(e, e.v("layoutcv"))),
+                                    e.p("fields", e.lower(e.v("fieldsv"))),
                                 ),
                             ),
                         ),
                     ),
-                    e.ret(tag_value(e, e.v("refcv"), _global_t(e, e.v("tyv")))),
+                    ret_m(
+                        e,
+                        tag_value(
+                            e,
+                            e.v("refcv"),
+                            mk(e, "gt_block", e.p("name", e.v("name")), e.p("fields", e.v("fieldsv"))),
+                        ),
+                    ),
                 ),
             ),
-            e.p("exception_type", e.option_type_lowered_none()),
-        )
+            e.let("tycv", _ggfn_field(e, "ty")),
+            e.let(
+                "tyv",
+                e.seq(
+                    e.let("tk", lookup(e, xx(e), cve_type(e, e.v("tycv")), asp_iface(e, "type"))),
+                    e.if_only(
+                        or_b(e, is_runtime(e, e.v("tycv")), e.not_(e.fld(e.v("tk"), "is_some"))),
+                        ret_m(e, err_cve(e, loc(e), "glsl ty must be a constant type")),
+                    ),
+                    e.ret(
+                        bim(
+                            e,
+                            asp_iface(e, "type"),
+                            "type",
+                            e.fld(e.v("tk"), "value"),
+                            cve_value(e, e.v("tycv")),
+                        ),
+                    ),
+                ),
+            ),
+            e.if_only(
+                or_b(e, _ggfn_is(e, "in_fn"), _ggfn_is(e, "out_fn")),
+                e.seq(
+                    e.if_only(
+                        e.not_(
+                            or_b(
+                                e,
+                                has(e, xx(e), e.v("tyv"), "gscalar"),
+                                or_b(e, has(e, xx(e), e.v("tyv"), "gvec"), has(e, xx(e), e.v("tyv"), "gmat")),
+                            )
+                        ),
+                        ret_m(
+                            e,
+                            err_cve(
+                                e,
+                                loc(e),
+                                e.cat(
+                                    e.s("glsl: a variable cannot have type "),
+                                    ty_desc(e, e.v("tyv")),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.let(
+                        "decl",
+                        e.cat(
+                            e.if_else(_ggfn_is(e, "in_fn"), e.dstr("in "), e.dstr("out ")),
+                            _ir_of(e, xx(e), e.v("tyv")),
+                            e.s(" "),
+                            e.v("name"),
+                            e.s(";"),
+                        ),
+                    ),
+                    e.let(
+                        "refcv",
+                        _ggfn_staged(
+                            e,
+                            e.call_m(
+                                _ggfn_mod(e),
+                                "declare",
+                                e.rec(e.p("text", e.lower(e.v("decl"))), e.p("name", graft(e, e.v("namecv")))),
+                            ),
+                        ),
+                    ),
+                    ret_m(e, tag_value(e, e.v("refcv"), _global_t(e, e.v("tyv")))),
+                ),
+            ),
+            e.if_only(
+                e.not_(has(e, xx(e), e.v("tyv"), "gfn")),
+                ret_m(
+                    e,
+                    err_cve(
+                        e, loc(e), e.cat(e.s("glsl ty must be a function type, not "), ty_desc(e, e.v("tyv")))
+                    ),
+                ),
+            ),
+            e.let("pcv", _ggfn_field(e, "params")),
+            e.let("ptk", lookup(e, xx(e), cve_type(e, e.v("pcv")), asp_iface(e, "tuple"))),
+            e.if_only(
+                e.not_(e.fld(e.v("ptk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), "glsl function params must be a tuple of parameter names")),
+            ),
+            e.let("names", e.list_new(str_(e))),
+            e.foreach(
+                bim(
+                    e,
+                    asp_iface(e, "tuple"),
+                    "take_elements",
+                    e.fld(e.v("ptk"), "value"),
+                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("pcv")))),
+                ),
+                "er",
+                e.seq(
+                    e.let("ncv", unwrap_cve_m(e, e.v("er"))),
+                    e.if_only(
+                        e.not_(has_b(e, xx(e), cve_type(e, e.v("ncv")), e.mb.eval_aspect_string_const())),
+                        ret_m(e, err_cve(e, loc(e), "glsl function parameter names must be constant strings")),
+                    ),
+                    push(e, e.v("names"), _const_str(e, e.v("ncv"))),
+                ),
+            ),
+            count_let(e, "pn"),
+            count_loop(e, "pn", e.v("names")),
+            count_let(e, "tn"),
+            count_loop(e, "tn", acc(e, xx(e), e.v("tyv"), "gfn", "params")),
+            e.if_only(
+                e.not_(e.eq(e.fld(e.v("pn"), "v"), e.fld(e.v("tn"), "v"))),
+                ret_m(
+                    e,
+                    err_cve(
+                        e,
+                        loc(e),
+                        e.cat(
+                            e.s("glsl function has "),
+                            to_str(e, e.fld(e.v("pn"), "v")),
+                            e.s(" parameter names but its type has "),
+                            to_str(e, e.fld(e.v("tn"), "v")),
+                            e.s(" parameters"),
+                        ),
+                    ),
+                ),
+            ),
+            e.let("bodycv", _ggfn_field(e, "body")),
+            e.let(
+                "refcv",
+                _ggfn_staged(
+                    e,
+                    e.call_m(
+                        _ggfn_mod(e),
+                        "func",
+                        e.rec(
+                            e.p("name", graft(e, e.v("namecv"))),
+                            e.p("params", e.lower(e.v("names"))),
+                            e.p("ty", e.lower(e.v("tyv"))),
+                            e.p("body", graft(e, e.v("bodycv"))),
+                        ),
+                    ),
+                ),
+            ),
+            e.ret(tag_value(e, e.v("refcv"), _global_t(e, e.v("tyv")))),
+        ),
     )
 
 
@@ -3007,12 +3005,28 @@ def module(e):
     y.append(e.let("void", _lty(e, "gt_void", e.tup())))
     for kind in GGFN_KINDS:
         exported.append(kind)
-        y.append(e.let(kind, e.call(e.fld(e.v("k"), "ggfn_t_new"), e.rec(e.p("kind", e.int_of(_ggfn_kind(kind)))))))
+        y.append(e.let(kind + "_o", e.call(e.fld(e.v("k"), "ggfn_t_new"), e.rec(e.p("kind", e.int_of(_ggfn_kind(kind)))))))
     builtins = []
     for row in BUILTINS:
         builtins.append(e.p(row[0], _lty(e, "gbuiltin_t", e.rec(e.p("name", e.s(row[0]))))))
     y.append(e.let("gbuiltins", e.rec(*builtins)))
     y.append(e.let("d", e.define()))
+    y.append(e.let("gfn_d", e.define()))
+    for kind in GGFN_KINDS:
+        tm.const_fn(
+            e,
+            y,
+            kind + "_b",
+            "glsl." + kind,
+            e.call_m(
+                e.lower(e.v(kind + "_o")),
+                "call",
+                e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("argument", a(e, "argument"))),
+            ),
+            d="gfn_d",
+        )
+        y.append(e.let(kind, e.fld(e.v(kind + "_b"), "func")))
+    y.append(e.finish(e.v("gfn_d")))
     y.append(e.option_type_let())
     y.append(e.let("mod_o", e.def_object(e.v("d"), "glsl module")))
     y.append(e.object_impl(e.v("mod_o"), e.rec(e.p("m", e.fld(e.v("k"), "mod_t")))))
@@ -3066,7 +3080,7 @@ def module(e):
 
 
 def _lty(e, obj, arg):
-    return e.call(e.fld(e.v("k"), obj + "_new"), arg)
+    return e.mb.as_(e.call(e.fld(e.v("k"), obj + "_new"), arg), ty(e))
 
 
 def _def_data(e, x):
@@ -3389,7 +3403,7 @@ def _def_helpers(e, x):
         "h_type_of",
         body(
             e,
-            e.if_only(a(e, "mat"), ret_m(e, mk(e, "gt_mat", e.p("n", a(e, "n"))))),
+            e.if_only(a(e, "mat"), ret_m(e, e.mb.as_(mk(e, "gt_mat", e.p("n", a(e, "n"))), ty(e)))),
             e.if_only(e.eq(a(e, "n"), num(e, 1)), ret_m(e, e.mb.as_(_scalar_t(e, a(e, "kind")), ty(e)))),
             e.ret(e.mb.as_(_vec_t(e, a(e, "kind"), a(e, "n")), ty(e))),
         ),

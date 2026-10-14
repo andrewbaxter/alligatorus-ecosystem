@@ -263,29 +263,7 @@ def _specialize(e, name, arg_type, impl_body):
                 cv_of(
                     e,
                     code_none(e, loc(e)),
-                    unwrap_m(
-                        e,
-                        bim(
-                            e,
-                            e.mb.eval_aspect_lift(),
-                            "lift",
-                            lookup_v(e, xx(e), ty(e), e.mb.eval_aspect_lift()),
-                            e.rec(
-                                e.p("xx", xx(e)),
-                                e.p("loc", loc(e)),
-                                e.p(
-                                    "external_host_value",
-                                    e.call(
-                                        e.mb.must_reinterpret(),
-                                        e.tup(
-                                            e.mb.as_(e.fld(e.v("sp"), "func"), ty(e)), e.mb.builtin("types", "object")
-                                        ),
-                                    ),
-                                ),
-                            ),
-                        ),
-                        e.mb.types_cve(),
-                    ),
+                    e.call(e.eval_builtin("value_empty"), e.call_m0(e.v("sp"), "func_type")),
                 ),
             ),
         ),
@@ -463,8 +441,8 @@ def _value_aspects(e, x, obj, size_expr, hash_stage):
 def _int_hash_body(e):
     """values.hash for ints: widened (or kept, at 64 bits) to i64 and SipHashed."""
     return e.seq(
-        e.let("sh_i64", _int_ty(e, "i64")),
-        e.let("sh_i32", _int_ty(e, "i32")),
+        e.let("sh_i64", e.mb.as_(_int_ty(e, "i64"), e.mb.eval_type())),
+        e.let("sh_i32", e.mb.as_(_int_ty(e, "i32"), e.mb.eval_type())),
         e.let("pi64", mk(e, "lt_ptr", e.p("pointee", e.v("sh_i64")))),
         e.if_else(
             e.eq(in_(e, "bits"), num(e, 64)),
@@ -476,7 +454,7 @@ def _int_hash_body(e):
             e.ret(
                 _sip_hash(
                     e,
-                    lambda x: e.call(e.lower(e.v("sh_i64")), x),
+                    lambda x: e.mb.as_(x, e.lower(e.v("sh_i64"))),
                     e.p("ty", mk(e, "lt_arr", e.p("elem", e.v("sh_i64")), e.p("count", e.int_of(2)))),
                 )
             ),
@@ -487,8 +465,8 @@ def _int_hash_body(e):
 def _ptr_hash_body(e):
     """values.hash for pointers: the address as i64, SipHashed."""
     return e.seq(
-        e.let("sh_i64", _int_ty(e, "i64")),
-        e.let("sh_i32", _int_ty(e, "i32")),
+        e.let("sh_i64", e.mb.as_(_int_ty(e, "i64"), e.mb.eval_type())),
+        e.let("sh_i32", e.mb.as_(_int_ty(e, "i32"), e.mb.eval_type())),
         e.let("pi64", mk(e, "lt_ptr", e.p("pointee", e.v("sh_i64")))),
         e.ret(
             _sip_hash(
@@ -507,7 +485,7 @@ SIP_C = [(0x736F6D65, 0x70736575), (0x646F7261, 0x6E646F6D), (0x6C796765, 0x6E65
 
 
 def _sip_i64(e, v):
-    return e.call(e.lower(e.v("sh_i64")), e.n(v))
+    return e.mb.as_(e.n(v), e.lower(e.v("sh_i64")))
 
 
 def _sip_k(e, hi, lo):
@@ -566,7 +544,7 @@ def _siphash_body(e):
             *_sip_round(e),
             *_sip_round(e),
             e.mb.return_to(
-                "fn", e.call(e.lower(e.v("sh_i32")), xor(xor(e.v("v0"), e.v("v1")), xor(e.v("v2"), e.v("v3"))))
+                "fn", e.mb.as_(xor(xor(e.v("v0"), e.v("v1")), xor(e.v("v2"), e.v("v3"))), e.lower(e.v("sh_i32")))
             ),
         ),
     )
@@ -632,7 +610,7 @@ def _sip_hash(e, to_i64, key_arg):
 
 
 def _lty(e, obj, arg):
-    return e.call(e.fld(e.v("k"), obj + "_new"), arg)
+    return e.mb.as_(e.call(e.fld(e.v("k"), obj + "_new"), arg), ty(e))
 
 
 def _lval_of(e, cve_tp):
@@ -6440,7 +6418,7 @@ def module(e):
         x,
         "lgfn_t",
         e.cat(e.s("llvm global definition function "), to_str(e, in_(e, "kind"))),
-        rt_dispatch(e, lt(e, "lmod"), e.aspect_dispatch(lv(e, "lgfn_m_id"), asp_id(e, "function"))),
+        rt_dispatch(e, lt(e, "lmod"), e.aspect_dispatch(lv(e, "lgfn_m_id"))),
         can_cast_from_self(e),
         cast_from_self(e),
         no_cast_to(e),
@@ -6460,315 +6438,263 @@ def module(e):
     rt_bind_impl(e, x, "lgfn_t", lt(e, "lmod"))
     rt_use_impl(e, x, "lgfn_t")
     x.append(e.impl_interface(e.v("lgfn_t"), t(e, "lgfn_m"), e.p("kind", in_(e, "kind"))))
-    x.append(
-        e.impl_interface(
-            e.v("lgfn_t"),
-            asp_iface(e, "function"),
-            e.p(
-                "call",
-                body(
-                    e,
-                    e.let("argv", a(e, "argument")),
-                    e.if_only(
-                        e.not_(cve_has(e, e.v("argv"))),
-                        ret_m(e, err_cve(e, loc(e), "llvm global definition argument has no value")),
-                    ),
-                    e.let("st", cve_type(e, e.v("argv"))),
-                    e.let("rk", lookup(e, xx(e), e.v("st"), asp_iface(e, "record"))),
-                    e.if_only(
-                        e.not_(e.fld(e.v("rk"), "is_some")),
-                        ret_m(e, err_cve(e, loc(e), "llvm global definition argument must be a record")),
-                    ),
-                    e.let(
-                        "want",
+    target_mb.method(
+        e,
+        x,
+        "lgfn_t",
+        "call",
+        e.rec(e.p("xx", e.types_expr_context()), e.p("loc", loc_t(e)), e.p("argument", cve_t(e))),
+        e.mb.call(e.mb.types_eresult(), cve_t(e)),
+        body(
+            e,
+            e.let("argv", a(e, "argument")),
+            e.if_only(
+                e.not_(cve_has(e, e.v("argv"))),
+                ret_m(e, err_cve(e, loc(e), "llvm global definition argument has no value")),
+            ),
+            e.let("st", cve_type(e, e.v("argv"))),
+            e.let("rk", lookup(e, xx(e), e.v("st"), asp_iface(e, "record"))),
+            e.if_only(
+                e.not_(e.fld(e.v("rk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), "llvm global definition argument must be a record")),
+            ),
+            e.let(
+                "want",
+                e.if_else(
+                    _lgfn_is(e, "cstr_fn"),
+                    e.list_new(str_(e), e.s("mod"), e.s("value")),
+                    e.if_else(
+                        _lgfn_is(e, "constant_fn"),
+                        e.list_new(str_(e), e.s("ty"), e.s("value")),
                         e.if_else(
-                            _lgfn_is(e, "cstr_fn"),
-                            e.list_new(str_(e), e.s("mod"), e.s("value")),
+                            _lgfn_is(e, "ref_fn"),
+                            e.list_new(str_(e), e.s("ref"), e.s("ty")),
                             e.if_else(
-                                _lgfn_is(e, "constant_fn"),
-                                e.list_new(str_(e), e.s("ty"), e.s("value")),
+                                _lgfn_is(e, "extern_fn"),
+                                e.list_new(str_(e), e.s("name"), e.s("ty"), e.s("libs")),
                                 e.if_else(
-                                    _lgfn_is(e, "ref_fn"),
-                                    e.list_new(str_(e), e.s("ref"), e.s("ty")),
+                                    _lgfn_is(e, "func_fn"),
+                                    e.list_new(
+                                        str_(e), e.s("mod"), e.s("name"), e.s("params"), e.s("ty"), e.s("body")
+                                    ),
                                     e.if_else(
-                                        _lgfn_is(e, "extern_fn"),
-                                        e.list_new(str_(e), e.s("name"), e.s("ty"), e.s("libs")),
-                                        e.if_else(
-                                            _lgfn_is(e, "func_fn"),
-                                            e.list_new(
-                                                str_(e), e.s("mod"), e.s("name"), e.s("params"), e.s("ty"), e.s("body")
-                                            ),
-                                            e.if_else(
-                                                _lgfn_is(e, "global_zero_fn"),
-                                                e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("ty")),
-                                                e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("ty"), e.s("init")),
-                                            ),
-                                        ),
+                                        _lgfn_is(e, "global_zero_fn"),
+                                        e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("ty")),
+                                        e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("ty"), e.s("init")),
                                     ),
                                 ),
                             ),
                         ),
                     ),
-                    e.let("kc", e.rec(e.p("n", e.int_of(0)), e.p("bad", e.dstr("")))),
+                ),
+            ),
+            e.let("kc", e.rec(e.p("n", e.int_of(0)), e.p("bad", e.dstr("")))),
+            e.foreach(
+                bim0(e, asp_iface(e, "record"), "field_types", e.fld(e.v("rk"), "value")),
+                "en",
+                e.seq(
+                    e.incr(e.fld(e.v("kc"), "n")),
+                    e.let("ks", key_str(e, e.fld(e.v("en"), "key"))),
+                    e.let("hit", e.rec(e.p("v", e.int_of(0)))),
                     e.foreach(
-                        bim0(e, asp_iface(e, "record"), "field_types", e.fld(e.v("rk"), "value")),
-                        "en",
-                        e.seq(
-                            e.incr(e.fld(e.v("kc"), "n")),
-                            e.let("ks", key_str(e, e.fld(e.v("en"), "key"))),
-                            e.let("hit", e.rec(e.p("v", e.int_of(0)))),
-                            e.foreach(
-                                e.v("want"),
-                                "w",
-                                e.if_only(e.eq(e.v("w"), e.v("ks")), e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1))),
-                            ),
-                            e.if_only(
-                                e.eq(e.fld(e.v("hit"), "v"), num(e, 0)), e.mb.set(e.fld(e.v("kc"), "bad"), e.v("ks"))
-                            ),
-                        ),
+                        e.v("want"),
+                        "w",
+                        e.if_only(e.eq(e.v("w"), e.v("ks")), e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1))),
                     ),
                     e.if_only(
-                        e.not_(e.eq(e.fld(e.v("kc"), "bad"), e.s(""))),
-                        ret_m(
-                            e,
-                            err_cve(
-                                e,
-                                loc(e),
-                                e.cat(e.s("llvm global definition has no argument "), e.fld(e.v("kc"), "bad")),
-                            ),
-                        ),
+                        e.eq(e.fld(e.v("hit"), "v"), num(e, 0)), e.mb.set(e.fld(e.v("kc"), "bad"), e.v("ks"))
                     ),
-                    count_let(e, "wn"),
-                    count_loop(e, "wn", e.v("want")),
-                    e.if_only(
-                        e.not_(e.eq(e.fld(e.v("kc"), "n"), e.fld(e.v("wn"), "v"))),
-                        ret_m(
-                            e,
-                            err_cve(
-                                e,
-                                loc(e),
-                                e.cat(e.s("llvm global definition requires arguments "), e.join(e.v("want"), ", ")),
-                            ),
-                        ),
+                ),
+            ),
+            e.if_only(
+                e.not_(e.eq(e.fld(e.v("kc"), "bad"), e.s(""))),
+                ret_m(
+                    e,
+                    err_cve(
+                        e,
+                        loc(e),
+                        e.cat(e.s("llvm global definition has no argument "), e.fld(e.v("kc"), "bad")),
                     ),
+                ),
+            ),
+            count_let(e, "wn"),
+            count_loop(e, "wn", e.v("want")),
+            e.if_only(
+                e.not_(e.eq(e.fld(e.v("kc"), "n"), e.fld(e.v("wn"), "v"))),
+                ret_m(
+                    e,
+                    err_cve(
+                        e,
+                        loc(e),
+                        e.cat(e.s("llvm global definition requires arguments "), e.join(e.v("want"), ", ")),
+                    ),
+                ),
+            ),
+            e.let(
+                "fields",
+                bim(
+                    e,
+                    asp_iface(e, "record"),
+                    "take_fields",
+                    e.fld(e.v("rk"), "value"),
+                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
+                ),
+            ),
+            e.if_only(
+                _lgfn_is(e, "cstr_fn"),
+                e.seq(
+                    e.let("modcv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("mod")))),
+                    e.let("valuecv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("value")))),
                     e.let(
-                        "fields",
+                        "refcv",
+                        _lgfn_staged(
+                            e,
+                            e.call_m(
+                                e.call_m(graft(e, e.v("modcv")), "m", e.tup()),
+                                "add_cstr",
+                                graft(e, e.v("valuecv")),
+                            ),
+                        ),
+                    ),
+                    ret_m(
+                        e,
+                        tag_value(
+                            e,
+                            e.v("refcv"),
+                            _lgfn_global_t(e, mk(e, "lt_ptr", e.p("pointee", _int_ty(e, "u8"))), False),
+                        ),
+                    ),
+                ),
+            ),
+            e.let("tycv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("ty")))),
+            e.let("tk", lookup(e, xx(e), cve_type(e, e.v("tycv")), asp_iface(e, "type"))),
+            e.if_only(
+                or_b(e, is_runtime(e, e.v("tycv")), e.not_(e.fld(e.v("tk"), "is_some"))),
+                ret_m(e, err_cve(e, loc(e), "llvm ty must be a constant type")),
+            ),
+            e.let(
+                "tyv",
+                bim(e, asp_iface(e, "type"), "type", e.fld(e.v("tk"), "value"), cve_value(e, e.v("tycv"))),
+            ),
+            e.if_only(
+                _lgfn_is(e, "ref_fn"),
+                e.seq(
+                    e.if_only(
+                        e.not_(
+                            or_b(e, has(e, xx(e), e.v("tyv"), "lgtype_m"), has(e, xx(e), e.v("tyv"), "lloop_m"))
+                        ),
+                        ret_m(
+                            e,
+                            err_cve(
+                                e,
+                                loc(e),
+                                e.cat(
+                                    e.s("llvm reference ty is not a reference type: "), ty_desc(e, e.v("tyv"))
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.let("rcv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("ref")))),
+                    ret_m(e, tag_value(e, e.v("rcv"), e.v("tyv"))),
+                ),
+            ),
+            e.if_only(
+                e.not_(has(e, xx(e), e.v("tyv"), "ltype")),
+                ret_m(
+                    e,
+                    err_cve(
+                        e,
+                        loc(e),
+                        e.cat(e.s("llvm global definition ty is not an llvm type: "), ty_desc(e, e.v("tyv"))),
+                    ),
+                ),
+            ),
+            e.if_only(_lgfn_is(e, "extern_fn"), _extern_fn_body(e)),
+            e.if_only(
+                _lgfn_is(e, "func_fn"),
+                e.seq(
+                    e.let("modcv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("mod")))),
+                    e.if_only(
+                        e.not_(has(e, xx(e), e.v("tyv"), "lfn")),
+                        ret_m(
+                            e,
+                            err_cve(
+                                e,
+                                loc(e),
+                                e.cat(
+                                    e.s("llvm function ty must be a function type, not "),
+                                    ty_desc(e, e.v("tyv")),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.let("pcv", _lgfn_field(e, "params")),
+                    e.let("ptk", lookup(e, xx(e), cve_type(e, e.v("pcv")), asp_iface(e, "tuple"))),
+                    e.if_only(
+                        e.not_(e.fld(e.v("ptk"), "is_some")),
+                        ret_m(e, err_cve(e, loc(e), "llvm function params must be a tuple of parameter names")),
+                    ),
+                    e.let("names", e.list_new(str_(e))),
+                    e.foreach(
                         bim(
                             e,
-                            asp_iface(e, "record"),
-                            "take_fields",
-                            e.fld(e.v("rk"), "value"),
-                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
+                            asp_iface(e, "tuple"),
+                            "take_elements",
+                            e.fld(e.v("ptk"), "value"),
+                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("pcv")))),
                         ),
-                    ),
-                    e.if_only(
-                        _lgfn_is(e, "cstr_fn"),
+                        "er",
                         e.seq(
-                            e.let("modcv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("mod")))),
-                            e.let("valuecv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("value")))),
+                            e.let("ncv", unwrap_cve_m(e, e.v("er"))),
                             e.let(
-                                "refcv",
-                                _lgfn_staged(
-                                    e,
-                                    e.call_m(
-                                        e.call_m(graft(e, e.v("modcv")), "m", e.tup()),
-                                        "add_cstr",
-                                        graft(e, e.v("valuecv")),
-                                    ),
-                                ),
+                                "nsk",
+                                lookup(e, xx(e), cve_type(e, e.v("ncv")), e.mb.eval_aspect_string_const()),
                             ),
-                            ret_m(
-                                e,
-                                tag_value(
-                                    e,
-                                    e.v("refcv"),
-                                    _lgfn_global_t(e, mk(e, "lt_ptr", e.p("pointee", _int_ty(e, "u8"))), False),
-                                ),
-                            ),
-                        ),
-                    ),
-                    e.let("tycv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("ty")))),
-                    e.let("tk", lookup(e, xx(e), cve_type(e, e.v("tycv")), asp_iface(e, "type"))),
-                    e.if_only(
-                        or_b(e, is_runtime(e, e.v("tycv")), e.not_(e.fld(e.v("tk"), "is_some"))),
-                        ret_m(e, err_cve(e, loc(e), "llvm ty must be a constant type")),
-                    ),
-                    e.let(
-                        "tyv",
-                        bim(e, asp_iface(e, "type"), "type", e.fld(e.v("tk"), "value"), cve_value(e, e.v("tycv"))),
-                    ),
-                    e.if_only(
-                        _lgfn_is(e, "ref_fn"),
-                        e.seq(
                             e.if_only(
-                                e.not_(
-                                    or_b(e, has(e, xx(e), e.v("tyv"), "lgtype_m"), has(e, xx(e), e.v("tyv"), "lloop_m"))
-                                ),
+                                e.not_(e.fld(e.v("nsk"), "is_some")),
                                 ret_m(
                                     e,
                                     err_cve(
-                                        e,
-                                        loc(e),
-                                        e.cat(
-                                            e.s("llvm reference ty is not a reference type: "), ty_desc(e, e.v("tyv"))
-                                        ),
+                                        e, loc(e), "llvm function parameter names must be constant" + " strings"
                                     ),
                                 ),
                             ),
-                            e.let("rcv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("ref")))),
-                            ret_m(e, tag_value(e, e.v("rcv"), e.v("tyv"))),
+                            push(
+                                e,
+                                e.v("names"),
+                                bim(
+                                    e,
+                                    e.mb.eval_aspect_string_const(),
+                                    "get",
+                                    e.fld(e.v("nsk"), "value"),
+                                    cve_value(e, e.v("ncv")),
+                                ),
+                            ),
                         ),
                     ),
+                    count_let(e, "pn"),
+                    count_loop(e, "pn", e.v("names")),
+                    count_let(e, "tn"),
+                    count_loop(e, "tn", acc(e, xx(e), e.v("tyv"), "lfn", "params")),
                     e.if_only(
-                        e.not_(has(e, xx(e), e.v("tyv"), "ltype")),
+                        e.not_(e.eq(e.fld(e.v("pn"), "v"), e.fld(e.v("tn"), "v"))),
                         ret_m(
                             e,
                             err_cve(
                                 e,
                                 loc(e),
-                                e.cat(e.s("llvm global definition ty is not an llvm type: "), ty_desc(e, e.v("tyv"))),
-                            ),
-                        ),
-                    ),
-                    e.if_only(_lgfn_is(e, "extern_fn"), _extern_fn_body(e)),
-                    e.if_only(
-                        _lgfn_is(e, "func_fn"),
-                        e.seq(
-                            e.let("modcv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("mod")))),
-                            e.if_only(
-                                e.not_(has(e, xx(e), e.v("tyv"), "lfn")),
-                                ret_m(
-                                    e,
-                                    err_cve(
-                                        e,
-                                        loc(e),
-                                        e.cat(
-                                            e.s("llvm function ty must be a function type, not "),
-                                            ty_desc(e, e.v("tyv")),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                            e.let("pcv", _lgfn_field(e, "params")),
-                            e.let("ptk", lookup(e, xx(e), cve_type(e, e.v("pcv")), asp_iface(e, "tuple"))),
-                            e.if_only(
-                                e.not_(e.fld(e.v("ptk"), "is_some")),
-                                ret_m(e, err_cve(e, loc(e), "llvm function params must be a tuple of parameter names")),
-                            ),
-                            e.let("names", e.list_new(str_(e))),
-                            e.foreach(
-                                bim(
-                                    e,
-                                    asp_iface(e, "tuple"),
-                                    "take_elements",
-                                    e.fld(e.v("ptk"), "value"),
-                                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("pcv")))),
-                                ),
-                                "er",
-                                e.seq(
-                                    e.let("ncv", unwrap_cve_m(e, e.v("er"))),
-                                    e.let(
-                                        "nsk",
-                                        lookup(e, xx(e), cve_type(e, e.v("ncv")), e.mb.eval_aspect_string_const()),
-                                    ),
-                                    e.if_only(
-                                        e.not_(e.fld(e.v("nsk"), "is_some")),
-                                        ret_m(
-                                            e,
-                                            err_cve(
-                                                e, loc(e), "llvm function parameter names must be constant" + " strings"
-                                            ),
-                                        ),
-                                    ),
-                                    push(
-                                        e,
-                                        e.v("names"),
-                                        bim(
-                                            e,
-                                            e.mb.eval_aspect_string_const(),
-                                            "get",
-                                            e.fld(e.v("nsk"), "value"),
-                                            cve_value(e, e.v("ncv")),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                            count_let(e, "pn"),
-                            count_loop(e, "pn", e.v("names")),
-                            count_let(e, "tn"),
-                            count_loop(e, "tn", acc(e, xx(e), e.v("tyv"), "lfn", "params")),
-                            e.if_only(
-                                e.not_(e.eq(e.fld(e.v("pn"), "v"), e.fld(e.v("tn"), "v"))),
-                                ret_m(
-                                    e,
-                                    err_cve(
-                                        e,
-                                        loc(e),
-                                        e.cat(
-                                            e.s("llvm function has "),
-                                            to_str(e, e.fld(e.v("pn"), "v")),
-                                            e.s(" parameter names but its type has "),
-                                            to_str(e, e.fld(e.v("tn"), "v")),
-                                            e.s(" parameters"),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                            e.let("namecv", _lgfn_field(e, "name")),
-                            e.let("bodycv", _lgfn_field(e, "body")),
-                            e.seq(
-                                e.let(
-                                    "refcv",
-                                    _lgfn_staged(
-                                        e,
-                                        e.call_m(
-                                            e.call_m(graft(e, e.v("modcv")), "m", e.tup()),
-                                            "func",
-                                            e.rec(
-                                                e.p("name", graft(e, e.v("namecv"))),
-                                                e.p("params", e.lower(e.v("names"))),
-                                                e.p("ty", e.lower(e.v("tyv"))),
-                                                e.p("body", graft(e, e.v("bodycv"))),
-                                            ),
-                                        ),
-                                    ),
-                                ),
-                                ret_m(e, tag_value(e, e.v("refcv"), _lgfn_global_t(e, e.v("tyv"), False))),
-                            ),
-                        ),
-                    ),
-                    e.let(
-                        "ir",
-                        e.if_else(
-                            _lgfn_is(e, "global_zero_fn"),
-                            unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(e.s("zeroinitializer")))),
-                            unwrap_cve_m(
-                                e,
-                                try_er(
-                                    e,
-                                    _init_fn(
-                                        e,
-                                        e.v("tyv"),
-                                        unwrap_cve_m(
-                                            e,
-                                            e.call_m(
-                                                e.v("fields"),
-                                                "get",
-                                                e.if_else(_lgfn_is(e, "constant_fn"), e.dstr("value"), e.dstr("init")),
-                                            ),
-                                        ),
-                                    ),
-                                    cve_t(e),
+                                e.cat(
+                                    e.s("llvm function has "),
+                                    to_str(e, e.fld(e.v("pn"), "v")),
+                                    e.s(" parameter names but its type has "),
+                                    to_str(e, e.fld(e.v("tn"), "v")),
+                                    e.s(" parameters"),
                                 ),
                             ),
                         ),
                     ),
-                    e.if_only(
-                        _lgfn_is(e, "constant_fn"),
-                        e.seq(ret_m(e, tag_value(e, e.v("ir"), _lgfn_global_t(e, e.v("tyv"), False)))),
-                    ),
-                    e.let("modcv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("mod")))),
                     e.let("namecv", _lgfn_field(e, "name")),
+                    e.let("bodycv", _lgfn_field(e, "body")),
                     e.seq(
                         e.let(
                             "refcv",
@@ -6776,33 +6702,83 @@ def module(e):
                                 e,
                                 e.call_m(
                                     e.call_m(graft(e, e.v("modcv")), "m", e.tup()),
-                                    "add_global",
+                                    "func",
                                     e.rec(
-                                        e.p("konst", e.lower(_lgfn_is(e, "global_const_fn"))),
                                         e.p("name", graft(e, e.v("namecv"))),
+                                        e.p("params", e.lower(e.v("names"))),
                                         e.p("ty", e.lower(e.v("tyv"))),
-                                        e.p("init", graft(e, e.v("ir"))),
+                                        e.p("body", graft(e, e.v("bodycv"))),
                                     ),
                                 ),
                             ),
                         ),
-                        ret_m(
+                        ret_m(e, tag_value(e, e.v("refcv"), _lgfn_global_t(e, e.v("tyv"), False))),
+                    ),
+                ),
+            ),
+            e.let(
+                "ir",
+                e.if_else(
+                    _lgfn_is(e, "global_zero_fn"),
+                    unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(e.s("zeroinitializer")))),
+                    unwrap_cve_m(
+                        e,
+                        try_er(
                             e,
-                            tag_value(
+                            _init_fn(
                                 e,
-                                e.v("refcv"),
-                                e.if_else(
-                                    _lgfn_is(e, "global_const_fn"),
-                                    _lgfn_global_t(e, mk(e, "lt_ptr", e.p("pointee", e.v("tyv"))), False),
-                                    _lgfn_global_t(e, e.v("tyv"), True),
+                                e.v("tyv"),
+                                unwrap_cve_m(
+                                    e,
+                                    e.call_m(
+                                        e.v("fields"),
+                                        "get",
+                                        e.if_else(_lgfn_is(e, "constant_fn"), e.dstr("value"), e.dstr("init")),
+                                    ),
                                 ),
                             ),
+                            cve_t(e),
                         ),
                     ),
                 ),
             ),
-            e.p("exception_type", e.option_type_lowered_none()),
-        )
+            e.if_only(
+                _lgfn_is(e, "constant_fn"),
+                e.seq(ret_m(e, tag_value(e, e.v("ir"), _lgfn_global_t(e, e.v("tyv"), False)))),
+            ),
+            e.let("modcv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("mod")))),
+            e.let("namecv", _lgfn_field(e, "name")),
+            e.seq(
+                e.let(
+                    "refcv",
+                    _lgfn_staged(
+                        e,
+                        e.call_m(
+                            e.call_m(graft(e, e.v("modcv")), "m", e.tup()),
+                            "add_global",
+                            e.rec(
+                                e.p("konst", e.lower(_lgfn_is(e, "global_const_fn"))),
+                                e.p("name", graft(e, e.v("namecv"))),
+                                e.p("ty", e.lower(e.v("tyv"))),
+                                e.p("init", graft(e, e.v("ir"))),
+                            ),
+                        ),
+                    ),
+                ),
+                ret_m(
+                    e,
+                    tag_value(
+                        e,
+                        e.v("refcv"),
+                        e.if_else(
+                            _lgfn_is(e, "global_const_fn"),
+                            _lgfn_global_t(e, mk(e, "lt_ptr", e.p("pointee", e.v("tyv"))), False),
+                            _lgfn_global_t(e, e.v("tyv"), True),
+                        ),
+                    ),
+                ),
+            ),
+        ),
     )
     x.append(
         e.impl_interface(
@@ -7478,10 +7454,26 @@ def module(e):
     for kind in LGFN_KINDS:
         if kind != "cstr_fn":
             exported.append(kind)
-        y.append(e.let(kind, e.call(e.fld(e.v("k"), "lgfn_t_new"), e.rec(e.p("kind", e.int_of(_lgfn_kind(kind)))))))
+        y.append(e.let(kind + "_o", e.call(e.fld(e.v("k"), "lgfn_t_new"), e.rec(e.p("kind", e.int_of(_lgfn_kind(kind)))))))
     exported.append("gref_t")
     y.append(e.let("gref_t", _lty(e, "lt_gref", e.tup())))
     y.append(e.let("d", e.define()))
+    y.append(e.let("gfn_d", e.define()))
+    for kind in LGFN_KINDS:
+        target_mb.const_fn(
+            e,
+            y,
+            kind + "_b",
+            "llvm." + kind,
+            e.call_m(
+                e.lower(e.v(kind + "_o")),
+                "call",
+                e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("argument", a(e, "argument"))),
+            ),
+            d="gfn_d",
+        )
+        y.append(e.let(kind, e.fld(e.v(kind + "_b"), "func")))
+    y.append(e.finish(e.v("gfn_d")))
     y.append(e.option_type_let())
     y.append(e.let("mod_o", e.def_object(e.v("d"), "llvm module")))
     y.append(e.object_impl(e.v("mod_o"), e.rec(e.p("m", e.fld(e.v("k"), "mod_t")))))

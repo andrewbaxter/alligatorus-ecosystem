@@ -259,10 +259,10 @@ def type_aspect(e, xx_, self_, key):
     return bim(e, e.mb.eval_type(), "aspect", self_, e.rec(p("xx", xx_), p("key", key)))
 
 
-def const_fn(e, out, bind, name, body_):
+def const_fn(e, out, bind, name, body_, d="d"):
     """A const function (`define.const_func`): `body_` runs when the caller compiles, with `arg` = {xx, loc,
     argument} and an eresult(cve) result, so staged code inside it sees the caller's values."""
-    out.append(e.let(bind, e.call_m(e.v("d"), "const_func", e.s(name))))
+    out.append(e.let(bind, e.call_m(e.v(d), "const_func", e.s(name))))
     out.append(
         e.call_m(
             e.v(bind),

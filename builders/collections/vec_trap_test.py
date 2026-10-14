@@ -36,7 +36,7 @@ def _llvm(e):
     for f in ["type", "new"]:
         top.append(e.let("ints_" + f, e.fld(e.v("ints"), f)))
     body = e.seq(
-        e.let("v", e.call(e.lower(e.v("ints_type")), e.call(e.lower(e.v("ints_new")), e.tup()))),
+        e.let("v", e.mb.as_(e.call(e.lower(e.v("ints_new")), e.tup()), e.lower(e.v("ints_type")))),
         e.let("x", e.call(e.fld(e.v("v"), "at"), e.n(0))),
         e.ret(e.v("x")),
     )

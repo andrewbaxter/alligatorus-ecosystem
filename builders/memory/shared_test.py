@@ -99,7 +99,7 @@ def module(e):
         return e.call(e.lower(e.fld(e.v("c"), "malloc")), e.n(n))
 
     def owned(v):
-        return e.call(_lo(e, "sp_type"), v)
+        return e.mb.as_(v, _lo(e, "sp_type"))
 
     body = e.seq(
         e.seq(

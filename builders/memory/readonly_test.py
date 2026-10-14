@@ -41,7 +41,7 @@ def module(e, mode):
     puts = e.lower(e.fld(e.v("c"), "puts"))
 
     def i32(v):
-        return e.call(_lo(e, "t_i32"), e.n(v))
+        return e.mb.as_(e.n(v), _lo(e, "t_i32"))
 
     common = [
         e.let("r", e.call(_lo(e, "ro_i32"), i32(5))),

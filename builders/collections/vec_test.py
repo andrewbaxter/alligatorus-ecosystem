@@ -59,7 +59,7 @@ def module(e):
 
     def counted_loop(label, limit, body):
         return e.seq(
-            e.let("i", e.call(_lo(e, "t_i32"), e.n(0))),
+            e.let("i", e.mb.as_(e.n(0), _lo(e, "t_i32"))),
             e.mb.labeled(
                 label,
                 e.foreach(
@@ -76,21 +76,21 @@ def module(e):
 
     body = e.seq(
         e.seq(
-            e.let("s", e.call(_lo(e, "bytes_type"), e.call(_lo(e, "bytes_new"), e.tup()))),
+            e.let("s", e.mb.as_(e.call(_lo(e, "bytes_new"), e.tup()), _lo(e, "bytes_type"))),
             *[method("s", "push", e.n(b)) for b in MESSAGE + b"\0"],
             e.call(puts, e.fld(e.v("s"), "data")),
-            e.let("v", e.call(_lo(e, "ints_type"), e.call(_lo(e, "ints_new"), e.tup()))),
+            e.let("v", e.mb.as_(e.call(_lo(e, "ints_new"), e.tup()), _lo(e, "ints_type"))),
             counted_loop("fill", COUNT, method("v", "push", e.v("i"))),
             check(e.eq(e.fld(e.v("v"), "len"), e.n(COUNT))),
             check(e.mb.operator_ge(e.fld(e.v("v"), "cap"), e.n(COUNT))),
-            e.let("sum", e.call(_lo(e, "t_i32"), e.n(0))),
+            e.let("sum", e.mb.as_(e.n(0), _lo(e, "t_i32"))),
             counted_loop(
                 "sum", COUNT, e.mb.set(e.v("sum"), e.mb.operator_add(e.v("sum"), method("v", "at", e.v("i"))))
             ),
             check(e.eq(e.v("sum"), e.n(COUNT * (COUNT - 1) // 2))),
             e.let("s", method("v", "slice", e.tup())),
             check(e.eq(e.fld(e.v("s"), "len"), e.n(COUNT))),
-            e.let("sum2", e.call(_lo(e, "t_i32"), e.n(0))),
+            e.let("sum2", e.mb.as_(e.n(0), _lo(e, "t_i32"))),
             counted_loop(
                 "sum2",
                 COUNT,

@@ -327,10 +327,10 @@ def module(e):
             e.let("cw", _call(e, "h_client_width", e.v("canvas"))),
             e.let(
                 "px",
-                e.call(e.lower(e.v("t_i32")), e.mb.operator_mul(e.call(e.lower(e.v("t_f64")), e.v("cw")), e.v("dpr"))),
+                e.mb.as_(e.mb.operator_mul(e.mb.as_(e.v("cw"), e.lower(e.v("t_f64"))), e.v("dpr")), e.lower(e.v("t_i32"))),
             ),
-            _call(e, "h_width", e.v("canvas"), e.call(e.lower(e.v("t_u32")), px)),
-            _call(e, "h_height", e.v("canvas"), e.call(e.lower(e.v("t_u32")), px)),
+            _call(e, "h_width", e.v("canvas"), e.mb.as_(px, e.lower(e.v("t_u32")))),
+            _call(e, "h_height", e.v("canvas"), e.mb.as_(px, e.lower(e.v("t_u32")))),
             _call(e, "h_get_context", e.v("canvas"), webgl2[0], webgl2[1], e.n(0), e.n(0), e.lower(e.v("out"))),
             e.let("gl", out),
             e.mb.set(_cell(e, "cells", 1), e.v("gl")),
@@ -355,7 +355,7 @@ def module(e):
             _call(e, "h_viewport", e.v("gl"), e.n(0), e.n(0), px, px),
             e.mb.set(
                 e.fld(e.lower(e.v("ub")), "resolution"),
-                e.tup(e.call(e.lower(e.v("t_f32")), px), e.call(e.lower(e.v("t_f32")), px)),
+                e.tup(e.mb.as_(px, e.lower(e.v("t_f32"))), e.mb.as_(px, e.lower(e.v("t_f32")))),
             ),
             e.let("cb", e.call(e.lower(e.fld(e.v("webidl"), "callback")), e.tup(frame[0], frame[1]))),
             _call(e, "h_raf", e.v("win"), e.v("cb")),
@@ -368,7 +368,7 @@ def module(e):
         e.seq(
             e.mb.set(
                 e.fld(e.lower(e.v("ub")), "time"),
-                e.call(e.lower(e.v("t_f32")), e.mb.operator_mul(e.v("t"), e.n(0.001))),
+                e.mb.as_(e.mb.operator_mul(e.v("t"), e.n(0.001)), e.lower(e.v("t_f32"))),
             ),
             e.let("gl", _cell(e, "cells", 1)),
             _call(

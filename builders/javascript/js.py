@@ -1175,7 +1175,7 @@ def module(e):
         x,
         "jgfn_t",
         e.cat(e.s("js definition function "), to_str(e, in_(e, "kind"))),
-        rt_dispatch(e, lt(e, "jmod"), e.aspect_dispatch(lv(e, "jgfn_m_id"), asp_id(e, "function"))),
+        rt_dispatch(e, lt(e, "jmod"), e.aspect_dispatch(lv(e, "jgfn_m_id"))),
         can_cast_from_self(e),
         cast_from_self(e),
         no_cast_to(e),
@@ -1190,109 +1190,107 @@ def module(e):
     rt_lift_impl(e, x, "jgfn_t")
     rt_bind_impl(e, x, "jgfn_t", lt(e, "jmod"))
     rt_use_impl(e, x, "jgfn_t")
-    x.append(
-        e.impl_interface(
-            e.v("jgfn_t"),
-            asp_iface(e, "function"),
-            e.p(
-                "call",
-                body(
+    target_mb.method(
+        e,
+        x,
+        "jgfn_t",
+        "call",
+        e.rec(e.p("xx", e.types_expr_context()), e.p("loc", loc_t(e)), e.p("argument", cve_t(e))),
+        e.mb.call(e.mb.types_eresult(), cve_t(e)),
+        body(
+            e,
+            e.if_only(
+                _jgfn_is(e, "new_fn"),
+                ret_m(e, tag_value(e, _jgfn_staged(e, e.s("new")), mk_arg(e, "jnew", e.tup()))),
+            ),
+            e.let("argv", a(e, "argument")),
+            e.if_only(
+                e.not_(cve_has(e, e.v("argv"))),
+                ret_m(e, err_cve(e, loc(e), "js definition argument has no value")),
+            ),
+            e.let("rk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "record"))),
+            e.if_only(
+                e.not_(e.fld(e.v("rk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), "js definition argument must be a record")),
+            ),
+            e.let(
+                "fields",
+                bim(
                     e,
-                    e.if_only(
-                        _jgfn_is(e, "new_fn"),
-                        ret_m(e, tag_value(e, _jgfn_staged(e, e.s("new")), mk_arg(e, "jnew", e.tup()))),
-                    ),
-                    e.let("argv", a(e, "argument")),
-                    e.if_only(
-                        e.not_(cve_has(e, e.v("argv"))),
-                        ret_m(e, err_cve(e, loc(e), "js definition argument has no value")),
-                    ),
-                    e.let("rk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "record"))),
-                    e.if_only(
-                        e.not_(e.fld(e.v("rk"), "is_some")),
-                        ret_m(e, err_cve(e, loc(e), "js definition argument must be a record")),
-                    ),
+                    asp_iface(e, "record"),
+                    "take_fields",
+                    e.fld(e.v("rk"), "value"),
+                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
+                ),
+            ),
+            e.let("namecv", _jgfn_staged(e, graft(e, _jgfn_field(e, "name")))),
+            e.if_only(
+                is_runtime(e, e.v("namecv")),
+                ret_m(e, err_cve(e, loc(e), "js definition name must be constant")),
+            ),
+            e.let("name", _const_str(e, e.v("namecv"))),
+            e.if_only(
+                _jgfn_is(e, "global_fn"), ret_m(e, tag_value(e, e.v("namecv"), mk_arg(e, "jglobal", e.tup())))
+            ),
+            e.let("modcv", _jgfn_field(e, "mod")),
+            e.if_only(
+                _jgfn_is(e, "var_fn"),
+                e.seq(
                     e.let(
-                        "fields",
-                        bim(
-                            e,
-                            asp_iface(e, "record"),
-                            "take_fields",
-                            e.fld(e.v("rk"), "value"),
-                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
-                        ),
-                    ),
-                    e.let("namecv", _jgfn_staged(e, graft(e, _jgfn_field(e, "name")))),
-                    e.if_only(
-                        is_runtime(e, e.v("namecv")),
-                        ret_m(e, err_cve(e, loc(e), "js definition name must be constant")),
-                    ),
-                    e.let("name", _const_str(e, e.v("namecv"))),
-                    e.if_only(
-                        _jgfn_is(e, "global_fn"), ret_m(e, tag_value(e, e.v("namecv"), mk_arg(e, "jglobal", e.tup())))
-                    ),
-                    e.let("modcv", _jgfn_field(e, "mod")),
-                    e.if_only(
-                        _jgfn_is(e, "var_fn"),
-                        e.seq(
-                            e.let(
-                                "varcv",
-                                _jgfn_staged(
-                                    e,
-                                    e.call_m(
-                                        e.call_m(graft(e, e.v("modcv")), "m", e.tup()), "declare", e.lower(e.v("name"))
-                                    ),
-                                ),
-                            ),
-                            ret_m(e, tag_value(e, e.v("varcv"), mk_arg(e, "jglobal", e.tup()))),
-                        ),
-                    ),
-                    e.let("pcv", _jgfn_field(e, "params")),
-                    e.let("ptk", lookup(e, xx(e), cve_type(e, e.v("pcv")), asp_iface(e, "tuple"))),
-                    e.if_only(
-                        e.not_(e.fld(e.v("ptk"), "is_some")),
-                        ret_m(e, err_cve(e, loc(e), "js function params must be a tuple of names")),
-                    ),
-                    e.let("names", e.list_new(str_(e))),
-                    e.foreach(
-                        bim(
-                            e,
-                            asp_iface(e, "tuple"),
-                            "take_elements",
-                            e.fld(e.v("ptk"), "value"),
-                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("pcv")))),
-                        ),
-                        "er",
-                        e.seq(
-                            e.let("ncv", _jgfn_staged(e, graft(e, unwrap_cve_m(e, e.v("er"))))),
-                            e.if_only(
-                                is_runtime(e, e.v("ncv")),
-                                ret_m(e, err_cve(e, loc(e), "js function parameter names must be constant")),
-                            ),
-                            push(e, e.v("names"), _const_str(e, e.v("ncv"))),
-                        ),
-                    ),
-                    e.let("bodycv", _jgfn_field(e, "body")),
-                    e.let(
-                        "refcv",
+                        "varcv",
                         _jgfn_staged(
                             e,
                             e.call_m(
-                                e.call_m(graft(e, e.v("modcv")), "m", e.tup()),
-                                "func",
-                                e.rec(
-                                    e.p("name", e.lower(e.v("name"))),
-                                    e.p("params", e.lower(e.v("names"))),
-                                    e.p("body", graft(e, e.v("bodycv"))),
-                                ),
+                                e.call_m(graft(e, e.v("modcv")), "m", e.tup()), "declare", e.lower(e.v("name"))
                             ),
                         ),
                     ),
-                    e.ret(tag_value(e, e.v("refcv"), mk_arg(e, "jglobal", e.tup()))),
+                    ret_m(e, tag_value(e, e.v("varcv"), mk_arg(e, "jglobal", e.tup()))),
                 ),
             ),
-            e.p("exception_type", e.option_type_lowered_none()),
-        )
+            e.let("pcv", _jgfn_field(e, "params")),
+            e.let("ptk", lookup(e, xx(e), cve_type(e, e.v("pcv")), asp_iface(e, "tuple"))),
+            e.if_only(
+                e.not_(e.fld(e.v("ptk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), "js function params must be a tuple of names")),
+            ),
+            e.let("names", e.list_new(str_(e))),
+            e.foreach(
+                bim(
+                    e,
+                    asp_iface(e, "tuple"),
+                    "take_elements",
+                    e.fld(e.v("ptk"), "value"),
+                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("pcv")))),
+                ),
+                "er",
+                e.seq(
+                    e.let("ncv", _jgfn_staged(e, graft(e, unwrap_cve_m(e, e.v("er"))))),
+                    e.if_only(
+                        is_runtime(e, e.v("ncv")),
+                        ret_m(e, err_cve(e, loc(e), "js function parameter names must be constant")),
+                    ),
+                    push(e, e.v("names"), _const_str(e, e.v("ncv"))),
+                ),
+            ),
+            e.let("bodycv", _jgfn_field(e, "body")),
+            e.let(
+                "refcv",
+                _jgfn_staged(
+                    e,
+                    e.call_m(
+                        e.call_m(graft(e, e.v("modcv")), "m", e.tup()),
+                        "func",
+                        e.rec(
+                            e.p("name", e.lower(e.v("name"))),
+                            e.p("params", e.lower(e.v("names"))),
+                            e.p("body", graft(e, e.v("bodycv"))),
+                        ),
+                    ),
+                ),
+            ),
+            e.ret(tag_value(e, e.v("refcv"), mk_arg(e, "jglobal", e.tup()))),
+        ),
     )
 
     x.append(e.let("js_b", e.def_func(e.v("d"), "js")))
@@ -1357,18 +1355,29 @@ def module(e):
     y.append(e.let("k", e.lower(e.mb.seq(x))))
     exported = []
     exported.append("any")
-    y.append(e.let("any", e.call(e.fld(e.v("k"), "jany_new"), e.tup())))
+    y.append(e.let("any", e.mb.as_(e.call(e.fld(e.v("k"), "jany_new"), e.tup()), ty(e))))
     exported.append("global")
-    y.append(e.let("global", e.call(e.fld(e.v("k"), "jglobal_new"), e.tup())))
+    y.append(e.let("global", e.mb.as_(e.call(e.fld(e.v("k"), "jglobal_new"), e.tup()), ty(e))))
     for kind in JGFN_KINDS:
         exported.append(kind)
-        y.append(
-            e.let(
-                kind,
-                e.call(e.fld(e.v("k"), "jgfn_t_new"), e.rec(e.p("kind", e.int_of(_jgfn_kind(kind))))),
-            )
-        )
+        y.append(e.let(kind + "_o", e.call(e.fld(e.v("k"), "jgfn_t_new"), e.rec(e.p("kind", e.int_of(_jgfn_kind(kind)))))))
     y.append(e.let("d", e.define()))
+    y.append(e.let("gfn_d", e.define()))
+    for kind in JGFN_KINDS:
+        target_mb.const_fn(
+            e,
+            y,
+            kind + "_b",
+            "js." + kind,
+            e.call_m(
+                e.lower(e.v(kind + "_o")),
+                "call",
+                e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("argument", a(e, "argument"))),
+            ),
+            d="gfn_d",
+        )
+        y.append(e.let(kind, e.fld(e.v(kind + "_b"), "func")))
+    y.append(e.finish(e.v("gfn_d")))
     y.append(e.option_type_let())
     y.append(e.let("mod_o", e.def_object(e.v("d"), "js module")))
     y.append(e.object_impl(e.v("mod_o"), e.rec(e.p("m", e.fld(e.v("k"), "mod_t")))))

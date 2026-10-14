@@ -268,7 +268,7 @@ def _lset(e, x):
     for f, ft in [("name", str_(e)), ("count", int_t(e)), ("live", e.map_type(str_(e), _live_t(e)))]:
         x.append(e.method_impl(e.v("lset"), f, e.tup(), e.option_type_some(ft), e.stage(in_(e, f))))
     method(
-        e, x, "lset", "own", ty(e), ty(e), mk(e, "lown", p("set", outer(e)), p("under", e.v("arg")))
+        e, x, "lset", "own", ty(e), ty(e), e.mb.as_(mk(e, "lown", p("set", outer(e)), p("under", e.v("arg"))), ty(e))
     )
     method(
         e,
@@ -295,7 +295,7 @@ def _lset(e, x):
                 ),
             ),
             e.ret(
-                mk(e, "lat", p("set", outer(e)), p("level", a(e, "index")), p("under", a(e, "under")))
+                e.mb.as_(mk(e, "lat", p("set", outer(e)), p("level", a(e, "index")), p("under", a(e, "under"))), ty(e))
             ),
         ),
     )

@@ -21,13 +21,13 @@ def _lo(e, name):
 
 def _check(e, hash_expr):
     """1 when the hash misses the vector, else 0 (an i32)."""
-    return e.if_else(e.eq(hash_expr, e.n(EXPECTED)), e.call(_lo(e, "t_i32"), e.n(0)), e.call(_lo(e, "t_i32"), e.n(1)))
+    return e.if_else(e.eq(hash_expr, e.n(EXPECTED)), e.mb.as_(e.n(0), _lo(e, "t_i32")), e.mb.as_(e.n(1), _lo(e, "t_i32")))
 
 
 def _i64(e, hi, lo):
     """A 64-bit constant from two 32-bit halves (host numbers are doubles)."""
     return e.mb.operator_or(
-        e.mb.operator_shl(e.call(_lo(e, "t_i64"), e.n(hi)), e.n(32)), e.call(_lo(e, "t_i64"), e.n(lo))
+        e.mb.operator_shl(e.mb.as_(e.n(hi), _lo(e, "t_i64")), e.n(32)), e.mb.as_(e.n(lo), _lo(e, "t_i64"))
     )
 
 
@@ -119,7 +119,7 @@ def module(e, kind):
             ),
         )
     )
-    body = e.seq(*_seed_and_hash(e, hash_fn), e.call(_lo(e, "proc_exit"), e.call(_lo(e, "t_u32"), e.v("status"))))
+    body = e.seq(*_seed_and_hash(e, hash_fn), e.call(_lo(e, "proc_exit"), e.mb.as_(e.v("status"), _lo(e, "t_u32"))))
     top.append(
         e.let(
             "start",

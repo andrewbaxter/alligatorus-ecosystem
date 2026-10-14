@@ -88,27 +88,27 @@ def module(e, mode):
         # a (declared first, dropped last) is the longer-lived level 0; b is level 1.
         flag = e.v("flag")
         body = e.seq(
-            e.let("flag", e.call(_lo(e, "t_i32"), e.n(0))),
+            e.let("flag", e.mb.as_(e.n(0), _lo(e, "t_i32"))),
             *owners(),
             e.let("r0", e.mb.as_(e.v("a"), _lo(e, "L0"))),
             e.let("r1", e.mb.as_(e.v("b"), _lo(e, "L1"))),
             # an early exit: its cleanup chain drops forked bindings speculatively, which must not disturb the check
-            e.if_only(e.not_(e.eq(flag, e.n(0))), e.ret(e.call(_lo(e, "t_i32"), e.n(2)))),
+            e.if_only(e.not_(e.eq(flag, e.n(0))), e.ret(e.mb.as_(e.n(2), _lo(e, "t_i32")))),
             # a branch binding another reference to b, dropped at the branch's end
             e.if_else(
                 e.eq(flag, e.n(0)),
                 e.seq(
                     e.let("r1b", e.mb.as_(e.v("b"), _lo(e, "L1"))),
                     e.let("p1b", e.mb.as_(e.v("r1b"), _lo(e, "t_pv"))),
-                    e.mb.set(flag, e.call(_lo(e, "t_i32"), e.n(0))),
+                    e.mb.set(flag, e.mb.as_(e.n(0), _lo(e, "t_i32"))),
                 ),
-                e.seq(e.mb.set(flag, e.call(_lo(e, "t_i32"), e.n(3)))),
+                e.seq(e.mb.set(flag, e.mb.as_(e.n(3), _lo(e, "t_i32")))),
             ),
             e.call(_lo(e, "use_ref"), e.mb.as_(e.v("b"), _lo(e, "L1"))),
             # references act as their underlying type
             e.call(e.lower(e.fld(e.v("c"), "free")), e.mb.as_(e.v("r1"), _lo(e, "t_pv"))),
             e.call(e.lower(e.fld(e.v("c"), "puts")), _lo(e, "s_ok")),
-            e.ret(e.call(_lo(e, "t_i32"), e.n(0))),
+            e.ret(e.mb.as_(e.n(0), _lo(e, "t_i32"))),
         )
         top.append(
             e.let(

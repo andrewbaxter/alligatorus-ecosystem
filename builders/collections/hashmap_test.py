@@ -80,7 +80,7 @@ def module(e):
 
     def counted_loop(label, limit, body):
         return e.seq(
-            e.let("i", e.call(_lo(e, "t_i32"), e.n(0))),
+            e.let("i", e.mb.as_(e.n(0), _lo(e, "t_i32"))),
             e.mb.labeled(
                 label,
                 e.foreach(
@@ -100,7 +100,7 @@ def module(e):
 
     body = e.seq(
         e.seq(
-            e.let("mp", e.call(_lo(e, "imap_type"), e.call(_lo(e, "imap_new"), e.tup()))),
+            e.let("mp", e.mb.as_(e.call(_lo(e, "imap_new"), e.tup()), _lo(e, "imap_type"))),
             counted_loop("fill", COUNT, method("mp", "put", e.v("i"), e.mb.operator_mul(e.v("i"), e.n(3)))),
             check(e.eq(e.fld(e.v("mp"), "len"), e.n(COUNT))),
             check(truthy(method("mp", "has", e.n(150)))),
@@ -150,7 +150,7 @@ def module(e):
             method("mp", "clear", e.tup()),
             check(e.eq(e.fld(e.v("mp"), "len"), e.n(0))),
             check(e.not_(truthy(method("mp", "has", e.n(7))))),
-            e.let("st", e.call(_lo(e, "iset_type"), e.call(_lo(e, "iset_new"), e.tup()))),
+            e.let("st", e.mb.as_(e.call(_lo(e, "iset_new"), e.tup()), _lo(e, "iset_type"))),
             counted_loop("fills", 50, method("st", "add", e.v("i"))),
             check(e.eq(e.fld(e.v("st"), "len"), e.n(50))),
             check(truthy(method("st", "has", e.n(25)))),

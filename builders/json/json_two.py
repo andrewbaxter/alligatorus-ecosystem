@@ -103,10 +103,10 @@ def _body(e, docs, write_byte, t_i32):
     parts = []
     for i, (doc_ptr, doc_len) in enumerate(docs):
         parts.append(e.let(f"r{i}", e.call(_lo(e, "sr_new"), e.tup(doc_ptr, e.n(doc_len)))))
-        parts.append(e.let(f"p{i}", e.call(_lo(e, "jp_type"), e.call(_lo(e, "jp_new"), e.v(f"r{i}")))))
+        parts.append(e.let(f"p{i}", e.mb.as_(e.call(_lo(e, "jp_new"), e.v(f"r{i}")), _lo(e, "jp_type"))))
         parts.append(e.let(f"v{i}p", e.call(_lo(e, "bytes_new"), e.tup())))
-        parts.append(e.let(f"v{i}", e.call(_lo(e, "bytes_type"), e.v(f"v{i}p"))))
-        parts.append(e.let(f"w{i}", e.call(_lo(e, "jw_type"), e.call(_lo(e, "jw_new"), e.v(f"v{i}p")))))
+        parts.append(e.let(f"v{i}", e.mb.as_(e.v(f"v{i}p"), _lo(e, "bytes_type"))))
+        parts.append(e.let(f"w{i}", e.mb.as_(e.call(_lo(e, "jw_new"), e.v(f"v{i}p")), _lo(e, "jw_type"))))
         parts.append(e.let(f"done{i}", e.mb.as_(e.n(0), _lo(e, t_i32))))
     parts.append(
         e.mb.labeled(
@@ -225,9 +225,9 @@ def _wasm(e):
     def write_byte(b):
         """One byte to stdout through fd_write (unbuffered: this app prints little)."""
         return e.seq(
-            e.mb.set(e.mb.field(block("ch", "t_pu8"), e.n(0)), e.call(_lo(e, "t_u8"), b)),
+            e.mb.set(e.mb.field(block("ch", "t_pu8"), e.n(0)), e.mb.as_(b, _lo(e, "t_u8"))),
             e.mb.set(e.mb.field(block("iov", "t_pu32"), e.n(0)), e.mb.as_(block("ch", "t_pv"), _lo(e, "t_u32"))),
-            e.mb.set(e.mb.field(block("iov", "t_pu32"), e.n(1)), e.call(_lo(e, "t_u32"), e.n(1))),
+            e.mb.set(e.mb.field(block("iov", "t_pu32"), e.n(1)), e.mb.as_(e.n(1), _lo(e, "t_u32"))),
             e.call(_lo(e, "fd_write"), e.tup(e.n(1), block("iov", "t_pv"), e.n(1), block("nwritten", "t_pv"))),
         )
 

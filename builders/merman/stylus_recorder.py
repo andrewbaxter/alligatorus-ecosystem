@@ -77,11 +77,11 @@ def _f64p(e, addr):
 
 
 def _i32(e, v):
-    return e.call(e.lower(e.v("t_i32")), v)
+    return e.mb.as_(v, e.lower(e.v("t_i32")))
 
 
 def _f64(e, v):
-    return e.call(e.lower(e.v("t_f64")), v)
+    return e.mb.as_(v, e.lower(e.v("t_f64")))
 
 
 def _row_field(e, buf, row, field):
