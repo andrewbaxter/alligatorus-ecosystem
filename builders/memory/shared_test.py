@@ -3,6 +3,7 @@ per block whose count reached zero (through a constant-string dependency), and e
 block shared four ways (one clone dropped early), a block owned once, a block moved."""
 
 from ..root_mode import APP, root_mode_finish
+from ..target_mb import fn_of
 
 EXPECTED = "end\ndestroy\ndestroy\ndestroy\n"
 EXPECTED_STATUS = 3
@@ -48,7 +49,7 @@ def module(e):
     )
 
     def cell():
-        return e.mb.field(e.call(_lo(e, "count"), e.tup()), e.n(0))
+        return e.mb.field(e.call(fn_of(e, _lo(e, "count")), e.tup()), e.n(0))
 
     setup.append(
         e.let(
@@ -63,7 +64,9 @@ def module(e):
                         "body",
                         e.stage(
                             e.seq(
-                                e.call(e.lower(e.fld(e.v("c"), "puts")), e.call(_lo(e, "s_destroy"), e.tup())),
+                                e.call(
+                                    e.lower(e.fld(e.v("c"), "puts")), e.call(fn_of(e, _lo(e, "s_destroy")), e.tup())
+                                ),
                                 e.mb.set(cell(), e.mb.operator_add(cell(), e.n(1))),
                             )
                         ),

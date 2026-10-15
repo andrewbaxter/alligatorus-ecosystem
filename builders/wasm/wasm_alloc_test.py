@@ -110,7 +110,7 @@ def module(e):
         e.let("s2", malloc(8)),
         check(e.mb.operator_lt(i32(e.v("s2")), i32(e.v("z")))),
         e.call(lo("free"), e.mb.as_(e.n(0), lo("t_pv"))),
-        e.call(lo("proc_exit"), e.call(lo("t_u32"), e.v("fails"))),
+        e.call(lo("proc_exit"), e.mb.as_(e.v("fails"), lo("t_u32"))),
     )
     top.append(
         e.let(

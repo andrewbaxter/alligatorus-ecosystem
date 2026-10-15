@@ -7,6 +7,7 @@ of the document into the writer. A malformed document prints `json error <code>`
 """
 
 from ..root_mode import APP, root_mode_finish
+from ..target_mb import fn_of
 from ..wasm.wat import bind_types
 
 WASM = "wasm"
@@ -53,9 +54,7 @@ def _dep(e, lib, name, params, fn_t, body_):
 def _json_lets(e, top, lib_file, read, write):
     """The parser over `read` and the writer over `write`, as top-level values the body lowers."""
     top.append(e.let("json", e.import_local("json", lib_file)))
-    top.append(
-        e.let("jp", e.call(e.fld(e.v("json"), "parser"), e.rec(e.p("name", e.s(read)), e.p("read", e.v(read)))))
-    )
+    top.append(e.let("jp", e.call(e.fld(e.v("json"), "parser"), e.rec(e.p("name", e.s(read)), e.p("read", e.v(read))))))
     for f in ["type", "new"]:
         top.append(e.let("jp_" + f, e.fld(e.v("jp"), f)))
     top.append(
@@ -128,7 +127,14 @@ def _llvm(e, mode):
     setup.append(e.let("read_t", e.fld(e.v("json"), "read_t")))
     setup.append(e.let("write_t", e.fld(e.v("json"), "write_t")))
     setup.append(
-        _dep(e, "llvm", "stdin_read", ["ctx"], "read_t", e.seq(e.ret(e.call(e.lower(e.fld(e.v("c"), "getchar")), e.tup()))))
+        _dep(
+            e,
+            "llvm",
+            "stdin_read",
+            ["ctx"],
+            "read_t",
+            e.seq(e.ret(e.call(e.lower(e.fld(e.v("c"), "getchar")), e.tup()))),
+        )
     )
     setup.append(
         _dep(
@@ -153,7 +159,9 @@ def _llvm(e, mode):
         return e.seq(e.call(e.lower(e.fld(e.v("c"), "putchar")), b), e.seq())
 
     def on_error(code):
-        return e.seq(_error_report(e, _lo(e, "null"), write_byte, code), e.call(e.lower(e.fld(e.v("c"), "exit")), e.n(1)))
+        return e.seq(
+            _error_report(e, _lo(e, "null"), write_byte, code), e.call(e.lower(e.fld(e.v("c"), "exit")), e.n(1))
+        )
 
     body = e.seq(_echo(e, _lo(e, "null"), on_error, write_byte), e.ret(e.n(0)))
     top.append(
@@ -215,13 +223,16 @@ def _wasm(e):
         setup.append(
             e.let(
                 name,
-                e.call(e.fld(e.v("wasm"), "alloc_dep"), e.rec(e.p("name", e.s("stdio_" + name)), e.p("size", e.int_of(size)))),
+                e.call(
+                    e.fld(e.v("wasm"), "alloc_dep"),
+                    e.rec(e.p("name", e.s("stdio_" + name)), e.p("size", e.int_of(size))),
+                ),
             )
         )
 
     def block(name, ptr_type):
         """A static block as a typed pointer (in a body)."""
-        return e.mb.as_(e.call(_lo(e, name), e.tup()), _lo(e, ptr_type))
+        return e.mb.as_(e.call(fn_of(e, _lo(e, name)), e.tup()), _lo(e, ptr_type))
 
     def cell(index):
         return e.mb.field(block("cells", "t_pi32"), e.n(index))
@@ -230,7 +241,7 @@ def _wasm(e):
         return e.mb.field(block(buf, "t_pu8"), index)
 
     def conv(type_name, v):
-        return e.call(_lo(e, type_name), v)
+        return e.mb.as_(v, _lo(e, type_name))
 
     def addr(name):
         """A static block's address as u32 (for an iovec)."""
@@ -285,14 +296,25 @@ def _wasm(e):
     )
     # stdout_write(ctx, b): buffers a byte of stdout.
     write_body = e.seq(
-        e.if_only(e.mb.operator_ge(cell(CELL_OUT_LEN), e.n(BUF)), e.call(_lo(e, "stdout_flush"), e.tup())),
+        e.if_only(e.mb.operator_ge(cell(CELL_OUT_LEN), e.n(BUF)), e.call(fn_of(e, _lo(e, "stdout_flush")), e.tup())),
         e.mb.set(byte_at("outbuf", cell(CELL_OUT_LEN)), conv("t_u8", e.v("b"))),
         e.mb.set(cell(CELL_OUT_LEN), e.mb.operator_add(cell(CELL_OUT_LEN), e.n(1))),
     )
     setup.append(_dep(e, "wasm", "stdin_read", ["ctx"], "read_t", read_body))
     setup.append(_dep(e, "wasm", "stdout_flush", [], "flush_fn_t", flush_body))
     setup.append(_dep(e, "wasm", "stdout_write", ["ctx", "b"], "write_t", write_body))
-    exported = ["m", "t_i32", "t_u32", "t_void", "t_pv", "start_fn_t", "proc_exit", "stdin_read", "stdout_flush", "stdout_write"]
+    exported = [
+        "m",
+        "t_i32",
+        "t_u32",
+        "t_void",
+        "t_pv",
+        "start_fn_t",
+        "proc_exit",
+        "stdin_read",
+        "stdout_flush",
+        "stdout_write",
+    ]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
@@ -306,16 +328,16 @@ def _wasm(e):
         return e.mb.as_(e.n(0), _lo(e, "t_pv"))
 
     def write_byte(b):
-        return e.call(_lo(e, "stdout_write"), e.tup(null(), b))
+        return e.call(fn_of(e, _lo(e, "stdout_write")), e.tup(null(), b))
 
     def on_error(code):
         return e.seq(
             _error_report(e, null(), write_byte, code),
-            e.call(_lo(e, "stdout_flush"), e.tup()),
+            e.call(fn_of(e, _lo(e, "stdout_flush")), e.tup()),
             e.call(_lo(e, "proc_exit"), conv("t_u32", e.n(1))),
         )
 
-    body = e.seq(_echo(e, null(), on_error, write_byte), e.call(_lo(e, "stdout_flush"), e.tup()))
+    body = e.seq(_echo(e, null(), on_error, write_byte), e.call(fn_of(e, _lo(e, "stdout_flush")), e.tup()))
     top.append(
         e.let(
             "start",

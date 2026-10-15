@@ -17,6 +17,7 @@ state block on first use; nothing is passed around.
 """
 
 from ..eco_mb import p
+from ..target_mb import fn_of
 
 FILE = "wasm-alloc.atz"
 
@@ -58,11 +59,13 @@ def _cell(e, addr, index):
 
 def _state(e, index):
     """A cell of the state block: 0 top, 1 top size, then the bin heads."""
-    return e.mb.field(_i32p(e, e.call(e.lower(e.v("state")), e.tup())), e.n(index))
+    return e.mb.field(_i32p(e, e.call(fn_of(e, e.lower(e.v("state"))), e.tup())), e.n(index))
 
 
 def _bin(e, idx):
-    return e.mb.field(_i32p(e, e.call(e.lower(e.v("state")), e.tup())), e.mb.operator_add(idx, e.n(STATE_BINS)))
+    return e.mb.field(
+        _i32p(e, e.call(fn_of(e, e.lower(e.v("state"))), e.tup())), e.mb.operator_add(idx, e.n(STATE_BINS))
+    )
 
 
 def _hook(e, name):
@@ -71,7 +74,7 @@ def _hook(e, name):
 
 
 def _dep(e, name, arg):
-    return e.call(e.lower(e.v(name)), arg)
+    return e.call(fn_of(e, e.lower(e.v(name))), arg)
 
 
 # Chunk fields (the chunk address is an i32).
@@ -348,5 +351,6 @@ def module(e):
     x.append(e.ret(e.rec(p("malloc", e.v("malloc")), p("free", e.v("free")))))
 
     top = []
-    top.append(e.ret(e.lower(e.mb.seq(x))))
+    top.append(e.let("k", e.lower(e.mb.seq(x))))
+    top.append(e.ret(e.rec(*[p(name, fn_of(e, e.fld(e.v("k"), name))) for name in ["malloc", "free"]])))
     return top

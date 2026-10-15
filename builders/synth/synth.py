@@ -4,6 +4,7 @@ import math
 
 from ..pipewire import pipewire
 from ..root_mode import root_mode_finish
+from ..target_mb import fn_of
 
 TWO_PI = 2.0 * math.pi
 AMP = 0.2
@@ -56,7 +57,7 @@ def _call_fn_tup(e, fn, *args):
 
 
 def _conv(e, type_, value):
-    return e.call(e.lower(_ty(e, _refs_top(e), type_)), value)
+    return e.mb.as_(value, e.lower(_ty(e, _refs_top(e), type_)))
 
 
 def _set(e, base, value):
@@ -274,7 +275,7 @@ def module(e, mode):
                                 e.if_else(e.mb.operator_gt(e.v("n0"), e.v("maxframes")), e.v("maxframes"), e.v("n0")),
                             ),
                             e.foreach(
-                                _call_fn(e, "range_u32", e.v("n")),
+                                e.call(fn_of(e, _lo(e, "range_u32")), e.v("n")),
                                 "i",
                                 e.seq(
                                     e.let(
@@ -420,12 +421,11 @@ def module(e, mode):
             # The PipeWire objects live in this block: at its end the streams are destroyed, then the loop, before
             # pw_deinit. The streams take ownership of their properties.
             e.seq(
-                e.let("mloop", e.call(_lo(e, "main_loop"), _call_fn(e, "pw_main_loop_new", _lo(e, "nullp")))),
+                e.let("mloop", e.mb.as_(_call_fn(e, "pw_main_loop_new", _lo(e, "nullp")), _lo(e, "main_loop"))),
                 e.let("l", _call_fn(e, "pw_main_loop_get_loop", e.v("mloop"))),
                 e.let(
                     "aprops",
-                    e.call(
-                        _lo(e, "properties"),
+                    e.mb.as_(
                         _call_fn_tup(
                             e,
                             "pw_properties_new",
@@ -437,12 +437,12 @@ def module(e, mode):
                             _lo(e, "s_music"),
                             _lo(e, "nullp"),
                         ),
+                        _lo(e, "properties"),
                     ),
                 ),
                 e.let(
                     "astream",
-                    e.call(
-                        _lo(e, "stream"),
+                    e.mb.as_(
                         _call_fn_tup(
                             e,
                             "pw_stream_new_simple",
@@ -452,13 +452,13 @@ def module(e, mode):
                             _lo(e, "g_audio_events"),
                             _lo(e, "nullp"),
                         ),
+                        _lo(e, "stream"),
                     ),
                 ),
                 _set(e, _lo(e, "g_audio_stream"), e.v("astream")),
                 e.let(
                     "mprops",
-                    e.call(
-                        _lo(e, "properties"),
+                    e.mb.as_(
                         _call_fn_tup(
                             e,
                             "pw_properties_new",
@@ -470,12 +470,12 @@ def module(e, mode):
                             _lo(e, "s_dsp"),
                             _lo(e, "nullp"),
                         ),
+                        _lo(e, "properties"),
                     ),
                 ),
                 e.let(
                     "mstream",
-                    e.call(
-                        _lo(e, "stream"),
+                    e.mb.as_(
                         _call_fn_tup(
                             e,
                             "pw_stream_new_simple",
@@ -485,6 +485,7 @@ def module(e, mode):
                             _lo(e, "g_midi_events"),
                             _lo(e, "nullp"),
                         ),
+                        _lo(e, "stream"),
                     ),
                 ),
                 _set(e, _lo(e, "g_midi_stream"), e.v("mstream")),

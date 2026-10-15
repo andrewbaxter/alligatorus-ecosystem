@@ -612,6 +612,96 @@ def rt_dispatch(e, under_type, inner):
     return e.mb.if_of(branches, inner)
 
 
+def unit_t(e):
+    """The language's unit type, `()`."""
+    return e.call(e.mb.builtin("types", "tuple"), e.list_new(e.mb.eval_type()))
+
+
+def fn_of(e, type_):
+    """The function value of the callable type `type_` (a constant where this is evaluated): the unit cast to it."""
+    return e.mb.as_(e.tup(), type_)
+
+
+def can_cast_from_unit(e):
+    """`can_cast_from` of a callable type: only the unit casts to it."""
+    return body(e, e.ret(is_equal(e, xx(e), unit_t(e), src_type(e))))
+
+
+def cast_from_empty(e):
+    """`cast_from` of a callable type: the unit becomes the type's empty value, its function."""
+    return body(
+        e,
+        e.ret(ok_cve(e, cv_of(e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), outer(e))))),
+    )
+
+
+def def_empty_binding(e, x, obj, desc):
+    """A binding of an empty value: using it yields the empty value of the stored type, dropping it is nothing."""
+    def_obj(e, x, obj, desc, e.rec(p("ty", ty(e))))
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            e.mb.eval_binding(),
+            p("use", cv_of(e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), in_(e, "ty")))),
+            p("drop", e.eresult_ok(e.mb.types_code(), code_none(e, loc(e)))),
+            p("fork", outer(e)),
+            p("merge", e.eresult_ok(e.mb.eval_binding(), outer(e))),
+        )
+    )
+
+
+def bind_empty(e, binding_obj):
+    """Aspect `bind` of a type whose values are empty: the binding holds the type."""
+    return e.eresult_ok(
+        e.mb.types_bind_result(),
+        e.call(
+            e.mb.eval_bind_result(),
+            e.rec(p("code", code_none(e, loc(e))), p("binding", mk(e, binding_obj, p("ty", outer(e))))),
+        ),
+    )
+
+
+def dep_type(e, x, obj, desc, fields, h_fn, with_argument, binding_obj):
+    """A dependency as a callable type: its function value (the unit cast to it) calls the host function `h_fn` with
+    the stored `fields` (name first), and the call's argument when `with_argument`."""
+    def_iface(e, x, obj + "_m", p("name", str_(e)))
+    def_obj(e, x, obj, desc, e.rec(*[p(f, ft) for f, ft in fields]))
+    x.append(e.impl_interface(e.v(obj), t(e, obj + "_m"), p("name", in_(e, "name"))))
+    self_type(
+        e,
+        x,
+        obj,
+        e.cat(e.s(desc + " "), in_(e, "name")),
+        e.aspect_dispatch(asp_id(e, "function"), asp_id(e, "bind")),
+        can_cast_from_unit(e),
+        cast_from_empty(e),
+        no_cast_to(e),
+        cast_to_panic(e),
+        body(
+            e,
+            e.ret(
+                and_b(
+                    e,
+                    has(e, xx(e), a(e, "other"), obj + "_m"),
+                    e.eq(in_(e, "name"), acc(e, xx(e), a(e, "other"), obj + "_m", "name")),
+                )
+            ),
+        ),
+    )
+    h_args = [p("xx", xx(e)), p("loc", loc(e))] + [p(f, in_(e, f)) for f, _ in fields]
+    if with_argument:
+        h_args.append(p("argument", a(e, "argument")))
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            asp_iface(e, "function"),
+            p("call", body(e, e.ret(try_er(e, hf_rec(e, h_fn, *h_args), cve_t(e))))),
+            p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+    x.append(e.impl_interface(e.v(obj), e.mb.eval_aspect_bind(), p("bind", bind_empty(e, binding_obj))))
+
+
 def can_cast_from_self(e):
     return body(e, e.ret(is_equal(e, xx(e), outer(e), src_type(e))))
 

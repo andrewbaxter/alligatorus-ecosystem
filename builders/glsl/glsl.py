@@ -696,35 +696,42 @@ def _set_impl(e, x, obj):
     )
 
 
-def _construct_impl(e, x, obj):
-    x.append(
-        e.impl_interface(
-            e.v(obj),
-            asp_iface(e, "function"),
-            e.p(
-                "call",
-                body(
-                    e,
-                    e.ret(
-                        try_er(
-                            e,
-                            hf_rec(
-                                e,
-                                "h_construct",
-                                e.p("xx", xx(e)),
-                                e.p("loc", loc(e)),
-                                e.p("mod", _xmod(e)),
-                                e.p("ty", outer(e)),
-                                e.p("argument", a(e, "argument")),
-                            ),
-                            cve_t(e),
-                        )
-                    ),
-                ),
-            ),
-            e.p("exception_type", e.option_type_lowered_none()),
-        )
+def _construct(e, cv):
+    """Constructs a value of the type (`outer`) from `cv`: a glsl value, a constant or a tuple of them."""
+    return try_er(
+        e,
+        hf_rec(
+            e,
+            "h_construct",
+            e.p("xx", xx(e)),
+            e.p("loc", loc(e)),
+            e.p("mod", _xmod(e)),
+            e.p("ty", outer(e)),
+            e.p("argument", cv),
+        ),
+        cve_t(e),
     )
+
+
+def _constructible(e, src):
+    """Whether `src` values construct values of this type: glsl values, constants and tuples."""
+    return or_b(
+        e,
+        is_const(e, xx(e), src),
+        or_b(e, has(e, xx(e), src, "gtype"), e.fld(lookup(e, xx(e), src, asp_iface(e, "tuple")), "is_some")),
+    )
+
+
+def _construct_casts(e):
+    """can_cast_from / cast_from of a vector or matrix type: a cast constructs the value."""
+    return [
+        body(e, e.ret(or_b(e, is_equal(e, xx(e), outer(e), src_type(e)), _constructible(e, src_type(e))))),
+        body(
+            e,
+            e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.ret(_construct(e, a(e, "cv"))),
+        ),
+    ]
 
 
 def _vec_ir(e, kind, n):
@@ -765,7 +772,6 @@ def _def_types(e, x):
     ids.append(op_id(e, "bit_not"))
     ids.append(asp_id(e, "bind"))
     ids.append(asp_id(e, "set"))
-    ids.append(asp_id(e, "function"))
     self_type(
         e,
         x,
@@ -778,10 +784,14 @@ def _def_types(e, x):
                 or_b(
                     e,
                     is_equal(e, xx(e), outer(e), src_type(e)),
-                    e.if_else(
-                        e.eq(in_(e, "kind"), e.s("bool")),
-                        has_b(e, xx(e), src_type(e), e.eval_builtin("aspect_bool_const")),
-                        is_const(e, xx(e), src_type(e)),
+                    or_b(
+                        e,
+                        e.if_else(
+                            e.eq(in_(e, "kind"), e.s("bool")),
+                            has_b(e, xx(e), src_type(e), e.eval_builtin("aspect_bool_const")),
+                            is_const(e, xx(e), src_type(e)),
+                        ),
+                        _constructible(e, src_type(e)),
                     ),
                 )
             ),
@@ -825,22 +835,7 @@ def _def_types(e, x):
                         ),
                     ),
                 ),
-                e.if_only(
-                    e.not_(is_const(e, xx(e), e.v("st"))),
-                    ret_m(
-                        e,
-                        err_cve(
-                            e,
-                            loc(e),
-                            e.cat(
-                                e.s("glsl: "),
-                                ty_desc(e, e.v("st")),
-                                e.s(" cannot convert to "),
-                                ty_desc(e, outer(e)),
-                            ),
-                        ),
-                    ),
-                ),
+                e.if_only(e.not_(is_const(e, xx(e), e.v("st"))), ret_m(e, _construct(e, a(e, "cv")))),
                 e.let(
                     "d",
                     e.call(
@@ -969,7 +964,6 @@ def _def_types(e, x):
     )
     _bind_impl(e, x, "gt_scalar")
     _set_impl(e, x, "gt_scalar")
-    _construct_impl(e, x, "gt_scalar")
 
     ids = []
     ids.append(lv(e, "gtype_id"))
@@ -984,7 +978,6 @@ def _def_types(e, x):
     ids.append(op_id(e, "bit_not"))
     ids.append(asp_id(e, "bind"))
     ids.append(asp_id(e, "set"))
-    ids.append(asp_id(e, "function"))
     ids.append(asp_id(e, "field"))
     self_type(
         e,
@@ -992,8 +985,7 @@ def _def_types(e, x):
         "gt_vec",
         _vec_ir(e, in_(e, "kind"), in_(e, "n")),
         e.aspect_dispatch(*ids),
-        can_cast_from_self(e),
-        cast_from_self(e),
+        *_construct_casts(e),
         no_cast_to(e),
         cast_to_panic(e),
         body(
@@ -1061,7 +1053,6 @@ def _def_types(e, x):
     )
     _bind_impl(e, x, "gt_vec")
     _set_impl(e, x, "gt_vec")
-    _construct_impl(e, x, "gt_vec")
     x.append(
         e.impl_interface(
             e.v("gt_vec"),
@@ -1165,15 +1156,13 @@ def _def_types(e, x):
     ids.append(op_id(e, "neg"))
     ids.append(asp_id(e, "bind"))
     ids.append(asp_id(e, "set"))
-    ids.append(asp_id(e, "function"))
     self_type(
         e,
         x,
         "gt_mat",
         e.cat(e.s("mat"), to_str(e, in_(e, "n"))),
         e.aspect_dispatch(*ids),
-        can_cast_from_self(e),
-        cast_from_self(e),
+        *_construct_casts(e),
         no_cast_to(e),
         cast_to_panic(e),
         body(
@@ -1196,7 +1185,6 @@ def _def_types(e, x):
     op(e, x, "gt_mat", "neg", _unary(e, "-"))
     _bind_impl(e, x, "gt_mat")
     _set_impl(e, x, "gt_mat")
-    _construct_impl(e, x, "gt_mat")
 
     self_type(
         e,
@@ -2323,9 +2311,7 @@ def _def_hooks(e, x):
                     e.if_else(
                         _ggfn_is(e, "uniform_block_fn"),
                         _want_list(e, "mod", "name", "layout", "fields"),
-                        e.if_else(
-                            _ggfn_is(e, "gl_fn"), _want_list(e, "name"), _want_list(e, "mod", "name", "ty")
-                        ),
+                        e.if_else(_ggfn_is(e, "gl_fn"), _want_list(e, "name"), _want_list(e, "mod", "name", "ty")),
                     ),
                 ),
             ),
@@ -2533,9 +2519,7 @@ def _def_hooks(e, x):
                 e.not_(has(e, xx(e), e.v("tyv"), "gfn")),
                 ret_m(
                     e,
-                    err_cve(
-                        e, loc(e), e.cat(e.s("glsl ty must be a function type, not "), ty_desc(e, e.v("tyv")))
-                    ),
+                    err_cve(e, loc(e), e.cat(e.s("glsl ty must be a function type, not "), ty_desc(e, e.v("tyv")))),
                 ),
             ),
             e.let("pcv", _ggfn_field(e, "params")),
@@ -3005,11 +2989,13 @@ def module(e):
     y.append(e.let("void", _lty(e, "gt_void", e.tup())))
     for kind in GGFN_KINDS:
         exported.append(kind)
-        y.append(e.let(kind + "_o", e.call(e.fld(e.v("k"), "ggfn_t_new"), e.rec(e.p("kind", e.int_of(_ggfn_kind(kind)))))))
-    builtins = []
+        y.append(
+            e.let(kind + "_o", e.call(e.fld(e.v("k"), "ggfn_t_new"), e.rec(e.p("kind", e.int_of(_ggfn_kind(kind))))))
+        )
     for row in BUILTINS:
-        builtins.append(e.p(row[0], _lty(e, "gbuiltin_t", e.rec(e.p("name", e.s(row[0]))))))
-    y.append(e.let("gbuiltins", e.rec(*builtins)))
+        y.append(
+            e.let("bi_" + row[0] + "_o", e.call(e.fld(e.v("k"), "gbuiltin_t_new"), e.rec(e.p("name", e.s(row[0])))))
+        )
     y.append(e.let("d", e.define()))
     y.append(e.let("gfn_d", e.define()))
     for kind in GGFN_KINDS:
@@ -3026,6 +3012,31 @@ def module(e):
             d="gfn_d",
         )
         y.append(e.let(kind, e.fld(e.v(kind + "_b"), "func")))
+    # The builtin functions as const functions: each calls its builtin object's function aspect.
+    builtins = []
+    for row in BUILTINS:
+        o = "bi_" + row[0] + "_o"
+        tm.const_fn(
+            e,
+            y,
+            "bi_" + row[0] + "_b",
+            "glsl." + row[0],
+            bim(
+                e,
+                asp_iface(e, "function"),
+                "call",
+                e.lower(e.v(o)),
+                e.rec(
+                    e.p("xx", xx(e)),
+                    e.p("loc", loc(e)),
+                    e.p("self", cv_of(e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), e.lower(e.v(o))))),
+                    e.p("argument", a(e, "argument")),
+                ),
+            ),
+            d="gfn_d",
+        )
+        builtins.append(e.p(row[0], e.fld(e.v("bi_" + row[0] + "_b"), "func")))
+    y.append(e.let("gbuiltins", e.rec(*builtins)))
     y.append(e.finish(e.v("gfn_d")))
     y.append(e.option_type_let())
     y.append(e.let("mod_o", e.def_object(e.v("d"), "glsl module")))

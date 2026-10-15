@@ -19,6 +19,7 @@ from ..memory import destructor
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
+    fn_of,
     a,
     acc,
     and_b,
@@ -140,7 +141,7 @@ class _Target:
     def size(self, e, n, depth):
         if self.kind == WASM:
             return n
-        return e.call(_up(e, e.fld(e.v("lib"), "u64"), depth), n)
+        return e.mb.as_(n, _up(e, e.fld(e.v("lib"), "u64"), depth))
 
     def malloc(self, e, n, depth):
         return e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth))
@@ -401,7 +402,7 @@ def _insert_fn_body(e, tg, lay):
     h = e.v("t")
 
     def rehash():
-        return e.call(_up(e, e.v("rehash"), BODY_HOST), h)
+        return e.call(fn_of(e, _up(e, e.v("rehash"), BODY_HOST)), h)
 
     return e.mb.labeled(
         "i",
@@ -521,7 +522,7 @@ def _setup(e):
         out.append(e.let(name, e.lower(e.v(name))))
     for tname in ["pv", "pi32", "ppv", "pu8"]:
         out.append(e.let(tname, _up(e, e.v(tname), SETUP_MOD)))
-    out.append(e.let("opt_of", e.fld(e.call(_up(e, e.fld(e.v("option"), "type"), SETUP_MOD), e.v("pvalue")), "of")))
+    out.append(e.let("opt_of", e.fld(e.call(_up(e, e.fld(e.v("option"), "type"), SETUP_MOD), e.v("pvalue")), "of_t")))
     fields = [
         p(k, e.v(k)) for k in ["key", "pv", "pi32", "ppv", "pu8", "pkey", "pvalue", "value_size", "opt_of"] + DEPS
     ]
@@ -533,11 +534,11 @@ def _setup(e):
             "owned",
             e.call(
                 e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
-                e.rec(p("under", e.v("raw")), p("destroy", e.v("free_table"))),
+                e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free_table")))),
             ),
         )
     )
-    out.append(e.ret(e.rec(p("type", e.v("owned")), p("raw", e.v("raw")), p("new", e.v("new")))))
+    out.append(e.ret(e.rec(p("type", e.v("owned")), p("raw", e.v("raw")), p("new", fn_of(e, e.v("new"))))))
     return e.mb.seq(out)
 
 
@@ -710,7 +711,7 @@ def _ht(e, x, tg, lay, with_values):
         return e.mb.as_(graft(e, in_(e, "self")), e.lower(e.v("pv")))
 
     def call_dep(name, *args):
-        return e.call(e.lower(e.v(name)), args[0] if len(args) == 1 else e.tup(*args))
+        return e.call(fn_of(e, e.lower(e.v(name))), args[0] if len(args) == 1 else e.tup(*args))
 
     def put_scratch(key):
         return e.mb.set(e.mb.field(tg.byte_ptr(e, vself(), SCRATCH, e.lower(e.v("pkey"))), e.n(0)), key)
@@ -730,7 +731,9 @@ def _ht(e, x, tg, lay, with_values):
                 "m",
                 e.seq(
                     put_scratch(arg(None)),
-                    e.mb.return_to("m", e.call(e.lower(e.v("i32")), e.not_(e.eq(call_dep("find", vself()), e.n(-1))))),
+                    e.mb.return_to(
+                        "m", e.mb.as_(e.not_(e.eq(call_dep("find", vself()), e.n(-1))), e.lower(e.v("i32")))
+                    ),
                 ),
             )
         if kind == "get":
@@ -744,9 +747,9 @@ def _ht(e, x, tg, lay, with_values):
                     e.mb.return_to(
                         "m",
                         e.call(
-                            e.lower(e.v("opt_of")),
+                            fn_of(e, e.lower(e.v("opt_of"))),
                             e.tup(
-                                e.call(e.lower(e.v("i32")), e.v("found")),
+                                e.mb.as_(e.v("found"), e.lower(e.v("i32"))),
                                 e.if_else(
                                     e.v("found"),
                                     tg.elem_ptr(

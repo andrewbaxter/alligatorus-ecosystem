@@ -102,7 +102,7 @@ def module(e):
         return e.call(e.fld(lo("heap"), "malloc"), e.n(n))
 
     def owned(v):
-        return e.call(lo("owned_blk"), v)
+        return e.mb.as_(v, lo("owned_blk"))
 
     body = e.seq(
         e.seq(
@@ -112,7 +112,7 @@ def module(e):
             e.mb.set(e.v("a"), owned(malloc(16))),
             e.mb.set(e.mb.field(e.mb.as_(e.v("c"), lo("t_pi32")), e.n(0)), e.n(5)),
         ),
-        e.call(lo("proc_exit"), e.call(lo("t_u32"), cell())),
+        e.call(lo("proc_exit"), e.mb.as_(cell(), lo("t_u32"))),
     )
     top.append(e.let("t_pi32", e.call(e.fld(e.v("wasm"), "ptr"), e.v("t_i32"))))
     top.append(

@@ -84,7 +84,6 @@ from ..target_mb import (
     rt_lift_impl,
     rt_use_impl,
     self_type,
-    src_bits,
     src_type,
     str_,
     str_cve,
@@ -881,26 +880,6 @@ def _bind_impl(e, x, obj):
                     ),
                 ),
             ),
-        )
-    )
-
-
-def _conv_impl(e, x, obj, what, *cases):
-    parts = []
-    parts.append(e.let("cv", a(e, "argument")))
-    parts.append(e.if_only(e.not_(cve_has(e, e.v("cv"))), ret_m(e, err_cve(e, loc(e), "expression has no value"))))
-    parts.append(e.let("st0", cve_type(e, e.v("cv"))))
-    parts.append(e.if_only(is_const(e, xx(e), e.v("st0")), ret_m(e, cast_value(e, xx(e), loc(e), outer(e), e.v("cv")))))
-    parts.append(e.let("v", unwrap_cve_m(e, try_er(e, _ssa(e, xx(e), loc(e), _xmod(e), e.v("cv")), cve_t(e)))))
-    parts.append(e.let("st", cve_type(e, e.v("v"))))
-    parts.extend(cases)
-    parts.append(e.ret(err_cve(e, loc(e), "cannot convert to " + what)))
-    x.append(
-        e.impl_interface(
-            e.v(obj),
-            asp_iface(e, "function"),
-            e.p("call", body(e, *parts)),
-            e.p("exception_type", e.option_type_lowered_none()),
         )
     )
 
@@ -3036,42 +3015,6 @@ def module(e):
             ),
         ),
     )
-    fn_impl(
-        e,
-        x,
-        "c_range",
-        body(
-            e,
-            e.let("elem", e.v("arg")),
-            e.let("h_range_call_f", e.lower_v("h_range_call")),
-            e.let("cf_d", e.define()),
-            e.let("cf", e.call_m(e.v("cf_d"), "const_func", e.s("llvm range"))),
-            e.call_m(
-                e.v("cf"),
-                "impl",
-                e.rec(
-                    e.p(
-                        "impl_body",
-                        e.stage(
-                            e.call(
-                                e.lower(e.v("h_range_call_f")),
-                                e.rec(
-                                    e.p("xx", xx(e)),
-                                    e.p("loc", loc(e)),
-                                    e.p("elem", e.lower(e.v("elem"))),
-                                    e.p("cv", a(e, "argument")),
-                                ),
-                            )
-                        ),
-                    ),
-                    e.p("exception_type", e.option_type_lowered_none()),
-                    e.p("description", e.opt_none(str_(e))),
-                ),
-            ),
-            e.finish(e.v("cf_d")),
-            e.ret(e.mb.as_(e.fld(e.v("cf"), "func"), ty(e))),
-        ),
-    )
     # Dependencies: a function or a zeroed global that a module gets only when code uses it. `func_dep` and
     # `alloc_dep` make callable const functions; a call defines the item in the current module on first use (by
     # name), then calls the function or yields the global's pointer. The definition travels in the const function.
@@ -3134,61 +3077,6 @@ def module(e):
                     ),
                 )
             ),
-        ),
-    )
-    _fn_def(
-        e,
-        x,
-        "c_func_dep",
-        e.rec(
-            e.p("name", str_(e)), e.p("params", e.list_type(str_(e))), e.p("ty", ty(e)), e.p("body", e.mb.types_expr())
-        ),
-        ty(e),
-    )
-    fn_impl(
-        e,
-        x,
-        "c_func_dep",
-        body(
-            e,
-            e.let("h", e.lower_v("h_funcdep_call")),
-            e.let("dn", a(e, "name")),
-            e.let("dp", a(e, "params")),
-            e.let("dt", a(e, "ty")),
-            e.let("db", a(e, "body")),
-            e.let("cf_d", e.define()),
-            e.let("cf", e.call_m(e.v("cf_d"), "const_func", e.cat(e.s("llvm function "), a(e, "name")))),
-            e.call_m(
-                e.v("cf"),
-                "impl",
-                e.rec(
-                    e.p(
-                        "impl_body",
-                        e.stage(
-                            try_er(
-                                e,
-                                e.call(
-                                    e.lower(e.v("h")),
-                                    e.rec(
-                                        e.p("xx", xx(e)),
-                                        e.p("loc", loc(e)),
-                                        e.p("name", e.lower(e.v("dn"))),
-                                        e.p("params", e.lower(e.v("dp"))),
-                                        e.p("ty", e.lower(e.v("dt"))),
-                                        e.p("body", e.lower(e.v("db"))),
-                                        e.p("argument", a(e, "argument")),
-                                    ),
-                                ),
-                                cve_t(e),
-                            )
-                        ),
-                    ),
-                    e.p("exception_type", e.option_type_lowered_none()),
-                    e.p("description", e.opt_none(str_(e))),
-                ),
-            ),
-            e.finish(e.v("cf_d")),
-            e.ret(e.mb.as_(e.fld(e.v("cf"), "func"), ty(e))),
         ),
     )
     _fn_def(
@@ -3287,6 +3175,118 @@ def module(e):
             ),
         ),
     )
+    # The dependencies as callable types: their function values define them in the module on first use.
+    target_mb.def_empty_binding(e, x, "lebinding", "llvm empty value binding")
+    target_mb.dep_type(
+        e,
+        x,
+        "lfdep",
+        "llvm function dependency",
+        [("name", str_(e)), ("params", e.list_type(str_(e))), ("ty", ty(e)), ("body", e.mb.types_expr())],
+        "h_funcdep_call",
+        True,
+        "lebinding",
+    )
+    target_mb.dep_type(
+        e,
+        x,
+        "ladep",
+        "llvm allocation dependency",
+        [("name", str_(e)), ("ty", ty(e))],
+        "h_allocdep_call",
+        False,
+        "lebinding",
+    )
+    target_mb.dep_type(
+        e,
+        x,
+        "lddep",
+        "llvm data dependency",
+        [("name", str_(e)), ("elem", ty(e)), ("values", e.list_type(int_t(e)))],
+        "h_datadep_call",
+        False,
+        "lebinding",
+    )
+    # The range constructor as a callable type: its function value makes the range of its argument.
+    def_iface(e, x, "lrng_m", e.p("elem", ty(e)))
+    def_obj(e, x, "lrng", "llvm range constructor", e.rec(e.p("elem", ty(e))))
+    x.append(e.impl_interface(e.v("lrng"), t(e, "lrng_m"), e.p("elem", in_(e, "elem"))))
+    self_type(
+        e,
+        x,
+        "lrng",
+        e.cat(e.s("range("), bim0(e, ty(e), "desc", in_(e, "elem")), e.s(") constructor")),
+        e.aspect_dispatch(asp_id(e, "function"), asp_id(e, "bind")),
+        target_mb.can_cast_from_unit(e),
+        target_mb.cast_from_empty(e),
+        no_cast_to(e),
+        cast_to_panic(e),
+        body(
+            e,
+            e.ret(
+                and_b(
+                    e,
+                    has(e, xx(e), a(e, "other"), "lrng_m"),
+                    is_equal(e, xx(e), in_(e, "elem"), acc(e, xx(e), a(e, "other"), "lrng_m", "elem")),
+                )
+            ),
+        ),
+    )
+    x.append(
+        e.impl_interface(
+            e.v("lrng"),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    e.ret(
+                        hf_rec(
+                            e,
+                            "h_range_call",
+                            e.p("xx", xx(e)),
+                            e.p("loc", loc(e)),
+                            e.p("elem", in_(e, "elem")),
+                            e.p("cv", a(e, "argument")),
+                        )
+                    ),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+    x.append(e.impl_interface(e.v("lrng"), e.mb.eval_aspect_bind(), e.p("bind", target_mb.bind_empty(e, "lebinding"))))
+    fn_impl(e, x, "c_range", body(e, e.ret(e.mb.as_(mk(e, "lrng", e.p("elem", e.v("arg"))), ty(e)))))
+    _fn_def(
+        e,
+        x,
+        "c_func_dep",
+        e.rec(
+            e.p("name", str_(e)), e.p("params", e.list_type(str_(e))), e.p("ty", ty(e)), e.p("body", e.mb.types_expr())
+        ),
+        ty(e),
+    )
+    fn_impl(
+        e,
+        x,
+        "c_func_dep",
+        body(
+            e,
+            e.ret(
+                e.mb.as_(
+                    mk(
+                        e,
+                        "lfdep",
+                        e.p("name", a(e, "name")),
+                        e.p("params", a(e, "params")),
+                        e.p("ty", a(e, "ty")),
+                        e.p("body", a(e, "body")),
+                    ),
+                    ty(e),
+                )
+            ),
+        ),
+    )
     _fn_def(
         e,
         x,
@@ -3300,41 +3300,18 @@ def module(e):
         "c_data_dep",
         body(
             e,
-            e.let("h", e.lower_v("h_datadep_call")),
-            e.let("dn", a(e, "name")),
-            e.let("de", a(e, "elem")),
-            e.let("dv", a(e, "values")),
-            e.let("cf_d", e.define()),
-            e.let("cf", e.call_m(e.v("cf_d"), "const_func", e.cat(e.s("llvm data "), a(e, "name")))),
-            e.call_m(
-                e.v("cf"),
-                "impl",
-                e.rec(
-                    e.p(
-                        "impl_body",
-                        e.stage(
-                            try_er(
-                                e,
-                                e.call(
-                                    e.lower(e.v("h")),
-                                    e.rec(
-                                        e.p("xx", xx(e)),
-                                        e.p("loc", loc(e)),
-                                        e.p("name", e.lower(e.v("dn"))),
-                                        e.p("elem", e.lower(e.v("de"))),
-                                        e.p("values", e.lower(e.v("dv"))),
-                                    ),
-                                ),
-                                cve_t(e),
-                            )
-                        ),
+            e.ret(
+                e.mb.as_(
+                    mk(
+                        e,
+                        "lddep",
+                        e.p("name", a(e, "name")),
+                        e.p("elem", a(e, "elem")),
+                        e.p("values", a(e, "values")),
                     ),
-                    e.p("exception_type", e.option_type_lowered_none()),
-                    e.p("description", e.opt_none(str_(e))),
-                ),
+                    ty(e),
+                )
             ),
-            e.finish(e.v("cf_d")),
-            e.ret(e.mb.as_(e.fld(e.v("cf"), "func"), ty(e))),
         ),
     )
     _fn_def(e, x, "c_cstr_dep", e.rec(e.p("name", str_(e)), e.p("text", str_(e))), ty(e))
@@ -3369,39 +3346,17 @@ def module(e):
         "c_alloc_dep",
         body(
             e,
-            e.let("h", e.lower_v("h_allocdep_call")),
-            e.let("dn", a(e, "name")),
-            e.let("dty", a(e, "ty")),
-            e.let("cf_d", e.define()),
-            e.let("cf", e.call_m(e.v("cf_d"), "const_func", e.cat(e.s("llvm global "), a(e, "name")))),
-            e.call_m(
-                e.v("cf"),
-                "impl",
-                e.rec(
-                    e.p(
-                        "impl_body",
-                        e.stage(
-                            try_er(
-                                e,
-                                e.call(
-                                    e.lower(e.v("h")),
-                                    e.rec(
-                                        e.p("xx", xx(e)),
-                                        e.p("loc", loc(e)),
-                                        e.p("name", e.lower(e.v("dn"))),
-                                        e.p("ty", e.lower(e.v("dty"))),
-                                    ),
-                                ),
-                                cve_t(e),
-                            )
-                        ),
+            e.ret(
+                e.mb.as_(
+                    mk(
+                        e,
+                        "ladep",
+                        e.p("name", a(e, "name")),
+                        e.p("ty", a(e, "ty")),
                     ),
-                    e.p("exception_type", e.option_type_lowered_none()),
-                    e.p("description", e.opt_none(str_(e))),
-                ),
+                    ty(e),
+                )
             ),
-            e.finish(e.v("cf_d")),
-            e.ret(e.mb.as_(e.fld(e.v("cf"), "func"), ty(e))),
         ),
     )
     _fn_def(e, x, "c_global_t", e.rec(e.p("ty", ty(e)), e.p("mem", bool_t(e))), ty(e))
@@ -4742,7 +4697,6 @@ def module(e):
             op_id(e, "bit_not"),
             asp_id(e, "bind"),
             asp_id(e, "set"),
-            asp_id(e, "function"),
         ),
         body(
             e,
@@ -4753,18 +4707,10 @@ def module(e):
                     or_b(
                         e,
                         is_const(e, xx(e), src_type(e)),
-                        and_b(
+                        or_b(
                             e,
                             has(e, xx(e), src_type(e), "lint"),
-                            and_b(
-                                e,
-                                e.mb.operator_lt(src_bits(e, "lint"), in_(e, "bits")),
-                                or_b(
-                                    e,
-                                    e.eq(src_bits(e, "lint"), num(e, 1)),
-                                    e.eq(acc(e, xx(e), src_type(e), "lint", "signed"), in_(e, "signed")),
-                                ),
-                            ),
+                            or_b(e, has(e, xx(e), src_type(e), "lfloat"), has(e, xx(e), src_type(e), "lptr")),
                         ),
                     ),
                 )
@@ -4772,10 +4718,10 @@ def module(e):
         ),
         body(
             e,
-            e.let("st", cve_type(e, a(e, "cv"))),
-            e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.let("st0", cve_type(e, a(e, "cv"))),
+            e.if_only(is_equal(e, xx(e), outer(e), e.v("st0")), ret_m(e, ok_cve(e, a(e, "cv")))),
             e.if_only(
-                is_const(e, xx(e), e.v("st")),
+                is_const(e, xx(e), e.v("st0")),
                 e.seq(
                     e.let(
                         "d",
@@ -4796,16 +4742,36 @@ def module(e):
                     ret_m(e, ok_cve(e, cv_of(e, cve_code(e, a(e, "cv")), _lval_new(e, outer(e), to_str(e, e.v("l")))))),
                 ),
             ),
-            e.let("sb", cv_bits(e, e.v("st"), "lint")),
-            e.let(
-                "op",
-                e.if_else(
-                    e.eq(e.v("sb"), num(e, 1)),
-                    e.dstr("zext"),
-                    e.if_else(acc(e, xx(e), e.v("st"), "lint", "signed"), e.dstr("sext"), e.dstr("zext")),
+            e.let("v", unwrap_cve_m(e, try_er(e, _ssa(e, xx(e), loc(e), _xmod(e), a(e, "cv")), cve_t(e)))),
+            e.let("st", cve_type(e, e.v("v"))),
+            e.if_only(
+                has(e, xx(e), e.v("st"), "lint"),
+                e.seq(
+                    e.let("sb", cv_bits(e, e.v("st"), "lint")),
+                    ret_m(
+                        e,
+                        e.if_else(
+                            e.eq(e.v("sb"), in_(e, "bits")),
+                            _retag(e, e.v("v"), outer(e)),
+                            e.if_else(
+                                e.mb.operator_gt(e.v("sb"), in_(e, "bits")),
+                                _conv(e, e.s("trunc"), e.v("v"), outer(e)),
+                                _conv(
+                                    e,
+                                    e.if_else(
+                                        acc(e, xx(e), e.v("st"), "lint", "signed"), e.dstr("sext"), e.dstr("zext")
+                                    ),
+                                    e.v("v"),
+                                    outer(e),
+                                ),
+                            ),
+                        ),
+                    ),
                 ),
             ),
-            e.ret(_conv(e, e.v("op"), a(e, "cv"), outer(e))),
+            _when_st(e, "lfloat", _conv(e, _signed_op(e, "fptosi", "fptoui"), e.v("v"), outer(e))),
+            _when_st(e, "lptr", _conv(e, e.s("ptrtoint"), e.v("v"), outer(e))),
+            e.ret(err_cve(e, loc(e), "cannot convert to integer")),
         ),
         no_cast_to(e),
         cast_to_panic(e),
@@ -4925,37 +4891,6 @@ def module(e):
     )
     _bind_impl(e, x, "lt_int")
     _set_impl(e, x, "lt_int")
-    _conv_impl(
-        e,
-        x,
-        "lt_int",
-        "integer",
-        e.if_only(
-            has(e, xx(e), e.v("st"), "lint"),
-            e.seq(
-                e.let("sb", cv_bits(e, e.v("st"), "lint")),
-                ret_m(
-                    e,
-                    e.if_else(
-                        e.eq(e.v("sb"), in_(e, "bits")),
-                        _retag(e, e.v("v"), outer(e)),
-                        e.if_else(
-                            e.mb.operator_gt(e.v("sb"), in_(e, "bits")),
-                            _conv(e, e.s("trunc"), e.v("v"), outer(e)),
-                            _conv(
-                                e,
-                                e.if_else(acc(e, xx(e), e.v("st"), "lint", "signed"), e.dstr("sext"), e.dstr("zext")),
-                                e.v("v"),
-                                outer(e),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-        _when_st(e, "lfloat", _conv(e, _signed_op(e, "fptosi", "fptoui"), e.v("v"), outer(e))),
-        _when_st(e, "lptr", _conv(e, e.s("ptrtoint"), e.v("v"), outer(e))),
-    )
     self_type(
         e,
         x,
@@ -4981,7 +4916,6 @@ def module(e):
             op_id(e, "neg"),
             asp_id(e, "bind"),
             asp_id(e, "set"),
-            asp_id(e, "function"),
         ),
         body(
             e,
@@ -4992,21 +4926,17 @@ def module(e):
                     or_b(
                         e,
                         is_const(e, xx(e), src_type(e)),
-                        and_b(
-                            e,
-                            has(e, xx(e), src_type(e), "lfloat"),
-                            e.mb.operator_lt(src_bits(e, "lfloat"), in_(e, "bits")),
-                        ),
+                        or_b(e, has(e, xx(e), src_type(e), "lfloat"), has(e, xx(e), src_type(e), "lint")),
                     ),
                 )
             ),
         ),
         body(
             e,
-            e.let("st", cve_type(e, a(e, "cv"))),
-            e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.let("st0", cve_type(e, a(e, "cv"))),
+            e.if_only(is_equal(e, xx(e), outer(e), e.v("st0")), ret_m(e, ok_cve(e, a(e, "cv")))),
             e.if_only(
-                is_const(e, xx(e), e.v("st")),
+                is_const(e, xx(e), e.v("st0")),
                 e.seq(
                     e.let(
                         "d",
@@ -5026,7 +4956,37 @@ def module(e):
                     ret_m(e, ok_cve(e, cv_of(e, cve_code(e, a(e, "cv")), _lval_new(e, outer(e), e.v("s"))))),
                 ),
             ),
-            e.ret(_conv(e, e.s("fpext"), a(e, "cv"), outer(e))),
+            e.let("v", unwrap_cve_m(e, try_er(e, _ssa(e, xx(e), loc(e), _xmod(e), a(e, "cv")), cve_t(e)))),
+            e.let("st", cve_type(e, e.v("v"))),
+            _when_st(
+                e,
+                "lint",
+                _conv(
+                    e,
+                    e.if_else(acc(e, xx(e), e.v("st"), "lint", "signed"), e.dstr("sitofp"), e.dstr("uitofp")),
+                    e.v("v"),
+                    outer(e),
+                ),
+            ),
+            e.if_only(
+                has(e, xx(e), e.v("st"), "lfloat"),
+                e.seq(
+                    e.let("sb", cv_bits(e, e.v("st"), "lfloat")),
+                    ret_m(
+                        e,
+                        e.if_else(
+                            e.eq(e.v("sb"), in_(e, "bits")),
+                            _retag(e, e.v("v"), outer(e)),
+                            e.if_else(
+                                e.mb.operator_gt(e.v("sb"), in_(e, "bits")),
+                                _conv(e, e.s("fptrunc"), e.v("v"), outer(e)),
+                                _conv(e, e.s("fpext"), e.v("v"), outer(e)),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            e.ret(err_cve(e, loc(e), "cannot convert to float")),
         ),
         no_cast_to(e),
         cast_to_panic(e),
@@ -5091,40 +5051,6 @@ def module(e):
     )
     _bind_impl(e, x, "lt_float")
     _set_impl(e, x, "lt_float")
-    _conv_impl(
-        e,
-        x,
-        "lt_float",
-        "float",
-        _when_st(
-            e,
-            "lint",
-            _conv(
-                e,
-                e.if_else(acc(e, xx(e), e.v("st"), "lint", "signed"), e.dstr("sitofp"), e.dstr("uitofp")),
-                e.v("v"),
-                outer(e),
-            ),
-        ),
-        e.if_only(
-            has(e, xx(e), e.v("st"), "lfloat"),
-            e.seq(
-                e.let("sb", cv_bits(e, e.v("st"), "lfloat")),
-                ret_m(
-                    e,
-                    e.if_else(
-                        e.eq(e.v("sb"), in_(e, "bits")),
-                        _retag(e, e.v("v"), outer(e)),
-                        e.if_else(
-                            e.mb.operator_gt(e.v("sb"), in_(e, "bits")),
-                            _conv(e, e.s("fptrunc"), e.v("v"), outer(e)),
-                            _conv(e, e.s("fpext"), e.v("v"), outer(e)),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-    )
     self_type(
         e,
         x,
@@ -5146,7 +5072,6 @@ def module(e):
             op_id(e, "add"),
             asp_id(e, "bind"),
             asp_id(e, "set"),
-            asp_id(e, "function"),
             asp_id(e, "field"),
         ),
         body(
@@ -5155,15 +5080,24 @@ def module(e):
                 or_b(
                     e,
                     is_equal(e, xx(e), outer(e), src_type(e)),
-                    or_b(e, has(e, xx(e), src_type(e), "lptr"), has(e, xx(e), src_type(e), "lfn")),
+                    or_b(
+                        e,
+                        has(e, xx(e), src_type(e), "lptr"),
+                        or_b(e, has(e, xx(e), src_type(e), "lfn"), has(e, xx(e), src_type(e), "lint")),
+                    ),
                 )
             ),
         ),
         body(
             e,
-            e.let("st", cve_type(e, a(e, "cv"))),
-            e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
-            e.ret(_retag(e, a(e, "cv"), outer(e))),
+            e.let("st0", cve_type(e, a(e, "cv"))),
+            e.if_only(is_equal(e, xx(e), outer(e), e.v("st0")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.let("v", unwrap_cve_m(e, try_er(e, _ssa(e, xx(e), loc(e), _xmod(e), a(e, "cv")), cve_t(e)))),
+            e.let("st", cve_type(e, e.v("v"))),
+            _when_st(e, "lint", _conv(e, e.s("inttoptr"), e.v("v"), outer(e))),
+            _when_st(e, "lptr", _retag(e, e.v("v"), outer(e))),
+            _when_st(e, "lfn", _retag(e, e.v("v"), outer(e))),
+            e.ret(err_cve(e, loc(e), "cannot convert to pointer")),
         ),
         no_cast_to(e),
         cast_to_panic(e),
@@ -5239,15 +5173,6 @@ def module(e):
     )
     _bind_impl(e, x, "lt_ptr")
     _set_impl(e, x, "lt_ptr")
-    _conv_impl(
-        e,
-        x,
-        "lt_ptr",
-        "pointer",
-        _when_st(e, "lint", _conv(e, e.s("inttoptr"), e.v("v"), outer(e))),
-        _when_st(e, "lptr", _retag(e, e.v("v"), outer(e))),
-        _when_st(e, "lfn", _retag(e, e.v("v"), outer(e))),
-    )
     x.append(
         e.impl_interface(
             e.v("lt_ptr"),
@@ -6474,9 +6399,7 @@ def module(e):
                                 e.list_new(str_(e), e.s("name"), e.s("ty"), e.s("libs")),
                                 e.if_else(
                                     _lgfn_is(e, "func_fn"),
-                                    e.list_new(
-                                        str_(e), e.s("mod"), e.s("name"), e.s("params"), e.s("ty"), e.s("body")
-                                    ),
+                                    e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("params"), e.s("ty"), e.s("body")),
                                     e.if_else(
                                         _lgfn_is(e, "global_zero_fn"),
                                         e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("ty")),
@@ -6501,9 +6424,7 @@ def module(e):
                         "w",
                         e.if_only(e.eq(e.v("w"), e.v("ks")), e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1))),
                     ),
-                    e.if_only(
-                        e.eq(e.fld(e.v("hit"), "v"), num(e, 0)), e.mb.set(e.fld(e.v("kc"), "bad"), e.v("ks"))
-                    ),
+                    e.if_only(e.eq(e.fld(e.v("hit"), "v"), num(e, 0)), e.mb.set(e.fld(e.v("kc"), "bad"), e.v("ks"))),
                 ),
             ),
             e.if_only(
@@ -6580,17 +6501,13 @@ def module(e):
                 _lgfn_is(e, "ref_fn"),
                 e.seq(
                     e.if_only(
-                        e.not_(
-                            or_b(e, has(e, xx(e), e.v("tyv"), "lgtype_m"), has(e, xx(e), e.v("tyv"), "lloop_m"))
-                        ),
+                        e.not_(or_b(e, has(e, xx(e), e.v("tyv"), "lgtype_m"), has(e, xx(e), e.v("tyv"), "lloop_m"))),
                         ret_m(
                             e,
                             err_cve(
                                 e,
                                 loc(e),
-                                e.cat(
-                                    e.s("llvm reference ty is not a reference type: "), ty_desc(e, e.v("tyv"))
-                                ),
+                                e.cat(e.s("llvm reference ty is not a reference type: "), ty_desc(e, e.v("tyv"))),
                             ),
                         ),
                     ),
@@ -6654,9 +6571,7 @@ def module(e):
                                 e.not_(e.fld(e.v("nsk"), "is_some")),
                                 ret_m(
                                     e,
-                                    err_cve(
-                                        e, loc(e), "llvm function parameter names must be constant" + " strings"
-                                    ),
+                                    err_cve(e, loc(e), "llvm function parameter names must be constant" + " strings"),
                                 ),
                             ),
                             push(
@@ -7430,7 +7345,7 @@ def module(e):
     exported.append("loop")
     y.append(e.let("loop", _lty(e, "lloop_t", e.tup())))
     exported.append("trap")
-    y.append(e.let("trap", _lty(e, "ltrap_t", e.tup())))
+    y.append(e.let("trap_o", e.call(e.fld(e.v("k"), "ltrap_t_new"), e.tup())))
     y.append(
         e.let(
             "null_t",
@@ -7454,7 +7369,9 @@ def module(e):
     for kind in LGFN_KINDS:
         if kind != "cstr_fn":
             exported.append(kind)
-        y.append(e.let(kind + "_o", e.call(e.fld(e.v("k"), "lgfn_t_new"), e.rec(e.p("kind", e.int_of(_lgfn_kind(kind)))))))
+        y.append(
+            e.let(kind + "_o", e.call(e.fld(e.v("k"), "lgfn_t_new"), e.rec(e.p("kind", e.int_of(_lgfn_kind(kind))))))
+        )
     exported.append("gref_t")
     y.append(e.let("gref_t", _lty(e, "lt_gref", e.tup())))
     y.append(e.let("d", e.define()))
@@ -7473,6 +7390,29 @@ def module(e):
             d="gfn_d",
         )
         y.append(e.let(kind, e.fld(e.v(kind + "_b"), "func")))
+    target_mb.const_fn(
+        e,
+        y,
+        "trap_b",
+        "llvm.trap",
+        bim(
+            e,
+            asp_iface(e, "function"),
+            "call",
+            e.lower(e.v("trap_o")),
+            e.rec(
+                e.p("xx", xx(e)),
+                e.p("loc", loc(e)),
+                e.p(
+                    "self",
+                    cv_of(e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), e.lower(e.v("trap_o")))),
+                ),
+                e.p("argument", a(e, "argument")),
+            ),
+        ),
+        d="gfn_d",
+    )
+    y.append(e.let("trap", e.fld(e.v("trap_b"), "func")))
     y.append(e.finish(e.v("gfn_d")))
     y.append(e.option_type_let())
     y.append(e.let("mod_o", e.def_object(e.v("d"), "llvm module")))

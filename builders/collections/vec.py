@@ -3,14 +3,14 @@
 `vec.type(elem)` yields `{type, raw, new}` for a constant element type `elem` (which must have values.atz's `size`
 aspect):
 - a vec is a pointer to a 16-byte header: data pointer at 0, length (i32) at 8, capacity (i32) at 12;
-- `new()` yields an empty vec; `type(new())` makes it an owned value (destructor.atz) whose drop frees the data and
+- `new()` yields an empty vec; `new() as type` makes it an owned value (destructor.atz) whose drop frees the data and
   the header; `raw` is the unowned handle type (what `type` wraps);
 - on a vec value: `len`, `cap`, `data` (ptr(elem)) are places; `at(i)` is the element place; `push(x)`, `clear()`
   are methods; `pop()` is `some` of the last element taken off the vec, or `none` when the vec is empty
   (option.atz); `slice()` is the slice (slice.atz) of the current elements. These are staged inline where used. `at`
   is bounds-checked through the slice: an index out of range traps.
-The helper functions `vec_<elem>_grow`, `_free` and `_new` are dependencies (`func_dep`): a module gets them when
-its code first uses them. Memory comes from wasm-alloc.atz (wasm) or libc (llvm). A byte vec plus the target's string
+The helper functions `vec_<elem>_grow`, `_free` and `_new` are dependencies (`func_dep`, callable types the vec type
+carries; a body casts the unit to one to call it): a module gets them when its code first uses them. Memory comes from wasm-alloc.atz (wasm) or libc (llvm). A byte vec plus the target's string
 conversion stands in for a growable string.
 """
 
@@ -18,6 +18,7 @@ from ..memory import destructor
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
+    fn_of,
     a,
     acc,
     and_b,
@@ -141,7 +142,7 @@ class _Target:
         """`n` (i32) as the allocator's size argument."""
         if self.kind == WASM:
             return n
-        return e.call(_up(e, e.fld(e.v("lib"), "u64"), depth), n)
+        return e.mb.as_(n, _up(e, e.fld(e.v("lib"), "u64"), depth))
 
     def malloc(self, e, n, depth):
         return e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth))
@@ -242,8 +243,8 @@ def _setup(e):
     for name in ["pv", "pi32", "ppv"]:
         out.append(e.let(name, _up(e, e.v(name), SETUP_MOD)))
     out.append(e.let("pelem", e.call(_up(e, e.fld(e.v("lib"), "ptr"), SETUP_MOD), e.v("elem"))))
-    out.append(e.let("slice_of", e.fld(e.call(_up(e, e.fld(e.v("slice"), "type"), SETUP_MOD), e.v("elem")), "of")))
-    out.append(e.let("opt_of", e.fld(e.call(_up(e, e.fld(e.v("option"), "type"), SETUP_MOD), e.v("elem")), "of")))
+    out.append(e.let("slice_of", e.fld(e.call(_up(e, e.fld(e.v("slice"), "type"), SETUP_MOD), e.v("elem")), "of_t")))
+    out.append(e.let("opt_of", e.fld(e.call(_up(e, e.fld(e.v("option"), "type"), SETUP_MOD), e.v("elem")), "of_t")))
     out.append(
         e.let(
             "raw",
@@ -270,11 +271,11 @@ def _setup(e):
             "owned",
             e.call(
                 e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
-                e.rec(p("under", e.v("raw")), p("destroy", e.v("free_vec"))),
+                e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free_vec")))),
             ),
         )
     )
-    out.append(e.ret(e.rec(p("type", e.v("owned")), p("raw", e.v("raw")), p("new", e.v("new")))))
+    out.append(e.ret(e.rec(p("type", e.v("owned")), p("raw", e.v("raw")), p("new", fn_of(e, e.v("new"))))))
     return e.mb.seq(out)
 
 
@@ -483,7 +484,7 @@ def _vt(e, x):
 
     def slice_of(len_expr):
         """The slice of `len_expr` elements at the data pointer (the constructor is a callable type)."""
-        return e.call(e.lower(e.v("slice_of")), e.tup(data(), len_expr))
+        return e.call(fn_of(e, e.lower(e.v("slice_of"))), e.tup(data(), len_expr))
 
     def method_body(kind):
         if kind == "at":
@@ -494,7 +495,9 @@ def _vt(e, x):
             return e.seq(
                 e.if_only(
                     e.eq(cell(LEN_CELL), cell(CAP_CELL)),
-                    e.call(e.lower(e.v("grow")), e.tup(vself("pv"), e.mb.operator_add(cell(LEN_CELL), e.n(1)))),
+                    e.call(
+                        fn_of(e, e.lower(e.v("grow"))), e.tup(vself("pv"), e.mb.operator_add(cell(LEN_CELL), e.n(1)))
+                    ),
                 ),
                 e.mb.set(e.mb.field(data(), cell(LEN_CELL)), graft(e, a(e, "argument"))),
                 e.mb.set(cell(LEN_CELL), e.mb.operator_add(cell(LEN_CELL), e.n(1))),
@@ -514,9 +517,9 @@ def _vt(e, x):
                 ),
             )
             return e.call(
-                e.lower(e.v("opt_of")),
+                fn_of(e, e.lower(e.v("opt_of"))),
                 e.tup(
-                    e.call(e.lower(e.v("i32")), has),
+                    e.mb.as_(has, e.lower(e.v("i32"))),
                     e.if_else(has, last, e.mb.as_(e.n(0), e.lower(e.v("elem")))),
                 ),
             )

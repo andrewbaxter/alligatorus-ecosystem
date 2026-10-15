@@ -4,6 +4,7 @@ published SipHash-1-3 test vector (Rust's library/coretests/tests/hash/sip.rs: k
 exits with 0 when the hash equals the vector's low 32 bits, else 1."""
 
 from ..root_mode import APP, root_mode_finish
+from ..target_mb import fn_of
 from ..wasm.wat import bind_types
 
 LLVM = "llvm"
@@ -21,7 +22,9 @@ def _lo(e, name):
 
 def _check(e, hash_expr):
     """1 when the hash misses the vector, else 0 (an i32)."""
-    return e.if_else(e.eq(hash_expr, e.n(EXPECTED)), e.mb.as_(e.n(0), _lo(e, "t_i32")), e.mb.as_(e.n(1), _lo(e, "t_i32")))
+    return e.if_else(
+        e.eq(hash_expr, e.n(EXPECTED)), e.mb.as_(e.n(0), _lo(e, "t_i32")), e.mb.as_(e.n(1), _lo(e, "t_i32"))
+    )
 
 
 def _i64(e, hi, lo):
@@ -33,7 +36,7 @@ def _i64(e, hi, lo):
 
 def _seed_and_hash(e, hash_fn):
     def key_cell(i):
-        return e.mb.field(e.mb.as_(e.call(_lo(e, "key"), e.tup()), _lo(e, "t_pi64")), e.n(i))
+        return e.mb.field(e.mb.as_(e.call(fn_of(e, _lo(e, "key")), e.tup()), _lo(e, "t_pi64")), e.n(i))
 
     return [
         e.mb.set(key_cell(0), _i64(e, *KEY[0])),

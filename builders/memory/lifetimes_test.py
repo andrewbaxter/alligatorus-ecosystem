@@ -4,6 +4,7 @@ module assigns the levels the other way round, so the level-0 owner is dropped w
 which must fail to compile."""
 
 from ..root_mode import APP, root_mode_finish
+from ..target_mb import fn_of
 
 ERR = "err"
 
@@ -79,10 +80,10 @@ def module(e, mode):
     )
 
     def malloc(n):
-        return e.call(e.lower(e.fld(e.v("c"), "malloc")), e.call(e.lower(e.fld(e.v("llvm"), "u64")), e.n(n)))
+        return e.call(e.lower(e.fld(e.v("c"), "malloc")), e.mb.as_(e.n(n), e.lower(e.fld(e.v("llvm"), "u64"))))
 
     def owners():
-        return [e.let("a", e.call(_lo(e, "own"), malloc(16))), e.let("b", e.call(_lo(e, "own"), malloc(16)))]
+        return [e.let("a", e.mb.as_(malloc(16), _lo(e, "own"))), e.let("b", e.mb.as_(malloc(16), _lo(e, "own")))]
 
     if mode == APP:
         # a (declared first, dropped last) is the longer-lived level 0; b is level 1.
@@ -104,7 +105,7 @@ def module(e, mode):
                 ),
                 e.seq(e.mb.set(flag, e.mb.as_(e.n(3), _lo(e, "t_i32")))),
             ),
-            e.call(_lo(e, "use_ref"), e.mb.as_(e.v("b"), _lo(e, "L1"))),
+            e.call(fn_of(e, _lo(e, "use_ref")), e.mb.as_(e.v("b"), _lo(e, "L1"))),
             # references act as their underlying type
             e.call(e.lower(e.fld(e.v("c"), "free")), e.mb.as_(e.v("r1"), _lo(e, "t_pv"))),
             e.call(e.lower(e.fld(e.v("c"), "puts")), _lo(e, "s_ok")),

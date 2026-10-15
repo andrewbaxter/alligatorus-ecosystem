@@ -1,20 +1,23 @@
 """slice-wasm.atz / slice-llvm.atz: bounds-checked views over a run of elements, one module per target from this
 builder.
 
-`slice.type(elem)` yields `{of}` for a constant element type `elem` (which must have values.atz's `size` aspect):
-`of((ptr, len))` is the slice of `len` elements starting at `ptr` (a `ptr(elem)`); `of` is a callable type (not a
-value), so modules may hold it in lowered setup blocks and bodies lower it. A slice is a compile-time pair of
-two runtime values, the data pointer and the i32 length, so it binds and loads like any value and is dropped with its
-parts; it has no single machine representation, so it cannot be a function parameter or return value. On a slice
-value: `len` and `data` are its parts; `at(i)` is the element place; `sub((from, to))` is the sub-slice. Both trap
-(wasm `unreachable`, llvm `llvm.trap`) when the index or range is out of bounds, through the `slice_idx` and
-`slice_range` dependencies (`func_dep`), which a module gets when its code first uses them. A slice never owns its
-elements.
+`slice.type(elem)` yields `{of, of_t}` for a constant element type `elem` (which must have values.atz's `size` aspect):
+`of((ptr, len))` is the slice of `len` elements starting at `ptr` (a `ptr(elem)`); `of` is a function value (the empty
+value of the callable type `of_t`, which is also yielded), so modules may hold it in lowered setup blocks and bodies
+lower it. A slice is a compile-time pair of two runtime values, the data pointer and the i32 length, so it binds and
+loads like any value and is dropped with its parts; it has no single machine representation, so it cannot be a function
+parameter or return value. On a slice value: `len` and `data` are its parts; `at(i)` is the element place; `sub((from,
+to))` is the sub-slice. Both trap (wasm `unreachable`, llvm `llvm.trap`) when the index or range is out of bounds,
+through the `slice_idx` and `slice_range` dependencies (`func_dep`), which a module gets when its code first uses them.
+A slice never owns its elements.
 """
 
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
+    cast_from_empty,
+    can_cast_from_unit,
+    fn_of,
     a,
     acc,
     accessor,
@@ -26,8 +29,6 @@ from ..target_mb import (
     body,
     bool_t,
     call_result,
-    can_cast_from_self,
-    cast_from_self,
     cast_to_panic,
     cast_value,
     code_none,
@@ -241,22 +242,12 @@ def _deps(e, tg, out):
 
 
 def _setup(e):
-    """Staged in the caller's context: the `of` callable for `elem` over the lowered dependencies."""
+    """Staged in the caller's context: the `of` constructor type for `elem` (made in the host body, a constant here)
+    and its function value."""
     out = []
-    for name in ["elem", "idx", "range", "elem_size"]:
-        out.append(e.let(name, e.lower(e.v(name))))
-    out.append(e.let("i32", _up(e, e.v("i32"), SETUP_MOD)))
-    out.append(e.let("pelem", e.call(_up(e, e.fld(e.v("lib"), "ptr"), SETUP_MOD), e.v("elem"))))
-    out.append(
-        e.let(
-            "of",
-            e.mb.as_(
-                e.call(_up(e, e.fld(e.v("slof"), "new"), SETUP_MOD), e.rec(*[p(f, e.v(f)) for f in BASE])),
-                e.mb.eval_type(),
-            ),
-        )
-    )
-    out.append(e.ret(e.rec(p("of", e.v("of")))))
+    out.append(e.let("of_t", e.mb.as_(e.lower(e.v("of_i")), e.mb.eval_type())))
+    out.append(e.let("of", fn_of(e, e.lower(e.v("of_i")))))
+    out.append(e.ret(e.rec(p("of", e.v("of")), p("of_t", e.v("of_t")))))
     return e.mb.seq(out)
 
 
@@ -283,8 +274,8 @@ def _objs(e, x, tg):
         "slof",
         e.cat(e.s("slice.of("), ty_desc(e, in_(e, "elem")), e.s(")")),
         rt_dispatch(e, e.mb.types_string(), e.aspect_dispatch(asp_id(e, "function"))),
-        can_cast_from_self(e),
-        cast_from_self(e),
+        can_cast_from_unit(e),
+        cast_from_empty(e),
         no,
         cast_to_panic(e),
         body(
@@ -529,7 +520,7 @@ def _objs(e, x, tg):
                                     e.mb.field(
                                         graft(e, e.v("data")),
                                         e.call(
-                                            e.lower(e.v("idx")),
+                                            fn_of(e, e.lower(e.v("idx"))),
                                             e.tup(graft(e, a(e, "argument")), graft(e, e.v("len"))),
                                         ),
                                     )
@@ -546,7 +537,7 @@ def _objs(e, x, tg):
                         "lcv",
                         staged(
                             e.call(
-                                e.lower(e.v("range")),
+                                fn_of(e, e.lower(e.v("range"))),
                                 e.tup(graft(e, e.v("v0")), graft(e, e.v("v1")), graft(e, e.v("len"))),
                             )
                         ),
@@ -704,6 +695,9 @@ def module(e, kind):
         *size_of(e, "slice.type", e.v("elem"), "elem_size"),
     ]
     _deps(e, tg, parts)
+    parts.append(e.let("i32", e.lower(e.v("i32"))))
+    parts.append(e.let("pelem", e.call(e.lower(e.fld(e.v("lib"), "ptr")), e.v("elem"))))
+    parts.append(e.let("of_i", mk(e, "slof", *[p(f, e.v(f)) for f in BASE])))
     parts.append(e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e)))))))
     const_fn(e, x, "slice_b", "slice.type", body(e, *parts))
     x.append(e.finish(e.v("d")))

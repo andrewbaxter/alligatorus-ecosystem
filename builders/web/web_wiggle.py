@@ -47,16 +47,16 @@ def shaders(e, out):
             e.let(
                 "x",
                 e.mb.operator_sub(
-                    e.call(_g(e, "float"), e.mb.operator_shl(e.mb.operator_and(id_, e.n(1)), e.n(2))), e.n(1)
+                    e.mb.as_(e.mb.operator_shl(e.mb.operator_and(id_, e.n(1)), e.n(2)), _g(e, "float")), e.n(1)
                 ),
             ),
             e.let(
                 "y",
                 e.mb.operator_sub(
-                    e.call(_g(e, "float"), e.mb.operator_shl(e.mb.operator_and(id_, e.n(2)), e.n(1))), e.n(1)
+                    e.mb.as_(e.mb.operator_shl(e.mb.operator_and(id_, e.n(2)), e.n(1)), _g(e, "float")), e.n(1)
                 ),
             ),
-            e.mb.set(e.lower(e.v("gl_Position")), e.call(_g(e, "vec4"), e.tup(e.v("x"), e.v("y"), e.n(0), e.n(1)))),
+            e.mb.set(e.lower(e.v("gl_Position")), e.mb.as_(e.tup(e.v("x"), e.v("y"), e.n(0), e.n(1)), _g(e, "vec4"))),
         )
     )
     u = e.lower(e.v("u"))
@@ -106,12 +106,14 @@ def shaders(e, out):
             e.let("cov", _fn_tup(e, "smoothstep", e.mb.operator_neg(e.v("aa")), e.v("aa"), e.v("dist"))),
             e.mb.set(
                 e.lower(e.v("color")),
-                e.call(
-                    _g(e, "vec4"),
+                e.mb.as_(
                     e.tup(
-                        _fn_tup(e, "mix", e.call(_g(e, "vec3"), e.n(0)), e.call(_g(e, "vec3"), e.n(0.5)), e.v("cov")),
+                        _fn_tup(
+                            e, "mix", e.mb.as_(e.n(0), _g(e, "vec3")), e.mb.as_(e.n(0.5), _g(e, "vec3")), e.v("cov")
+                        ),
                         e.n(1),
                     ),
+                    _g(e, "vec4"),
                 ),
             ),
         )
@@ -327,7 +329,9 @@ def module(e):
             e.let("cw", _call(e, "h_client_width", e.v("canvas"))),
             e.let(
                 "px",
-                e.mb.as_(e.mb.operator_mul(e.mb.as_(e.v("cw"), e.lower(e.v("t_f64"))), e.v("dpr")), e.lower(e.v("t_i32"))),
+                e.mb.as_(
+                    e.mb.operator_mul(e.mb.as_(e.v("cw"), e.lower(e.v("t_f64"))), e.v("dpr")), e.lower(e.v("t_i32"))
+                ),
             ),
             _call(e, "h_width", e.v("canvas"), e.mb.as_(px, e.lower(e.v("t_u32")))),
             _call(e, "h_height", e.v("canvas"), e.mb.as_(px, e.lower(e.v("t_u32")))),

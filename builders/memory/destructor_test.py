@@ -6,6 +6,7 @@ must fail to compile.
 """
 
 from ..root_mode import APP, root_mode_finish
+from ..target_mb import fn_of
 
 ERR = "err"
 
@@ -88,12 +89,12 @@ def module(e, mode):
     puts = e.lower(e.fld(e.v("c"), "puts"))
     if mode == APP:
         body = e.seq(
-            e.let("a", e.call(_lo(e, "owned_str"), _lo(e, "s_a"))),
-            e.let("b", e.call(_lo(e, "owned_str"), _lo(e, "s_b"))),
+            e.let("a", e.mb.as_(_lo(e, "s_a"), _lo(e, "owned_str"))),
+            e.let("b", e.mb.as_(_lo(e, "s_b"), _lo(e, "owned_str"))),
             e.let("c2", e.call(e.fld(e.v("b"), "move"), e.tup())),
-            e.mb.set(e.v("a"), e.call(_lo(e, "owned_str"), _lo(e, "s_a2"))),
-            e.let("c3", e.call(_lo(e, "owned_str"), _lo(e, "s_c"))),
-            e.call(_lo(e, "consume"), e.call(e.fld(e.v("c3"), "move"), e.tup())),
+            e.mb.set(e.v("a"), e.mb.as_(_lo(e, "s_a2"), _lo(e, "owned_str"))),
+            e.let("c3", e.mb.as_(_lo(e, "s_c"), _lo(e, "owned_str"))),
+            e.call(fn_of(e, _lo(e, "consume")), e.call(e.fld(e.v("c3"), "move"), e.tup())),
             e.call(puts, e.v("a")),
             e.call(puts, _lo(e, "s_end")),
             e.ret(e.n(0)),
@@ -116,7 +117,7 @@ def module(e, mode):
         top.append(root_mode_finish(APP, e, e.v("llvm"), e.v("ll")))
     elif mode == ERR:
         body = e.seq(
-            e.let("a", e.call(_lo(e, "owned_str"), _lo(e, "s_a"))),
+            e.let("a", e.mb.as_(_lo(e, "s_a"), _lo(e, "owned_str"))),
             e.if_only(e.mb.operator_gt(e.v("x"), e.n(0)), e.seq(e.let("m", e.call(e.fld(e.v("a"), "move"), e.tup())))),
         )
         top.append(

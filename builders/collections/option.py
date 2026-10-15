@@ -4,8 +4,9 @@ builder.
 `option.type(elem)` yields `{type, some, none, of}` for a constant element type `elem` without a destructor. An
 option is the target's tuple `(i32, elem)` (the tag, zero for none, and the payload, a zero of `elem` when none)
 viewed as its own type: it binds, is assigned, passed and returned exactly like that tuple, but exposes no
-components. `some(v)`, `none(())` and `of((tag, v))` are callable types, so modules may hold them in lowered setup
-blocks and bodies lower them. An option is read with `match`: the type implements `eval.aspect_union` (variants
+components. `some(v)`, `none(())` and `of((tag, v))` are function values, the empty values of constructor types (returned too,
+as `some_t`, `none_t` and `of_t`, for types that carry them); modules hold them in lowered setup blocks and bodies
+lower them. An option is read with `match`: the type implements `eval.aspect_union` (variants
 `some` with the payload and `none` with the target's unit), whose `test` compares the tag and whose `extract` yields
 the payload for the case to bind.
 """
@@ -13,14 +14,15 @@ the payload for the case to bind.
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
+    cast_from_empty,
+    can_cast_from_unit,
+    fn_of,
     a,
     acc,
     and_b,
     asp_id,
     bim,
     body,
-    can_cast_from_self,
-    cast_from_self,
     cast_to_panic,
     cast_value,
     code_none,
@@ -76,15 +78,6 @@ KINDS = ["some", "none", "of"]
 BASE = ["elem", "i32", "unit", "pt"]
 SOME = 0
 
-# The setup staged in the caller's context sits two below the module, as in slice.py.
-SETUP_MOD = 2
-
-
-def _up(e, expr, depth):
-    for _ in range(depth):
-        expr = e.lower(expr)
-    return expr
-
 
 class _Target:
     """What differs between the wasm and llvm modules: the import."""
@@ -132,42 +125,22 @@ def _variant(e, key, type_):
 
 
 def _setup(e):
-    """Staged in the caller's context: the option type and its three constructors for `elem`."""
+    """Staged in the caller's context: the option type and the constructor types for `elem` (made in the host body,
+    constants here), and the constructors' function values."""
     out = []
-    out.append(e.let("elem", e.lower(e.v("elem"))))
-    out.append(e.let("i32", _up(e, e.v("i32"), SETUP_MOD)))
-    out.append(e.let("unit", _up(e, e.v("unit"), SETUP_MOD)))
-    out.append(
-        e.let(
-            "pt",
-            e.call(
-                _up(e, e.fld(e.v("lib"), "tuple"), SETUP_MOD), e.list_new(e.mb.eval_type(), e.v("i32"), e.v("elem"))
-            ),
-        )
-    )
-    out.append(
-        e.let(
-            "type",
-            e.mb.as_(
-                e.call(_up(e, e.fld(e.v("ot"), "new"), SETUP_MOD), e.rec(*[p(f, e.v(f)) for f in BASE])),
-                e.mb.eval_type(),
-            ),
-        )
-    )
+    out.append(e.let("type", e.mb.as_(e.lower(e.v("ot_i")), e.mb.eval_type())))
     for kind in KINDS:
-        out.append(
-            e.let(
-                kind,
-                e.mb.as_(
-                    e.call(
-                        _up(e, e.fld(e.v("oct"), "new"), SETUP_MOD),
-                        e.rec(p("kind", e.s(kind)), *[p(f, e.v(f)) for f in BASE]),
-                    ),
-                    e.mb.eval_type(),
-                ),
+        out.append(e.let(kind + "_t", e.mb.as_(e.lower(e.v(kind + "_i")), e.mb.eval_type())))
+        out.append(e.let(kind, fn_of(e, e.lower(e.v(kind + "_i")))))
+    out.append(
+        e.ret(
+            e.rec(
+                p("type", e.v("type")),
+                *[p(k, e.v(k)) for k in KINDS],
+                *[p(k + "_t", e.v(k + "_t")) for k in KINDS],
             )
         )
-    out.append(e.ret(e.rec(p("type", e.v("type")), *[p(k, e.v(k)) for k in KINDS])))
+    )
     return e.mb.seq(out)
 
 
@@ -188,8 +161,8 @@ def _objs(e, x):
         "oct",
         e.cat(e.s("option."), in_(e, "kind"), e.s("("), ty_desc(e, in_(e, "elem")), e.s(")")),
         rt_dispatch(e, e.mb.types_string(), e.aspect_dispatch(asp_id(e, "function"))),
-        can_cast_from_self(e),
-        cast_from_self(e),
+        can_cast_from_unit(e),
+        cast_from_empty(e),
         no,
         cast_to_panic(e),
         body(
@@ -404,6 +377,15 @@ def module(e, kind):
                 ),
             ),
         ),
+        e.let("i32", e.lower(e.v("i32"))),
+        e.let("unit", e.lower(e.v("unit"))),
+        # The pair tuple type `(i32, elem)` the option is a view of.
+        e.let(
+            "pt",
+            e.call(e.lower(e.fld(e.v("lib"), "tuple")), e.list_new(e.mb.eval_type(), e.v("i32"), e.v("elem"))),
+        ),
+        e.let("ot_i", mk(e, "ot", *[p(f, e.v(f)) for f in BASE])),
+        *[e.let(kind + "_i", mk(e, "oct", p("kind", e.s(kind)), *[p(f, e.v(f)) for f in BASE])) for kind in KINDS],
         e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e)))))),
     ]
     const_fn(e, x, "option_b", "option.type", body(e, *parts))

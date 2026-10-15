@@ -21,6 +21,7 @@ from ..target_mb import (
     cast_to_panic,
     code_none,
     const_eval_in,
+    const_fn,
     cv_of,
     cve_has,
     cve_t,
@@ -158,9 +159,9 @@ def module(e):
                                 e,
                                 xx(e),
                                 e.stage(
-                                    e.call(
-                                        e.lower(in_(e, "wrap")),
+                                    e.mb.as_(
                                         e.call(graft(e, e.v("fnv")), graft(e, a(e, "argument"))),
+                                        e.lower(in_(e, "wrap")),
                                     )
                                 ),
                             ),
@@ -510,36 +511,83 @@ def module(e):
     )
     exports = []
     exports.append(p("module", e.s(MODULE)))
+    # The hook kinds as const functions: each calls its kind object's function aspect with the caller's argument.
+    top.append(e.let("gfn_d", e.define()))
     for kind in KINDS:
-        exports.append(
-            p(
-                kind,
-                e.mb.as_(
-                    e.call(
-                        e.fld(e.v("k"), "wop_t_new"),
-                        e.rec(p("kind", e.int_of(_kind_of(kind))), p("wrap", e.v("handle_t"))),
-                    ),
-                    ty(e),
+        top.append(
+            e.let(
+                kind + "_o",
+                e.call(
+                    e.fld(e.v("k"), "wop_t_new"),
+                    e.rec(p("kind", e.int_of(_kind_of(kind))), p("wrap", e.v("handle_t"))),
                 ),
             )
         )
+        const_fn(
+            e,
+            top,
+            kind + "_b",
+            "webidl." + kind,
+            bim(
+                e,
+                asp_iface(e, "function"),
+                "call",
+                e.lower(e.v(kind + "_o")),
+                e.rec(
+                    p("xx", xx(e)),
+                    p("loc", loc(e)),
+                    p(
+                        "self",
+                        cv_of(
+                            e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), e.lower(e.v(kind + "_o")))
+                        ),
+                    ),
+                    p("argument", a(e, "argument")),
+                ),
+            ),
+            d="gfn_d",
+        )
+        exports.append(p(kind, e.fld(e.v(kind + "_b"), "func")))
     exports.append(p("handle", e.v("handle_t")))
     for special in ["global", "callback"]:
         ity = e.call(
             e.fld(e.v("wasm"), "import_t"),
             e.rec(p("module", e.s(MODULE)), p("name", e.s(special)), p("ty", e.fld(e.v("k"), special + "_t"))),
         )
-        exports.append(
-            p(
-                special,
-                e.mb.as_(
-                    e.call(
-                        e.fld(e.v("k"), "wret_new"),
-                        e.rec(p("ity", ity), p("name", e.s(special)), p("wrap", e.v("handle_t"))),
-                    ),
-                    ty(e),
+        top.append(
+            e.let(
+                special + "_o",
+                e.call(
+                    e.fld(e.v("k"), "wret_new"),
+                    e.rec(p("ity", ity), p("name", e.s(special)), p("wrap", e.v("handle_t"))),
                 ),
             )
         )
+        const_fn(
+            e,
+            top,
+            special + "_b",
+            "webidl." + special,
+            bim(
+                e,
+                asp_iface(e, "function"),
+                "call",
+                e.lower(e.v(special + "_o")),
+                e.rec(
+                    p("xx", xx(e)),
+                    p("loc", loc(e)),
+                    p(
+                        "self",
+                        cv_of(
+                            e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), e.lower(e.v(special + "_o")))
+                        ),
+                    ),
+                    p("argument", a(e, "argument")),
+                ),
+            ),
+            d="gfn_d",
+        )
+        exports.append(p(special, e.fld(e.v(special + "_b"), "func")))
+    top.append(e.finish(e.v("gfn_d")))
     top.append(e.ret(e.rec(*exports)))
     return top

@@ -23,7 +23,6 @@ from ..target_mb import (
     bim0,
     body,
     bool_t,
-    cast_from_self,
     cast_to_panic,
     cast_value,
     code_none,
@@ -53,6 +52,7 @@ from ..target_mb import (
     mk,
     must_v,
     ok_cve,
+    or_b,
     outer,
     reinterpret,
     ret_m,
@@ -63,6 +63,7 @@ from ..target_mb import (
     ty,
     ty_desc,
     type_aspect,
+    type_can_cast_from,
     unwrap_m,
     xx,
 )
@@ -195,8 +196,24 @@ def _host_fns(e, x):
 def _wrapper_casts(e, under):
     """can_cast_from / cast_from / can_cast_to / cast_to for a wrapper that reads as `under`."""
     return [
-        body(e, e.ret(is_equal(e, xx(e), outer(e), a(e, "source_type")))),
-        cast_from_self(e),
+        # An `under` value casts to the wrapper (wrapping it); a wrapped value is its own type.
+        body(
+            e,
+            e.ret(
+                or_b(
+                    e,
+                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
+                    type_can_cast_from(e, xx(e), loc(e), under(), a(e, "source_type")),
+                )
+            ),
+        ),
+        body(
+            e,
+            e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.if_only(e.not_(cve_has(e, a(e, "cv"))), ret_m(e, err_cve(e, loc(e), "cast source has no value"))),
+            e.let("v", unwrap_m(e, cast_value(e, xx(e), loc(e), under(), a(e, "cv")), cve_t(e))),
+            e.ret(ok_cve(e, _retag_m(e, e.v("v"), outer(e), cve_t(e)))),
+        ),
         e.if_else(
             is_equal(e, xx(e), outer(e), a(e, "dest_type")),
             e.mb.as_(e.b(True), bool_t(e)),
@@ -217,32 +234,6 @@ def _wrapper_casts(e, under):
             ),
         ),
     ]
-
-
-def _call_converts(e, x, obj, label):
-    """Calling the wrapper type converts an `under` value into a wrapped value."""
-    x.append(
-        e.impl_interface(
-            e.v(obj),
-            asp_iface(e, "function"),
-            p(
-                "call",
-                body(
-                    e,
-                    e.if_only(
-                        e.not_(cve_has(e, a(e, "argument"))),
-                        ret_m(e, err_cve(e, loc(e), label + ": argument has no value")),
-                    ),
-                    e.let(
-                        "v",
-                        unwrap_m(e, cast_value(e, xx(e), loc(e), in_(e, "under"), a(e, "argument")), cve_t(e)),
-                    ),
-                    e.ret(ok_cve(e, _retag_m(e, e.v("v"), outer(e), cve_t(e)))),
-                ),
-            ),
-            p("exception_type", e.option_type_lowered_none()),
-        )
-    )
 
 
 def _under_drop(e, x, obj):
@@ -500,7 +491,6 @@ def _ro(e, x):
                 asp_id(e, "bind"),
                 asp_id(e, "initial_bind"),
                 e.mb.eval_aspect_drop_dynamic_id(),
-                asp_id(e, "function"),
                 lv(e, "ro_m_id"),
             ],
             type_aspect(e, xx(e), under(), a(e, "key")),
@@ -525,7 +515,6 @@ def _ro(e, x):
         )
     )
     _ref_field(e, x, "ro", under, lambda xx_: in_(e, "under"))
-    _call_converts(e, x, "ro", "readonly")
     _under_drop(e, x, "ro")
     _bind_wrapping(e, x, "ro", "readonly", lambda inner: mk(e, "rob", p("inner", inner), p("ty", outer(e))))
     _plain_binding(
@@ -561,7 +550,6 @@ def _sealed(e, x):
                 asp_id(e, "bind"),
                 asp_id(e, "initial_bind"),
                 e.mb.eval_aspect_drop_dynamic_id(),
-                asp_id(e, "function"),
                 lv(e, "sealed_m_id"),
             ],
             type_aspect(e, xx(e), under(), a(e, "key")),
@@ -578,7 +566,6 @@ def _sealed(e, x):
             ),
         ),
     )
-    _call_converts(e, x, "sealed", "sealed")
     _under_drop(e, x, "sealed")
     _bind_wrapping(e, x, "sealed", "sealed", lambda inner: _sb(e, inner, outer(e), e.b(False)))
     # the binding: loads yield a reference that knows whether the binding is sealed
