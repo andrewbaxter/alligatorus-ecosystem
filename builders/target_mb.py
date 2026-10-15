@@ -646,38 +646,6 @@ def cast_from_empty(e):
     )
 
 
-def record_fields(e, label, cv, bind):
-    """Binds `bind` to the fields of the record code-value `cv` (a map from name to eresult(cve)), else errors out
-    of the const function."""
-    return [
-        e.let(bind + "_rk", lookup(e, xx(e), cve_type(e, cv), asp_iface(e, "record"))),
-        e.if_only(
-            e.not_(e.fld(e.v(bind + "_rk"), "is_some")),
-            ret_m(e, err_cve(e, loc(e), label + ": expected a record")),
-        ),
-        e.let(
-            bind,
-            bim(
-                e,
-                asp_iface(e, "record"),
-                "take_fields",
-                e.fld(e.v(bind + "_rk"), "value"),
-                e.rec(p("xx", xx(e)), p("loc", loc(e)), p("value", cve_value(e, cv))),
-            ),
-        ),
-    ]
-
-
-def factory_result(e, factory, arg, depth):
-    """In a const function's host body: the result of calling the const function `factory` (a module-level value,
-    `depth` stages up) with the constant `arg` (a host local), as a code value; constants are only passed in staged
-    code, so the call is staged and evaluated in the caller's context."""
-    expr = factory
-    for _ in range(depth):
-        expr = e.lower(expr)
-    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(e.call(expr, e.lower(arg)))))
-
-
 def def_empty_binding(e, x, obj, desc):
     """A binding of an empty value: using it yields the empty value of the stored type, dropping it is nothing."""
     def_obj(e, x, obj, desc, e.rec(p("ty", ty(e))))
