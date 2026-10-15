@@ -1,93 +1,58 @@
 """slice-wasm.atz / slice-llvm.atz: bounds-checked views over a run of elements, one module per target from this
 builder.
 
-`slice.type(elem)` yields `{of, of_t}` for a constant element type `elem` (which must have values.atz's `size` aspect):
-`of((ptr, len))` is the slice of `len` elements starting at `ptr` (a `ptr(elem)`); `of` is a function value (the empty
-value of the callable type `of_t`, which is also yielded), so modules may hold it in lowered setup blocks and bodies
-lower it. A slice is a compile-time pair of two runtime values, the data pointer and the i32 length, so it binds and
-loads like any value and is dropped with its parts; it has no single machine representation, so it cannot be a function
-parameter or return value. On a slice value: `len` and `data` are its parts; `at(i)` is the element place; `sub((from,
-to))` is the sub-slice. Both trap (wasm `unreachable`, llvm `llvm.trap`) when the index or range is out of bounds,
-through the `slice_idx` and `slice_range` dependencies (`func_dep`), which a module gets when its code first uses them.
-A slice never owns its elements.
+`slice.type(elem)` yields `{type, idx}` for a constant element type `elem` (which must have values.atz's `size` aspect).
+A slice is the target's tuple `(ptr(elem), i32)` (the data pointer and the length) viewed as its own type, so it
+binds, is assigned, passed and returned exactly like that tuple; `(ptr, len) as type` makes one. On a slice value:
+`len` and `data` are its parts (places); `at(i)` is the element place; `sub((from, to))` is the sub-slice. Both trap
+(wasm `unreachable`, llvm `llvm.trap`) when the index or range is out of bounds, through the `slice_idx` and
+`slice_range` dependencies (`func_dep`), which a module gets when its code first uses them; `idx` is the
+`slice_idx` dependency's callable type, for other bounds-checked element access (vec's `at`). A slice never owns its
+elements.
 """
 
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
-    cast_from_empty,
-    can_cast_from_unit,
-    fn_of,
     a,
-    acc,
-    accessor,
-    and_b,
-    asp_id,
     asp_iface,
     bim,
-    bim0,
     body,
-    bool_t,
-    call_result,
-    cast_to_panic,
-    cast_value,
-    code_none,
-    code_seq,
-    code_t,
     const_eval_in,
     const_fn,
-    cv_of,
-    cve_code,
+    const_type_arg,
     cve_has,
     cve_type,
     cve_value,
-    def_iface,
-    def_obj,
     err_cve,
+    fn_of,
     graft,
-    has,
-    has_b,
+    handle_methods,
+    handle_type,
     in_,
     int_t,
-    is_equal,
-    loc,
     lookup,
-    lookup_v,
-    lv,
-    mk,
-    mk_arg,
-    must_v,
-    no_cast_to,
-    ok_cve,
-    outer,
-    reinterpret,
+    loc,
     ret_m,
-    rt_bind_impl,
-    rt_dispatch,
-    rt_lift_impl,
-    rt_use_impl,
-    self_type,
+    retag_values,
     str_,
-    t,
     to_str,
     ty,
     ty_desc,
     unwrap_cve_m,
-    unwrap_m,
     xx,
 )
-from .vec import const_type_arg, size_of
+from .vec import size_of
 
 WASM = "wasm"
 LLVM = "llvm"
 
 FILES = {WASM: "slice-wasm.atz", LLVM: "slice-llvm.atz"}
 
-PARTS = ["len", "data"]
 METHODS = ["at", "sub"]
-# What a slice type carries besides its two parts: the element and pointer types, i32, the two checking dependencies
-# (callable types) and the element size.
-BASE = ["elem", "pelem", "i32", "idx", "range", "elem_size"]
+# What a slice type carries: the element, pointer, i32 and tuple types, the two checking dependencies (callable
+# types) and the element size.
+BASE = ["elem", "pelem", "i32", "pt", "idx", "range", "elem_size"]
 
 # Stage depths, as in vec.py: dependency bodies are staged in the const function's host body, two below the module;
 # the setup staged in the caller's context also sits two below the module.
@@ -123,46 +88,6 @@ class _Target:
             addr = e.mb.operator_add(e.mb.as_(base, e.lower(e.v("i32"))), e.mb.operator_mul(idx, size))
             return e.mb.as_(addr, ptr_type)
         return e.mb.operator_add(e.mb.as_(base, ptr_type), idx)
-
-
-def _binding_t(e):
-    return e.mb.eval_binding()
-
-
-def _setter_t(e):
-    return e.mb.builtin("eval", "binding_setter")
-
-
-def _rec_xl(e, *fields):
-    return e.rec(p("xx", xx(e)), p("loc", loc(e)), *fields)
-
-
-def _staged(e, expr):
-    return const_eval_in(e, xx(e), e.stage(expr))
-
-
-def _codes(e, ret_t, *codes):
-    """The target's sequence of the host code values `codes`; errors return `ret_t`."""
-    return unwrap_m(e, code_seq(e, *codes), ret_t)
-
-
-def _codes_v(e, *codes):
-    """`_codes` where the method cannot return errors (binding use)."""
-    return must_v(e, "slice", code_seq(e, *codes), "sequencing codes")
-
-
-def _val_only(e, cv):
-    return cv_of(e, code_none(e, loc(e)), cve_value(e, cv))
-
-
-def _sl_new(e, slt, data_cv, len_cv):
-    """A slice type like `slt` (an `sl`) with the parts `data_cv` and `len_cv` (value-only code values)."""
-    return mk(e, "sl", *[p(f, acc(e, xx(e), slt, "sl_m", f)) for f in BASE], p("data", data_cv), p("len", len_cv))
-
-
-def _slice_value(e, code, slt):
-    """The slice value of type `slt`, carrying `code` (what computes its parts)."""
-    return cv_of(e, code, e.call(e.eval_builtin("value_object_const"), e.rec(p("type", slt), p("data", e.tup()))))
 
 
 def _tuple_args(e, label, cv, count):
@@ -239,428 +164,85 @@ def _deps(e, tg, out):
 
 
 def _setup(e):
-    """Staged in the caller's context: the `of` constructor type for `elem` (made in the host body, a constant here)
-    and its function value."""
+    """Staged in the caller's context: the slice type for `elem` over the lowered dependencies and types."""
     out = []
-    out.append(e.let("of_t", e.mb.as_(e.lower(e.v("of_i")), e.mb.eval_type())))
-    out.append(e.let("of", fn_of(e, e.lower(e.v("of_i")))))
-    out.append(e.ret(e.rec(p("of", e.v("of")), p("of_t", e.v("of_t")))))
+    for name in BASE:
+        out.append(e.let(name, e.lower(e.v(name))))
+    out.append(e.let("type", e.call(_up(e, e.fld(e.v("sl"), "new"), SETUP_MOD), e.rec(*[p(f, e.v(f)) for f in BASE]))))
+    out.append(e.ret(e.rec(p("type", e.v("type")), p("idx", e.v("idx")))))
     return e.mb.seq(out)
 
 
 def _objs(e, x, tg):
-    base_fields = [p(f, int_t(e) if f == "elem_size" else ty(e)) for f in BASE]
-    sl_fields = base_fields + [p("data", e.mb.types_cve()), p("len", e.mb.types_cve())]
-    def_iface(e, x, "slof_m", *base_fields)
-    def_obj(e, x, "slof", "slice constructor", e.rec(*base_fields))
-    def_iface(e, x, "sl_m", *sl_fields)
-    def_obj(e, x, "sl", "slice type", e.rec(*sl_fields))
-    def_obj(e, x, "slmeth", "slice method", e.rec(p("kind", str_(e)), p("sl", ty(e))))
-    slb_fields = [p("sl", ty(e)), p("bdata", _binding_t(e)), p("blen", _binding_t(e))]
-    def_obj(e, x, "slb", "slice binding", e.rec(*slb_fields))
-    for name, typ in slb_fields:
-        accessor(e, x, "slb", name, typ)
-    def_obj(e, x, "slsetter", "slice part setter", e.tup())
-    no = no_cast_to(e)
+    fields = [p(f, int_t(e) if f == "elem_size" else ty(e)) for f in BASE]
 
-    # ---- the constructor `of((ptr, len))`: a constant callable that modules bind and export ----
-    x.append(e.impl_interface(e.v("slof"), t(e, "slof_m"), *[p(f, in_(e, f)) for f in BASE]))
-    self_type(
-        e,
-        x,
-        "slof",
-        e.cat(e.s("slice.of("), ty_desc(e, in_(e, "elem")), e.s(")")),
-        rt_dispatch(e, e.mb.types_string(), e.aspect_dispatch(asp_id(e, "function"))),
-        can_cast_from_unit(e),
-        cast_from_empty(e),
-        no,
-        cast_to_panic(e),
-        body(
-            e,
-            e.ret(
-                and_b(
-                    e,
-                    has(e, xx(e), a(e, "other"), "slof_m"),
-                    is_equal(e, xx(e), in_(e, "elem"), acc(e, xx(e), a(e, "other"), "slof_m", "elem")),
-                )
-            ),
-        ),
-    )
-    rt_lift_impl(e, x, "slof")
-    rt_bind_impl(e, x, "slof", e.mb.types_string())
-    rt_use_impl(e, x, "slof")
-    x.append(
-        e.impl_interface(
-            e.v("slof"),
-            asp_iface(e, "function"),
-            p(
-                "call",
-                body(
-                    e,
-                    *_tuple_args(e, "slice.of", a(e, "argument"), 2),
-                    e.let("c0", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), in_(e, "pelem"), _arg(e, 0)))),
-                    e.let("c1", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), in_(e, "i32"), _arg(e, 1)))),
-                    e.let(
-                        "code",
-                        _codes(
-                            e,
-                            e.mb.types_cve(),
-                            cve_code(e, a(e, "self")),
-                            cve_code(e, e.v("c0")),
-                            cve_code(e, e.v("c1")),
-                        ),
-                    ),
-                    e.ret(
-                        ok_cve(
-                            e,
-                            _slice_value(
-                                e,
-                                e.v("code"),
-                                mk(
-                                    e,
-                                    "sl",
-                                    *[p(f, in_(e, f)) for f in BASE],
-                                    p("data", _val_only(e, e.v("c0"))),
-                                    p("len", _val_only(e, e.v("c1"))),
-                                ),
-                            ),
-                        )
-                    ),
-                ),
-            ),
-            p("exception_type", e.option_type_lowered_none()),
-        )
-    )
-
-    # ---- the slice type ----
-    x.append(e.impl_interface(e.v("sl"), t(e, "sl_m"), *[p(f, in_(e, f)) for f in BASE + PARTS]))
-    self_type(
+    # The parts: places over the receiver cast to the tuple (a handle casts to its representation).
+    places = {
+        "data": lambda self_as: e.mb.field(self_as("pt"), e.n(0)),
+        "len": lambda self_as: e.mb.field(self_as("pt"), e.n(1)),
+    }
+    meth = handle_type(
         e,
         x,
         "sl",
-        e.cat(e.s("slice("), ty_desc(e, in_(e, "elem")), e.s(")")),
-        e.aspect_dispatch(asp_id(e, "field"), e.mb.eval_aspect_drop_dynamic_id(), asp_id(e, "bind"), lv(e, "sl_m_id")),
-        no,
-        cast_to_panic(e),
-        no,
-        cast_to_panic(e),
-        body(
-            e,
-            e.ret(
-                and_b(
-                    e,
-                    has(e, xx(e), a(e, "other"), "sl_m"),
-                    is_equal(e, xx(e), in_(e, "elem"), acc(e, xx(e), a(e, "other"), "sl_m", "elem")),
-                )
-            ),
-        ),
+        "sl_m",
+        "slice",
+        fields,
+        places,
+        METHODS,
+        under="pt",
+        construct=True,
+        desc_expr=e.cat(e.s("slice("), ty_desc(e, in_(e, "elem")), e.s(")")),
+        identity="elem",
     )
-    # The parts are a pointer and an i32: nothing to drop.
-    x.append(
-        e.impl_interface(
-            e.v("sl"), e.mb.eval_aspect_drop_dynamic(), p("drop", e.eresult_ok(code_t(e), code_none(e, loc(e))))
-        )
-    )
-    br_t = e.mb.types_bind_result()
 
-    def bind_part(bind, part_type, cv):
-        return e.let(
-            bind,
-            unwrap_m(
-                e,
-                bim(
-                    e,
-                    e.mb.eval_aspect_bind(),
-                    "bind",
-                    lookup_v(e, xx(e), part_type, e.mb.eval_aspect_bind()),
-                    _rec_xl(e, p("cv", cv)),
-                ),
-                br_t,
-            ),
-        )
+    def tv():
+        return graft(e, e.v("tv"))
 
-    x.append(
-        e.impl_interface(
-            e.v("sl"),
-            e.mb.eval_aspect_bind(),
-            p(
-                "bind",
-                body(
-                    e,
-                    # The slice's carried code computes both parts; it goes before the data part's store.
-                    bind_part("rd", in_(e, "pelem"), cv_of(e, cve_code(e, a(e, "cv")), cve_value(e, in_(e, "data")))),
-                    bind_part("rl", in_(e, "i32"), _val_only(e, in_(e, "len"))),
-                    e.let("code", _codes(e, br_t, e.fld(e.v("rd"), "code"), e.fld(e.v("rl"), "code"))),
-                    e.ret(
-                        e.eresult_ok(
-                            br_t,
-                            e.call(
-                                e.mb.eval_bind_result(),
-                                e.rec(
-                                    p("code", e.v("code")),
-                                    p(
-                                        "binding",
-                                        mk(
-                                            e,
-                                            "slb",
-                                            p("sl", outer(e)),
-                                            p("bdata", e.fld(e.v("rd"), "binding")),
-                                            p("blen", e.fld(e.v("rl"), "binding")),
-                                        ),
-                                    ),
-                                ),
+    def data():
+        return e.mb.as_(e.mb.field(tv(), e.n(0)), e.lower(e.v("pelem")))
+
+    def length():
+        return e.mb.field(tv(), e.n(1))
+
+    def method_body(kind):
+        if kind == "at":
+            return e.mb.field(
+                data(), e.call(fn_of(e, e.lower(e.v("idx"))), e.tup(graft(e, a(e, "argument")), length()))
+            )
+        if kind == "sub":
+            # sub((from, to)): the arguments run once each; the range check traps before the pointer moves.
+            return e.mb.labeled(
+                "sub",
+                e.seq(
+                    e.let("from", graft(e, _arg(e, 0))),
+                    e.let("to", graft(e, _arg(e, 1))),
+                    e.let("n", e.call(fn_of(e, e.lower(e.v("range"))), e.tup(e.v("from"), e.v("to"), length()))),
+                    e.mb.return_to(
+                        "sub",
+                        e.mb.as_(
+                            e.tup(
+                                tg.elem_ptr(e, data(), e.v("from"), e.lower(e.v("elem_size")), e.lower(e.v("pelem"))),
+                                e.v("n"),
                             ),
-                        )
-                    ),
-                ),
-            ),
-        )
-    )
-    x.append(
-        e.impl_interface(
-            e.v("sl"),
-            asp_iface(e, "field"),
-            p(
-                "field",
-                body(
-                    e,
-                    e.if_only(
-                        e.not_(has_b(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const())),
-                        ret_m(e, err_cve(e, loc(e), "slice: field must be a constant string")),
-                    ),
-                    e.let(
-                        "key",
-                        bim(
-                            e,
-                            e.mb.eval_aspect_string_const(),
-                            "get",
-                            lookup_v(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const()),
-                            cve_value(e, a(e, "key")),
+                            e.lower(e.v("slt")),
                         ),
                     ),
-                    *[
-                        e.if_only(
-                            e.eq(e.v("key"), e.s(part)),
-                            ret_m(e, ok_cve(e, cv_of(e, cve_code(e, a(e, "self")), cve_value(e, in_(e, part))))),
-                        )
-                        for part in PARTS
-                    ],
-                    *[
-                        e.if_only(
-                            e.eq(e.v("key"), e.s(m)),
-                            ret_m(
-                                e,
-                                ok_cve(
-                                    e,
-                                    cv_of(
-                                        e,
-                                        cve_code(e, a(e, "self")),
-                                        e.call(
-                                            e.eval_builtin("value_object_const"),
-                                            e.rec(
-                                                p("type", mk(e, "slmeth", p("kind", e.s(m)), p("sl", outer(e)))),
-                                                p("data", e.tup()),
-                                            ),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                        )
-                        for m in METHODS
-                    ],
-                    e.ret(err_cve(e, loc(e), e.cat(e.s("slice has no field "), e.v("key")))),
                 ),
-            ),
-            p("type_opt", e.option_type_lowered_none()),
-            p(
-                "keys",
-                e.list_new(e.mb.types_constkey(), *[e.mb.as_(e.s(k), e.mb.types_constkey()) for k in PARTS + METHODS]),
-            ),
-        )
-    )
+            )
+        raise AssertionError(kind)
 
-    # ---- methods: a callable whose type carries the slice type (and so its parts) ----
-    self_type(
+    handle_methods(
         e,
         x,
-        "slmeth",
-        e.cat(e.s("slice."), in_(e, "kind")),
-        e.aspect_dispatch(asp_id(e, "function")),
-        no,
-        cast_to_panic(e),
-        no,
-        cast_to_panic(e),
-        no,
+        meth,
+        "sl_m",
+        fields,
+        METHODS,
+        method_body,
+        prelude=[e.let("tv", retag_values(e, e.v("recv"), e.v("pt"))), e.let("slt", in_(e, "ht"))],
+        kind_prelude={"sub": _tuple_args(e, "slice.sub", a(e, "argument"), 2)},
     )
-
-    def staged(expr):
-        return unwrap_cve_m(e, _staged(e, expr))
-
-    def sl_field(name):
-        return acc(e, xx(e), in_(e, "sl"), "sl_m", name)
-
-    x.append(
-        e.impl_interface(
-            e.v("slmeth"),
-            asp_iface(e, "function"),
-            p(
-                "call",
-                body(
-                    e,
-                    *[e.let(f, sl_field(f)) for f in ["pelem", "i32", "idx", "range", "elem_size", "data", "len"]],
-                    e.if_only(
-                        e.eq(in_(e, "kind"), e.s("at")),
-                        e.seq(
-                            *call_result(
-                                e,
-                                staged(
-                                    e.mb.field(
-                                        graft(e, e.v("data")),
-                                        e.call(
-                                            fn_of(e, e.lower(e.v("idx"))),
-                                            e.tup(graft(e, a(e, "argument")), graft(e, e.v("len"))),
-                                        ),
-                                    )
-                                ),
-                            )
-                        ),
-                    ),
-                    # sub((from, to)): the arguments' codes run once; their values feed the range check and the
-                    # pointer arithmetic.
-                    *_tuple_args(e, "slice.sub", a(e, "argument"), 2),
-                    e.let("v0", _val_only(e, _arg(e, 0))),
-                    e.let("v1", _val_only(e, _arg(e, 1))),
-                    e.let(
-                        "lcv",
-                        staged(
-                            e.call(
-                                fn_of(e, e.lower(e.v("range"))),
-                                e.tup(graft(e, e.v("v0")), graft(e, e.v("v1")), graft(e, e.v("len"))),
-                            )
-                        ),
-                    ),
-                    e.let(
-                        "dcv",
-                        staged(
-                            tg.elem_ptr(
-                                e,
-                                graft(e, e.v("data")),
-                                graft(e, e.v("v0")),
-                                e.lower(e.v("elem_size")),
-                                e.lower(e.v("pelem")),
-                            )
-                        ),
-                    ),
-                    e.let(
-                        "code",
-                        _codes(
-                            e,
-                            e.mb.types_cve(),
-                            cve_code(e, a(e, "self")),
-                            cve_code(e, _arg(e, 0)),
-                            cve_code(e, _arg(e, 1)),
-                            cve_code(e, e.v("lcv")),
-                            cve_code(e, e.v("dcv")),
-                        ),
-                    ),
-                    e.ret(
-                        ok_cve(
-                            e,
-                            _slice_value(
-                                e,
-                                e.v("code"),
-                                _sl_new(e, in_(e, "sl"), _val_only(e, e.v("dcv")), _val_only(e, e.v("lcv"))),
-                            ),
-                        )
-                    ),
-                ),
-            ),
-            p("exception_type", e.option_type_lowered_none()),
-        )
-    )
-
-    # ---- the binding: the two parts' bindings ----
-
-    def part_use(binding, code):
-        return bim(
-            e, _binding_t(e), "use", binding, _rec_xl(e, p("setter", mk_arg(e, "slsetter", e.tup())), p("code", code))
-        )
-
-    def slb_new(bdata, blen):
-        return mk(e, "slb", p("sl", in_(e, "sl")), p("bdata", bdata), p("blen", blen))
-
-    x.append(
-        e.impl_interface(
-            e.v("slb"),
-            _binding_t(e),
-            p(
-                "use",
-                body(
-                    e,
-                    e.let("ud", part_use(in_(e, "bdata"), a(e, "code"))),
-                    e.let("ul", part_use(in_(e, "blen"), code_none(e, loc(e)))),
-                    e.ret(
-                        _slice_value(
-                            e,
-                            _codes_v(e, cve_code(e, e.v("ud")), cve_code(e, e.v("ul"))),
-                            _sl_new(e, in_(e, "sl"), _val_only(e, e.v("ud")), _val_only(e, e.v("ul"))),
-                        )
-                    ),
-                ),
-            ),
-            p(
-                "drop",
-                body(
-                    e,
-                    e.let("dl", unwrap_m(e, bim(e, _binding_t(e), "drop", in_(e, "blen"), _rec_xl(e)), code_t(e))),
-                    e.let("dd", unwrap_m(e, bim(e, _binding_t(e), "drop", in_(e, "bdata"), _rec_xl(e)), code_t(e))),
-                    e.ret(e.eresult_ok(code_t(e), _codes(e, code_t(e), e.v("dl"), e.v("dd")))),
-                ),
-            ),
-            p(
-                "fork",
-                slb_new(
-                    bim0(e, _binding_t(e), "fork", in_(e, "bdata")), bim0(e, _binding_t(e), "fork", in_(e, "blen"))
-                ),
-            ),
-            p(
-                "merge",
-                body(
-                    e,
-                    e.let("ds", e.list_new(_binding_t(e))),
-                    e.let("ls", e.list_new(_binding_t(e))),
-                    e.foreach(
-                        a(e, "others"),
-                        "o",
-                        e.seq(
-                            e.let("ob", reinterpret(e, e.v("o"), "slb")),
-                            e.push(e.v("ds"), e.call_m(e.v("ob"), "bdata", e.tup())),
-                            e.push(e.v("ls"), e.call_m(e.v("ob"), "blen", e.tup())),
-                        ),
-                    ),
-                    e.let(
-                        "md",
-                        unwrap_m(
-                            e,
-                            bim(e, _binding_t(e), "merge", in_(e, "bdata"), _rec_xl(e, p("others", e.v("ds")))),
-                            _binding_t(e),
-                        ),
-                    ),
-                    e.let(
-                        "ml",
-                        unwrap_m(
-                            e,
-                            bim(e, _binding_t(e), "merge", in_(e, "blen"), _rec_xl(e, p("others", e.v("ls")))),
-                            _binding_t(e),
-                        ),
-                    ),
-                    e.ret(e.eresult_ok(_binding_t(e), slb_new(e.v("md"), e.v("ml")))),
-                ),
-            ),
-        )
-    )
-    # A slice's parts cannot be assigned through it.
-    x.append(e.impl_interface(e.v("slsetter"), _setter_t(e), p("set", e.mb.as_(e.b(False), bool_t(e)))))
 
 
 def module(e, kind):
@@ -694,7 +276,12 @@ def module(e, kind):
     _deps(e, tg, parts)
     parts.append(e.let("i32", e.lower(e.v("i32"))))
     parts.append(e.let("pelem", e.call(e.lower(e.fld(e.v("lib"), "ptr")), e.v("elem"))))
-    parts.append(e.let("of_i", mk(e, "slof", *[p(f, e.v(f)) for f in BASE])))
+    parts.append(
+        e.let(
+            "pt",
+            e.call(e.lower(e.fld(e.v("lib"), "tuple")), e.list_new(e.mb.eval_type(), e.v("pelem"), e.v("i32"))),
+        )
+    )
     parts.append(e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e)))))))
     const_fn(e, x, "slice_b", "slice.type", body(e, *parts))
     x.append(e.finish(e.v("d")))

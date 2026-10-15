@@ -76,6 +76,7 @@ from ..target_mb import (
     outer,
     p_,
     push,
+    recv_of,
     reinterpret,
     ret_m,
     retag_runtime,
@@ -456,7 +457,7 @@ def _conv_methods(e, x):
                                     xx(e),
                                     loc(e),
                                     _xmod(e),
-                                    cv_of(e, cve_code(e, a(e, "self")), cve_value(e, in_(e, "self"))),
+                                    cv_of(e, cve_code(e, a(e, "self")), cve_value(e, recv_of(e))),
                                 ),
                                 cve_t(e),
                             ),
@@ -6936,13 +6937,23 @@ def module(e):
                         ),
                     ),
                     e.let("lv", _lval_of(e, e.v("r"))),
+                    # The slot keeps the value's declared type (a type over an llvm value stays that type).
+                    e.let("t0", cve_type(e, a(e, "cv"))),
+                    e.let(
+                        "base",
+                        e.if_else(
+                            has(e, xx(e), e.v("t0"), "lgtype_m"),
+                            acc(e, xx(e), e.v("t0"), "lgtype_m", "base"),
+                            e.v("t0"),
+                        ),
+                    ),
                     e.ret(
                         cv_of(
                             e,
                             cve_code(e, e.v("r")),
                             _lval_mem(
                                 e,
-                                mk(e, "lt_slot", e.p("base", _lv_ty(e, e.v("lv"))), e.p("ptr", _lv_mem(e, e.v("lv")))),
+                                mk(e, "lt_slot", e.p("base", e.v("base")), e.p("ptr", _lv_mem(e, e.v("lv")))),
                                 _lv_mem(e, e.v("lv")),
                             ),
                         )

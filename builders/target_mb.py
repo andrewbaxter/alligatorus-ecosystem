@@ -590,6 +590,17 @@ def voc_t(e):
     return e.mb.builtin("types", "value_object_const")
 
 
+def as_object(e, value):
+    """`value` as a plain host object (a const value's data)."""
+    return e.call(e.mb.must_reinterpret(), e.tup(value, e.mb.builtin("types", "object")))
+
+
+def recv_of(e):
+    """In a bound method's `call`: the receiver, the code value stored as the method value's data."""
+    data = e.fld(e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, a(e, "self")), voc_t(e))), "data")
+    return e.call(e.mb.must_reinterpret(), e.tup(data, cve_t(e)))
+
+
 def lookup_v(e, xx_, typ, iface_type):
     return e.fld(lookup(e, xx_, typ, iface_type), "value")
 
@@ -633,6 +644,38 @@ def cast_from_empty(e):
         e,
         e.ret(ok_cve(e, cv_of(e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), outer(e))))),
     )
+
+
+def record_fields(e, label, cv, bind):
+    """Binds `bind` to the fields of the record code-value `cv` (a map from name to eresult(cve)), else errors out
+    of the const function."""
+    return [
+        e.let(bind + "_rk", lookup(e, xx(e), cve_type(e, cv), asp_iface(e, "record"))),
+        e.if_only(
+            e.not_(e.fld(e.v(bind + "_rk"), "is_some")),
+            ret_m(e, err_cve(e, loc(e), label + ": expected a record")),
+        ),
+        e.let(
+            bind,
+            bim(
+                e,
+                asp_iface(e, "record"),
+                "take_fields",
+                e.fld(e.v(bind + "_rk"), "value"),
+                e.rec(p("xx", xx(e)), p("loc", loc(e)), p("value", cve_value(e, cv))),
+            ),
+        ),
+    ]
+
+
+def factory_result(e, factory, arg, depth):
+    """In a const function's host body: the result of calling the const function `factory` (a module-level value,
+    `depth` stages up) with the constant `arg` (a host local), as a code value; constants are only passed in staged
+    code, so the call is staged and evaluated in the caller's context."""
+    expr = factory
+    for _ in range(depth):
+        expr = e.lower(expr)
+    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(e.call(expr, e.lower(arg)))))
 
 
 def def_empty_binding(e, x, obj, desc):
@@ -921,15 +964,28 @@ def const_type_arg(e, label, cv, bind):
         e.let(bind + "_tk", lookup(e, xx(e), cve_type(e, cv), asp_iface(e, "type"))),
         e.if_only(
             or_b(e, is_runtime(e, cv), e.not_(e.fld(e.v(bind + "_tk"), "is_some"))),
-            ret_m(e, err_cve(e, loc(e), label + ": " + bind + " must be a constant type")),
+            ret_m(
+                e,
+                err_cve(
+                    e,
+                    loc(e),
+                    e.cat(e.s(label + ": " + bind + " must be a constant type, not "), ty_desc(e, cve_type(e, cv))),
+                ),
+            ),
         ),
         e.let(bind, bim(e, asp_iface(e, "type"), "type", e.fld(e.v(bind + "_tk"), "value"), cve_value(e, cv))),
     ]
 
 
-def method_fields(e, x, obj, meth_obj, methods):
+def method_fields(e, x, obj, meth_obj, methods, when=None):
     """`field` on `obj` values: each name in `methods` yields a bound method, a value of the callable type `meth_obj`
-    (fields `op`, the name, and `self`, the receiver) whose call runs the operation."""
+    (field `op`, the name) whose data is the receiver and whose call runs the operation; `when(name)`, when given,
+    is a condition (over the type's fields) for the method to exist."""
+
+    def cond(m):
+        same = e.eq(e.v("key"), e.s(m))
+        return same if when is None else and_b(e, same, when(m))
+
     x.append(
         e.impl_interface(
             e.v(obj),
@@ -955,7 +1011,7 @@ def method_fields(e, x, obj, meth_obj, methods):
                     ),
                     *[
                         e.if_only(
-                            e.eq(e.v("key"), e.s(m)),
+                            cond(m),
                             ret_m(
                                 e,
                                 ok_cve(
@@ -968,17 +1024,14 @@ def method_fields(e, x, obj, meth_obj, methods):
                                             e.rec(
                                                 p(
                                                     "type",
-                                                    mk(
-                                                        e,
-                                                        meth_obj,
-                                                        p("op", e.s(m)),
-                                                        p(
-                                                            "self",
-                                                            cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "self"))),
-                                                        ),
+                                                    mk(e, meth_obj, p("op", e.s(m))),
+                                                ),
+                                                p(
+                                                    "data",
+                                                    as_object(
+                                                        e, cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "self")))
                                                     ),
                                                 ),
-                                                p("data", e.tup()),
                                             ),
                                         ),
                                     ),
@@ -997,8 +1050,9 @@ def method_fields(e, x, obj, meth_obj, methods):
 
 
 def method_type(e, x, obj, desc):
-    """A bound method's type: `{op, self}`, callable (its `function` aspect is implemented by the caller)."""
-    def_obj(e, x, obj, desc, e.rec(p("op", str_(e)), p("self", cve_t(e))))
+    """A bound method's type: `{op}`, callable (its `function` aspect is implemented by the caller); a value's data
+    is the receiver."""
+    def_obj(e, x, obj, desc, e.rec(p("op", str_(e))))
     no = e.mb.as_(e.b(False), bool_t(e))
     self_type(
         e,
@@ -1032,3 +1086,416 @@ def int_as(e, n, type_):
     if is_const_expr(n):
         return e.mb.as_(n, type_)
     return e.call(e.fld(n, "wrap"), type_)
+
+
+def staged_in(e, expr):
+    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(expr)))
+
+
+def codes(e, *codes):
+    return unwrap_m(e, code_seq(e, *codes), e.mb.types_cve())
+
+
+def retag_values(e, cv, typ):
+    """The runtime value of `cv` (a variable reference) viewed as `typ` (values.atz), with the code of `cv`."""
+    retag = e.lower(e.fld(e.v("values"), "retag"))
+    return cv_of(
+        e,
+        cve_code(e, cv),
+        bim(e, retag, "retag", e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, cv), retag)), typ),
+    )
+
+
+def self_v(e, type_field="pv"):
+    """The handle value (the receiver `recv`) in a method body's staged code, as one of the handle's types."""
+    return e.mb.as_(graft(e, e.v("recv")), e.lower(e.v(type_field)))
+
+
+def handle_binding(e, x, obj, desc):
+    """A binding of a handle value: the representation's binding (`inner`), whose uses are retagged as the handle
+    type (`ty`); assignments through it rebind the representation and wrap again."""
+    bt = e.mb.eval_binding()
+    st = e.mb.builtin("eval", "binding_setter")
+    setter_obj = obj + "_s"
+    def_obj(e, x, obj, desc, e.rec(p("inner", bt), p("ty", ty(e))))
+    accessor(e, x, obj, "inner", bt)
+    def_obj(e, x, setter_obj, desc + " setter", e.rec(p("setter", st), p("ty", ty(e))))
+
+    def wrap(inner):
+        return mk(e, obj, p("inner", inner), p("ty", in_(e, "ty")))
+
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            bt,
+            p(
+                "use",
+                retag_values(
+                    e,
+                    bim(
+                        e,
+                        bt,
+                        "use",
+                        in_(e, "inner"),
+                        e.rec(
+                            p("xx", xx(e)),
+                            p("loc", loc(e)),
+                            p("setter", mk(e, setter_obj, p("setter", a(e, "setter")), p("ty", in_(e, "ty")))),
+                            p("code", a(e, "code")),
+                        ),
+                    ),
+                    in_(e, "ty"),
+                ),
+            ),
+            p("drop", bim(e, bt, "drop", in_(e, "inner"), e.rec(p("xx", xx(e)), p("loc", loc(e))))),
+            p("fork", wrap(bim0(e, bt, "fork", in_(e, "inner")))),
+            p(
+                "merge",
+                body(
+                    e,
+                    e.let("inners", e.list_new(bt)),
+                    e.foreach(
+                        a(e, "others"),
+                        "o",
+                        e.push(e.v("inners"), e.call_m(reinterpret(e, e.v("o"), obj), "inner", e.tup())),
+                    ),
+                    e.let(
+                        "m",
+                        unwrap_m(
+                            e,
+                            bim(
+                                e,
+                                bt,
+                                "merge",
+                                in_(e, "inner"),
+                                e.rec(p("xx", xx(e)), p("loc", loc(e)), p("others", e.v("inners"))),
+                            ),
+                            bt,
+                        ),
+                    ),
+                    e.ret(e.eresult_ok(bt, wrap(e.v("m")))),
+                ),
+            ),
+        )
+    )
+    x.append(
+        e.impl_interface(
+            e.v(setter_obj),
+            st,
+            p(
+                "set",
+                bim(
+                    e,
+                    st,
+                    "set",
+                    in_(e, "setter"),
+                    e.rec(
+                        p("xx", xx(e)),
+                        p("loc", loc(e)),
+                        p("new_binding", mk(e, obj, p("inner", a(e, "new_binding")), p("ty", in_(e, "ty")))),
+                        p("drop_modified", a(e, "drop_modified")),
+                    ),
+                ),
+            ),
+        )
+    )
+
+
+def handle_binds(e, x, obj, under, binding_obj, desc):
+    """`bind` and `initial_bind` of a handle type: the representation's, wrapped so uses keep the handle type."""
+    br_t = e.mb.types_bind_result()
+    bt = e.mb.eval_binding()
+
+    def wrap(inner):
+        return mk(e, binding_obj, p("inner", inner), p("ty", outer(e)))
+
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            e.mb.eval_aspect_bind(),
+            p(
+                "bind",
+                body(
+                    e,
+                    e.let("ub", lookup(e, xx(e), in_(e, under), e.mb.eval_aspect_bind())),
+                    e.if_only(
+                        e.not_(e.fld(e.v("ub"), "is_some")),
+                        ret_m(e, e.eresult_err(br_t, loc(e), e.s(desc + ": the representation cannot be bound"))),
+                    ),
+                    e.let(
+                        "r",
+                        unwrap_m(
+                            e,
+                            bim(
+                                e,
+                                e.mb.eval_aspect_bind(),
+                                "bind",
+                                e.fld(e.v("ub"), "value"),
+                                e.rec(
+                                    p("xx", xx(e)),
+                                    p("loc", loc(e)),
+                                    p("cv", retag_values(e, a(e, "cv"), in_(e, under))),
+                                ),
+                            ),
+                            br_t,
+                        ),
+                    ),
+                    e.ret(
+                        e.eresult_ok(
+                            br_t,
+                            e.call(
+                                e.mb.eval_bind_result(),
+                                e.rec(
+                                    p("code", e.fld(e.v("r"), "code")), p("binding", wrap(e.fld(e.v("r"), "binding")))
+                                ),
+                            ),
+                        )
+                    ),
+                ),
+            ),
+        )
+    )
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            e.mb.eval_aspect_initial_bind(),
+            p(
+                "initial_bind",
+                body(
+                    e,
+                    e.let("ui", lookup(e, xx(e), in_(e, under), e.mb.eval_aspect_initial_bind())),
+                    e.if_only(
+                        e.not_(e.fld(e.v("ui"), "is_some")),
+                        ret_m(e, e.eresult_err(bt, loc(e), e.s(desc + ": the representation cannot be a parameter"))),
+                    ),
+                    e.let(
+                        "r",
+                        unwrap_m(
+                            e,
+                            bim(
+                                e,
+                                e.mb.eval_aspect_initial_bind(),
+                                "initial_bind",
+                                e.fld(e.v("ui"), "value"),
+                                e.rec(p("xx", xx(e)), p("loc", loc(e)), p("slot", a(e, "slot"))),
+                            ),
+                            bt,
+                        ),
+                    ),
+                    e.ret(e.eresult_ok(bt, wrap(e.v("r")))),
+                ),
+            ),
+        )
+    )
+
+
+def handle_type(
+    e, x, obj, iface, desc, fields, places, methods, under="pv", construct=False, desc_expr=None, identity=None
+):
+    """A handle type over a representation (the field `under`: a pointer, or a tuple): its field aspect gives the
+    places (`places` maps a name to the staged place over `self_as`, the handle as one of its types) and the methods;
+    it delegates the rest to the representation and retags from its values. With `construct`, anything that casts to
+    the representation casts to the handle (so a tuple literal makes a tuple-handle). `desc_expr` is the type's
+    description when it is not the constant `desc`; `identity` names the field that two handle types must agree on to
+    be equal (the element or key type), else any two are."""
+    def_iface(e, x, iface, *fields)
+    def_obj(e, x, obj, desc, e.rec(*fields))
+    x.append(e.impl_interface(e.v(obj), t(e, iface), *[p(k, in_(e, k)) for k, _ in fields]))
+    self_type(
+        e,
+        x,
+        obj,
+        desc_expr if desc_expr is not None else e.s(desc),
+        e.mb.if_of(
+            [
+                (e.eq(a(e, "key"), asp_id(e, "field")), e.opt_some(e.mb.types_aspect(), outer(e))),
+                (e.eq(a(e, "key"), asp_id(e, "bind")), e.opt_some(e.mb.types_aspect(), outer(e))),
+                (e.eq(a(e, "key"), asp_id(e, "initial_bind")), e.opt_some(e.mb.types_aspect(), outer(e))),
+                (e.eq(a(e, "key"), lv(e, iface + "_id")), e.opt_some(e.mb.types_aspect(), outer(e))),
+            ],
+            type_aspect(e, xx(e), in_(e, under), a(e, "key")),
+        ),
+        body(
+            e,
+            e.ret(
+                or_b(
+                    e,
+                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
+                    (
+                        type_can_cast_from(e, xx(e), loc(e), in_(e, under), a(e, "source_type"))
+                        if construct
+                        else is_equal(e, xx(e), in_(e, under), a(e, "source_type"))
+                    ),
+                )
+            ),
+        ),
+        body(
+            e,
+            e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.let(
+                "uv",
+                unwrap_cve_m(e, cast_value(e, xx(e), loc(e), in_(e, under), a(e, "cv"))) if construct else a(e, "cv"),
+            ),
+            e.match_of(
+                e.call(
+                    e.mb.reinterpret(),
+                    e.tup(loc(e), cve_value(e, e.v("uv")), e.lower(e.fld(e.v("values"), "retag"))),
+                ),
+                "__t",
+                None,
+                p(
+                    "ok",
+                    ret_m(
+                        e,
+                        ok_cve(
+                            e,
+                            cv_of(
+                                e,
+                                cve_code(e, e.v("uv")),
+                                bim(e, e.lower(e.fld(e.v("values"), "retag")), "retag", e.v("__t"), outer(e)),
+                            ),
+                        ),
+                    ),
+                ),
+                p("errs", ret_m(e, err_cve(e, loc(e), desc + ": only runtime values can become one"))),
+            ),
+        ),
+        # A handle casts to its representation.
+        body(e, e.ret(is_equal(e, xx(e), in_(e, under), a(e, "dest_type")))),
+        body(e, e.ret(ok_cve(e, retag_values(e, a(e, "cv"), in_(e, under))))),
+        body(
+            e,
+            e.ret(
+                has(e, xx(e), a(e, "other"), iface)
+                if identity is None
+                else and_b(
+                    e,
+                    has(e, xx(e), a(e, "other"), iface),
+                    is_equal(e, xx(e), in_(e, identity), acc(e, xx(e), a(e, "other"), iface, identity)),
+                )
+            ),
+        ),
+    )
+    handle_binding(e, x, obj + "_b", desc + " binding")
+    handle_binds(e, x, obj, under, obj + "_b", desc)
+    meth = obj + "_meth"
+    def_obj(e, x, meth, desc + " method", e.rec(p("kind", str_(e)), p("ht", ty(e))))
+
+    def self_as(type_field):
+        return e.mb.as_(graft(e, a(e, "self")), e.lower(in_(e, type_field)))
+
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            asp_iface(e, "field"),
+            p(
+                "field",
+                body(
+                    e,
+                    e.if_only(
+                        e.not_(has_b(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const())),
+                        ret_m(e, err_cve(e, loc(e), desc + ": field must be a constant string")),
+                    ),
+                    e.let(
+                        "key",
+                        bim(
+                            e,
+                            e.mb.eval_aspect_string_const(),
+                            "get",
+                            lookup_v(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const()),
+                            cve_value(e, a(e, "key")),
+                        ),
+                    ),
+                    *[
+                        e.if_only(e.eq(e.v("key"), e.s(name)), ret_m(e, ok_cve(e, staged_in(e, place(self_as)))))
+                        for name, place in places.items()
+                    ],
+                    *[
+                        e.if_only(
+                            e.eq(e.v("key"), e.s(m)),
+                            ret_m(
+                                e,
+                                ok_cve(
+                                    e,
+                                    cv_of(
+                                        e,
+                                        cve_code(e, a(e, "self")),
+                                        e.call(
+                                            e.eval_builtin("value_object_const"),
+                                            e.rec(
+                                                p(
+                                                    "type",
+                                                    mk(e, meth, p("kind", e.s(m)), p("ht", outer(e))),
+                                                ),
+                                                p(
+                                                    "data",
+                                                    as_object(
+                                                        e, cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "self")))
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        )
+                        for m in methods
+                    ],
+                    e.ret(err_cve(e, loc(e), e.cat(e.s(desc + " has no field "), e.v("key")))),
+                ),
+            ),
+            p("type_opt", e.option_type_lowered_none()),
+            p(
+                "keys",
+                e.list_new(
+                    e.mb.types_constkey(),
+                    *[e.mb.as_(e.s(k), e.mb.types_constkey()) for k in list(places) + methods],
+                ),
+            ),
+        )
+    )
+    no = e.mb.as_(e.b(False), bool_t(e))
+    self_type(
+        e,
+        x,
+        meth,
+        e.cat(e.s(desc + "."), in_(e, "kind")),
+        e.aspect_dispatch(asp_id(e, "function")),
+        no,
+        cast_to_panic(e),
+        no,
+        cast_to_panic(e),
+        no,
+    )
+    return meth
+
+
+def handle_methods(e, x, meth, iface, fields, methods, method_body, prelude=(), host=(), kind_prelude=None):
+    """The call of a handle method: `method_body(kind)` is the staged operation over the handle's fields (host
+    locals of the field names) and `self_v`, the handle value, or for the kinds in `host` a host expression yielding
+    the staged code value itself; `prelude` are host statements run first, `kind_prelude` maps a kind to host
+    statements run before its operation."""
+
+    def dispatch(kind):
+        result = method_body(kind) if kind in host else staged_in(e, method_body(kind))
+        before = (kind_prelude or {}).get(kind, ())
+        return e.if_only(e.eq(in_(e, "kind"), e.s(kind)), e.seq(*before, *call_result(e, result)))
+
+    x.append(
+        e.impl_interface(
+            e.v(meth),
+            asp_iface(e, "function"),
+            p(
+                "call",
+                body(
+                    e,
+                    e.let("recv", recv_of(e)),
+                    *[e.let(f, acc(e, xx(e), in_(e, "ht"), iface, f)) for f, _ in fields],
+                    *prelude,
+                    *[dispatch(kind) for kind in methods],
+                    e.ret(err_cve(e, loc(e), e.cat(e.s("json: unknown method "), in_(e, "kind")))),
+                ),
+            ),
+            p("exception_type", e.option_type_lowered_none()),
+        )
+    )

@@ -128,7 +128,7 @@ def _setup(e):
     """Staged in the caller's context: the option type and the constructor types for `elem` (made in the host body,
     constants here), and the constructors' function values."""
     out = []
-    out.append(e.let("type", e.mb.as_(e.lower(e.v("ot_i")), e.mb.eval_type())))
+    out.append(e.let("type", e.lower(e.v("ot_i"))))
     for kind in KINDS:
         out.append(e.let(kind + "_t", e.mb.as_(e.lower(e.v(kind + "_i")), e.mb.eval_type())))
         out.append(e.let(kind, fn_of(e, e.lower(e.v(kind + "_i")))))

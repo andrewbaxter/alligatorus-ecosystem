@@ -5,13 +5,14 @@ aspect):
 - a vec is a pointer to a 16-byte header: data pointer at 0, length (i32) at 8, capacity (i32) at 12;
 - `new()` yields an empty vec; `new() as type` makes it an owned value (destructor.atz) whose drop frees the data and
   the header; `raw` is the unowned handle type (what `type` wraps);
-- on a vec value: `len`, `cap`, `data` (ptr(elem)) are places; `at(i)` is the element place; `push(x)`, `clear()`
-  are methods; `pop()` is `some` of the last element taken off the vec, or `none` when the vec is empty
-  (option.atz); `slice()` is the slice (slice.atz) of the current elements. These are staged inline where used. `at`
-  is bounds-checked through the slice: an index out of range traps.
-The helper functions `vec_<elem>_grow`, `_free` and `_new` are dependencies (`func_dep`, callable types the vec type
-carries; a body casts the unit to one to call it): a module gets them when its code first uses them. Memory comes from wasm-alloc.atz (wasm) or libc (llvm). A byte vec plus the target's string
-conversion stands in for a growable string.
+- on a vec value: `len`, `cap`, `data` (ptr(elem)) are places; `at(i)` is the element place (bounds-checked through
+  slice.atz's `slice_idx`: an index out of range traps); `push(x)`, `clear()` are methods; `pop()` is `some` of the
+  last element taken off the vec, or `none` when the vec is empty (option.atz); `slice()` is the slice (slice.atz)
+  of the current elements.
+The methods and the helpers (`vec_<elem>_at`, `_push`, `_pop`, `_clear`, `_slice`, `_grow`, `_free`, `_new`) are
+dependencies (`func_dep`): a module gets each when its code first uses it, once. A method call is a call of its
+dependency. Memory comes from wasm-alloc.atz (wasm) or libc (llvm). A byte vec plus the target's string conversion
+stands in for a growable string.
 """
 
 from ..memory import destructor
@@ -19,50 +20,26 @@ from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
     a,
-    acc,
-    and_b,
-    asp_id,
-    asp_iface,
-    bim,
     bim0,
     body,
-    bool_t,
-    call_result,
-    cast_to_panic,
     const_eval_in,
     const_fn,
     const_type_arg,
-    cv_of,
-    cve_code,
     cve_has,
-    cve_type,
-    cve_value,
-    def_iface,
-    def_obj,
     err_cve,
     fn_of,
     graft,
-    has,
-    has_b,
+    handle_methods,
+    handle_type,
     ident_of,
     in_,
     int_as,
-    is_equal,
     loc,
     lookup,
-    lookup_v,
-    lv,
-    mk,
-    ok_cve,
-    or_b,
-    outer,
     ret_m,
-    self_type,
-    str_,
-    t,
+    self_v,
     ty,
     ty_desc,
-    type_aspect,
     unwrap_cve_m,
     xx,
 )
@@ -151,6 +128,12 @@ class _Target:
     def free(self, e, ptr, depth):
         return e.call(_up(e, e.fld(e.v("heap"), "free"), depth), ptr)
 
+    def elem_ptr(self, e, base, idx, size, ptr_type, i32):
+        """The address of element `idx` of the array at `base` (a `ptr(elem)`), as `ptr_type`."""
+        if self.kind == WASM:
+            return e.mb.as_(e.mb.operator_add(e.mb.as_(base, i32), e.mb.operator_mul(idx, size)), ptr_type)
+        return e.mb.operator_add(base, idx)
+
     def copy(self, e, dst, src, n, depth):
         """Copies `n` bytes; a statement. The wasm intrinsic is instantiated in the body (only its type is lowered)."""
         if self.kind == WASM:
@@ -213,56 +196,196 @@ def _new_body(e, tg):
     )
 
 
+def _data(e, v, dm=BODY_MOD, dh=BODY_HOST):
+    """The data pointer of the vec `v`, as `ptr(elem)` (in a dependency body staged `dm` below the module and `dh`
+    below its host locals)."""
+    return e.mb.as_(_data_cell(e, v, dm), _up(e, e.v("pelem"), dh))
+
+
+def _dep_fn(e, name, *args, dh=BODY_HOST):
+    """A call of the dependency `name` (a host local, a callable type) in a dependency body."""
+    return e.call(fn_of(e, _up(e, e.v(name), dh)), args[0] if len(args) == 1 else e.tup(*args))
+
+
+def _at_body(e, tg, dm, dh):
+    """at(v, i) -> ptr(elem): the address of element `i`; slice_idx traps when it is out of range."""
+    return e.seq(
+        e.ret(
+            tg.elem_ptr(
+                e,
+                _data(e, e.v("v"), dm, dh),
+                _dep_fn(e, "slice_idx", e.v("i"), _cell(e, e.v("v"), LEN_CELL, dm), dh=dh),
+                _up(e, e.v("elem_size"), dh),
+                _up(e, e.v("pelem"), dh),
+                _up(e, e.v("i32"), dh),
+            )
+        )
+    )
+
+
+def _push_body(e, tg):
+    """push(v, x): grow when full, store at the length, count it."""
+    d = BODY_MOD
+    return e.seq(
+        e.if_only(
+            e.eq(_cell(e, e.v("v"), LEN_CELL, d), _cell(e, e.v("v"), CAP_CELL, d)),
+            _dep_fn(e, "grow", e.v("v"), e.mb.operator_add(_cell(e, e.v("v"), LEN_CELL, d), e.n(1))),
+        ),
+        e.mb.set(e.mb.field(_data(e, e.v("v")), _cell(e, e.v("v"), LEN_CELL, d)), e.v("x")),
+        e.mb.set(_cell(e, e.v("v"), LEN_CELL, d), e.mb.operator_add(_cell(e, e.v("v"), LEN_CELL, d), e.n(1))),
+    )
+
+
+def _pop_body(e, tg, dm, dh):
+    """pop(v) -> option: `some` of the last element (taken off the vec), or `none` of an empty vec. The tag is
+    computed before the payload, so it sees the length before the decrement; a block yields a value only through a
+    return."""
+
+    def has_elem():
+        return e.not_(e.eq(_cell(e, e.v("v"), LEN_CELL, dm), e.n(0)))
+
+    last = e.mb.labeled(
+        "pop",
+        e.seq(
+            e.mb.set(_cell(e, e.v("v"), LEN_CELL, dm), e.mb.operator_sub(_cell(e, e.v("v"), LEN_CELL, dm), e.n(1))),
+            e.mb.return_to("pop", e.mb.field(_data(e, e.v("v"), dm, dh), _cell(e, e.v("v"), LEN_CELL, dm))),
+        ),
+    )
+    return e.seq(
+        e.ret(
+            _dep_fn(
+                e,
+                "opt_of_t",
+                e.mb.as_(has_elem(), _up(e, e.v("i32"), dh)),
+                e.if_else(has_elem(), last, e.mb.as_(e.n(0), _up(e, e.v("elem"), dh))),
+                dh=dh,
+            )
+        )
+    )
+
+
+def _clear_body(e, tg):
+    return e.seq(e.mb.set(_cell(e, e.v("v"), LEN_CELL, BODY_MOD), e.n(0)))
+
+
+def _slice_body(e, tg, dm, dh):
+    """slice(v) -> slice: the (data, len) tuple as the slice type."""
+    return e.seq(
+        e.ret(e.mb.as_(e.tup(_data(e, e.v("v"), dm, dh), _cell(e, e.v("v"), LEN_CELL, dm)), _up(e, e.v("slice_t"), dh)))
+    )
+
+
+# The dependencies defined in the const function's host body: (host local, name suffix, function type host local,
+# parameter names, body maker).
+HOST_DEPS = [
+    ("grow", "grow", "grow_t", ("v", "min_cap"), _grow_body),
+    ("free_vec", "free", "free_t", ("v",), _free_body),
+    ("new", "new", "new_t", (), _new_body),
+    ("m_push", "push", "push_t", ("v", "x"), _push_body),
+    ("m_clear", "clear", "free_t", ("v",), _clear_body),
+]
+# The dependencies defined in the setup (staged in the caller's context), whose bodies or types need the slice and
+# option types of the elements (constants only there): (setup local, suffix, parameter names, body maker, type maker).
+SETUP_DEPS = [
+    ("m_at", "at", ("v", "i"), _at_body, lambda e, fn_t: fn_t([e.v("pv"), e.v("i32")], e.v("pelem"))),
+    ("m_pop", "pop", ("v",), _pop_body, lambda e, fn_t: fn_t([e.v("pv")], e.v("opt_t"))),
+    ("m_slice", "slice", ("v",), _slice_body, lambda e, fn_t: fn_t([e.v("pv")], e.v("slice_t"))),
+]
+HOST_FN_TYPES = ["push_t"]
+# What the vec type carries: the element and pointer types, the slice and option types of its elements, and its
+# method dependencies.
+FIELDS = ["elem", "pv", "pi32", "ppv", "pelem", "slice_t", "opt_t", "m_at", "m_push", "m_pop", "m_clear", "m_slice"]
+
+
+def _func_dep(e, lib_dep, name, params, ty_, body_):
+    return e.call(
+        lib_dep,
+        e.rec(
+            p("name", name),
+            p("params", e.list_new(e.mb.types_string(), *[e.s(pn) for pn in params])),
+            p("ty", ty_),
+            p("body", e.stage(body_)),
+        ),
+    )
+
+
 def _deps(e, tg, out):
     """In the const function's host body: the dependencies for `elem` (constants from here on)."""
-    for fn, fn_t, params, fbody in [
-        ("grow", "grow_t", ("v", "min_cap"), _grow_body(e, tg)),
-        ("free_vec", "free_t", ("v",), _free_body(e, tg)),
-        ("new", "new_t", (), _new_body(e, tg)),
-    ]:
+    for fn, suffix, fn_t, params, fbody in HOST_DEPS:
+        ty_ = e.v(fn_t) if fn_t in HOST_FN_TYPES else e.lower(e.v(fn_t))
         out.append(
             e.let(
                 fn,
-                e.call(
+                _func_dep(
+                    e,
                     e.lower(e.fld(e.v("lib"), "func_dep")),
-                    e.rec(
-                        p("name", e.cat(e.v("name"), e.s("_" + fn))),
-                        p("params", e.list_new(e.mb.types_string(), *[e.s(pn) for pn in params])),
-                        p("ty", e.lower(e.v(fn_t))),
-                        p("body", e.stage(fbody)),
-                    ),
+                    e.cat(e.v("name"), e.s("_" + suffix)),
+                    params,
+                    ty_,
+                    fbody(e, tg),
                 ),
             )
         )
 
 
-def _setup(e):
-    """Staged in the caller's context: the vec types for `elem` over the lowered dependencies."""
+def _host_types(e, out):
+    """In the const function's host body: the element-dependent types and function types."""
+    out.append(e.let("i32", e.lower(e.v("i32"))))
+    out.append(e.let("pelem", e.call(e.lower(e.fld(e.v("lib"), "ptr")), e.v("elem"))))
+    out.append(
+        e.let(
+            "push_t",
+            e.call(
+                e.lower(e.fld(e.v("lib"), "fn")),
+                e.rec(
+                    p("params", e.list_new(e.mb.eval_type(), e.lower(e.v("pv")), e.v("elem"))),
+                    p("ret", e.lower(e.v("void"))),
+                ),
+            ),
+        )
+    )
+
+
+def _setup(e, tg):
+    """Staged in the caller's context: the slice and option types of the elements (from their factories), the
+    dependencies that need them, and the vec types over all of it (constants here)."""
     out = []
-    for name in ["elem", "grow", "free_vec", "new"]:
+    for name in ["elem", "pelem", "elem_size", "name", "free_vec", "new", "m_push", "m_clear"]:
         out.append(e.let(name, e.lower(e.v(name))))
-    for name in ["pv", "pi32", "ppv"]:
+    for name in ["pv", "pi32", "ppv", "i32"]:
         out.append(e.let(name, _up(e, e.v(name), SETUP_MOD)))
-    out.append(e.let("pelem", e.call(_up(e, e.fld(e.v("lib"), "ptr"), SETUP_MOD), e.v("elem"))))
-    out.append(e.let("slice_of", e.fld(e.call(_up(e, e.fld(e.v("slice"), "type"), SETUP_MOD), e.v("elem")), "of_t")))
-    out.append(e.let("opt_of", e.fld(e.call(_up(e, e.fld(e.v("option"), "type"), SETUP_MOD), e.v("elem")), "of_t")))
+    out.append(e.let("sl", e.call(_up(e, e.fld(e.v("slice"), "type"), SETUP_MOD), e.v("elem"))))
+    out.append(e.let("slice_t", e.fld(e.v("sl"), "type")))
+    out.append(e.let("slice_idx", e.fld(e.v("sl"), "idx")))
+    out.append(e.let("opt", e.call(_up(e, e.fld(e.v("option"), "type"), SETUP_MOD), e.v("elem"))))
+    out.append(e.let("opt_t", e.fld(e.v("opt"), "type")))
+    out.append(e.let("opt_of_t", e.fld(e.v("opt"), "of_t")))
+
+    def fn_t(params, ret):
+        return e.call(
+            _up(e, e.fld(e.v("lib"), "fn"), SETUP_MOD),
+            e.rec(p("params", e.list_new(e.mb.eval_type(), *params)), p("ret", ret)),
+        )
+
+    for fn, suffix, params, fbody, make_t in SETUP_DEPS:
+        out.append(
+            e.let(
+                fn,
+                _func_dep(
+                    e,
+                    _up(e, e.fld(e.v("lib"), "func_dep"), SETUP_MOD),
+                    e.cat(e.v("name"), e.s("_" + suffix)),
+                    params,
+                    make_t(e, fn_t),
+                    fbody(e, tg, SETUP_MOD + 1, 1),
+                ),
+            )
+        )
     out.append(
         e.let(
             "raw",
             e.mb.as_(
-                e.call(
-                    _up(e, e.fld(e.v("vt"), "new"), SETUP_MOD),
-                    e.rec(
-                        p("elem", e.v("elem")),
-                        p("pv", e.v("pv")),
-                        p("pi32", e.v("pi32")),
-                        p("ppv", e.v("ppv")),
-                        p("pelem", e.v("pelem")),
-                        p("grow", e.v("grow")),
-                        p("slice_of", e.v("slice_of")),
-                        p("opt_of", e.v("opt_of")),
-                    ),
-                ),
+                e.call(_up(e, e.fld(e.v("vt"), "new"), SETUP_MOD), e.rec(*[p(f, e.v(f)) for f in FIELDS])),
                 e.mb.eval_type(),
             ),
         )
@@ -281,276 +404,39 @@ def _setup(e):
 
 
 def _vt(e, x):
-    """The unowned vec handle type: a pointer carrying the element type, the vec's places and methods, its grow
-    dependency and the slice constructor for its elements."""
-    fields = [
-        p("elem", ty(e)),
-        p("pv", ty(e)),
-        p("pi32", ty(e)),
-        p("ppv", ty(e)),
-        p("pelem", ty(e)),
-        p("grow", ty(e)),
-        p("slice_of", ty(e)),
-        p("opt_of", ty(e)),
-    ]
-    def_iface(e, x, "vt_m", *fields)
-    def_obj(e, x, "vt", "vec type", e.rec(*fields))
-    def_obj(e, x, "vmeth", "vec method", e.rec(p("kind", str_(e)), p("vt", ty(e)), p("self", e.mb.types_cve())))
-    x.append(e.impl_interface(e.v("vt"), t(e, "vt_m"), *[p(k, in_(e, k)) for k, _ in fields]))
-    self_type(
+    """The unowned vec handle type: a pointer carrying the element type, the vec's places and its method
+    dependencies."""
+    fields = [p(f, ty(e)) for f in FIELDS]
+    places = {
+        "len": lambda self_as: e.mb.field(self_as("pi32"), e.n(LEN_CELL)),
+        "cap": lambda self_as: e.mb.field(self_as("pi32"), e.n(CAP_CELL)),
+        "data": lambda self_as: e.mb.as_(e.mb.field(self_as("ppv"), e.n(0)), e.lower(in_(e, "pelem"))),
+    }
+    meth = handle_type(
         e,
         x,
         "vt",
-        e.cat(e.s("vec("), ty_desc(e, in_(e, "elem")), e.s(")")),
-        e.mb.if_of(
-            [
-                (e.eq(a(e, "key"), asp_id(e, "field")), e.opt_some(e.mb.types_aspect(), outer(e))),
-                (e.eq(a(e, "key"), lv(e, "vt_m_id")), e.opt_some(e.mb.types_aspect(), outer(e))),
-            ],
-            type_aspect(e, xx(e), in_(e, "pv"), a(e, "key")),
-        ),
-        body(
-            e,
-            e.ret(
-                or_b(
-                    e,
-                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
-                    is_equal(e, xx(e), in_(e, "pv"), a(e, "source_type")),
-                )
-            ),
-        ),
-        # A raw pointer becomes a vec handle by retagging (values.atz).
-        body(
-            e,
-            e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
-            e.match_of(
-                e.call(
-                    e.mb.reinterpret(),
-                    e.tup(loc(e), cve_value(e, a(e, "cv")), e.lower(e.fld(e.v("values"), "retag"))),
-                ),
-                "__t",
-                None,
-                p(
-                    "ok",
-                    ret_m(
-                        e,
-                        ok_cve(
-                            e,
-                            cv_of(
-                                e,
-                                cve_code(e, a(e, "cv")),
-                                bim(e, e.lower(e.fld(e.v("values"), "retag")), "retag", e.v("__t"), outer(e)),
-                            ),
-                        ),
-                    ),
-                ),
-                p("errs", ret_m(e, err_cve(e, loc(e), "vec: only runtime pointers can become vecs"))),
-            ),
-        ),
-        e.mb.as_(e.b(False), bool_t(e)),
-        cast_to_panic(e),
-        body(
-            e,
-            e.ret(
-                and_b(
-                    e,
-                    has(e, xx(e), a(e, "other"), "vt_m"),
-                    is_equal(e, xx(e), in_(e, "elem"), acc(e, xx(e), a(e, "other"), "vt_m", "elem")),
-                )
-            ),
-        ),
+        "vt_m",
+        "vec",
+        fields,
+        places,
+        METHODS,
+        under="pv",
+        desc_expr=e.cat(e.s("vec("), ty_desc(e, in_(e, "elem")), e.s(")")),
+        identity="elem",
     )
 
-    def staged(expr):
-        return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(expr)))
-
-    def self_as(type_field):
-        return e.mb.as_(graft(e, a(e, "self")), e.lower(in_(e, type_field)))
-
-    x.append(
-        e.impl_interface(
-            e.v("vt"),
-            asp_iface(e, "field"),
-            p(
-                "field",
-                body(
-                    e,
-                    e.if_only(
-                        e.not_(has_b(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const())),
-                        ret_m(e, err_cve(e, loc(e), "vec: field must be a constant string")),
-                    ),
-                    e.let(
-                        "key",
-                        bim(
-                            e,
-                            e.mb.eval_aspect_string_const(),
-                            "get",
-                            lookup_v(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const()),
-                            cve_value(e, a(e, "key")),
-                        ),
-                    ),
-                    e.if_only(
-                        e.eq(e.v("key"), e.s("len")),
-                        ret_m(e, ok_cve(e, staged(e.mb.field(self_as("pi32"), e.n(LEN_CELL))))),
-                    ),
-                    e.if_only(
-                        e.eq(e.v("key"), e.s("cap")),
-                        ret_m(e, ok_cve(e, staged(e.mb.field(self_as("pi32"), e.n(CAP_CELL))))),
-                    ),
-                    e.if_only(
-                        e.eq(e.v("key"), e.s("data")),
-                        ret_m(
-                            e,
-                            ok_cve(
-                                e,
-                                staged(e.mb.as_(e.mb.field(self_as("ppv"), e.n(0)), e.lower(in_(e, "pelem")))),
-                            ),
-                        ),
-                    ),
-                    *[
-                        e.if_only(
-                            e.eq(e.v("key"), e.s(m)),
-                            ret_m(
-                                e,
-                                ok_cve(
-                                    e,
-                                    cv_of(
-                                        e,
-                                        cve_code(e, a(e, "self")),
-                                        e.call(
-                                            e.eval_builtin("value_object_const"),
-                                            e.rec(
-                                                p(
-                                                    "type",
-                                                    mk(
-                                                        e,
-                                                        "vmeth",
-                                                        p("kind", e.s(m)),
-                                                        p("vt", outer(e)),
-                                                        p(
-                                                            "self",
-                                                            cv_of(
-                                                                e,
-                                                                e.call(e.eval_builtin("code_none"), loc(e)),
-                                                                cve_value(e, a(e, "self")),
-                                                            ),
-                                                        ),
-                                                    ),
-                                                ),
-                                                p("data", e.tup()),
-                                            ),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                        )
-                        for m in METHODS
-                    ],
-                    e.ret(err_cve(e, loc(e), e.cat(e.s("vec has no field "), e.v("key")))),
-                ),
-            ),
-            p("type_opt", e.option_type_lowered_none()),
-            p(
-                "keys",
-                e.list_new(e.mb.types_constkey(), *[e.mb.as_(e.s(k), e.mb.types_constkey()) for k in PLACES + METHODS]),
-            ),
-        )
-    )
-    # Methods: a callable whose type carries the vec value; the call stages the operation inline.
-    no = e.mb.as_(e.b(False), bool_t(e))
-    self_type(
-        e,
-        x,
-        "vmeth",
-        e.cat(e.s("vec."), in_(e, "kind")),
-        e.aspect_dispatch(asp_id(e, "function")),
-        no,
-        cast_to_panic(e),
-        no,
-        cast_to_panic(e),
-        no,
-    )
-
-    def vt_field(name):
-        return acc(e, xx(e), in_(e, "vt"), "vt_m", name)
-
-    def vself(type_field):
-        return e.mb.as_(graft(e, in_(e, "self")), e.lower(e.v(type_field)))
-
-    def cell(index):
-        return e.mb.field(vself("pi32"), e.n(index))
-
-    def data():
-        return e.mb.as_(e.mb.field(vself("ppv"), e.n(0)), e.lower(e.v("pelem")))
-
-    def slice_of(len_expr):
-        """The slice of `len_expr` elements at the data pointer (the constructor is a callable type)."""
-        return e.call(fn_of(e, e.lower(e.v("slice_of"))), e.tup(data(), len_expr))
+    def dep(kind):
+        return fn_of(e, e.lower(e.v("m_" + kind)))
 
     def method_body(kind):
         if kind == "at":
-            return e.call(e.fld(slice_of(cell(LEN_CELL)), "at"), graft(e, a(e, "argument")))
-        if kind == "slice":
-            return slice_of(cell(LEN_CELL))
+            return e.mb.field(e.call(dep(kind), e.tup(self_v(e), graft(e, a(e, "argument")))), e.n(0))
         if kind == "push":
-            return e.seq(
-                e.if_only(
-                    e.eq(cell(LEN_CELL), cell(CAP_CELL)),
-                    e.call(
-                        fn_of(e, e.lower(e.v("grow"))), e.tup(vself("pv"), e.mb.operator_add(cell(LEN_CELL), e.n(1)))
-                    ),
-                ),
-                e.mb.set(e.mb.field(data(), cell(LEN_CELL)), graft(e, a(e, "argument"))),
-                e.mb.set(cell(LEN_CELL), e.mb.operator_add(cell(LEN_CELL), e.n(1))),
-            )
-        if kind == "pop":
-            # `some` of the last element (taken off the vec), or `none` of an empty vec. The tag is computed before
-            # the payload, so it sees the length before the decrement; a block yields a value only through a return.
-            has = e.not_(e.eq(cell(LEN_CELL), e.n(0)))
-            last = e.mb.labeled(
-                "pop",
-                e.seq(
-                    e.mb.set(cell(LEN_CELL), e.mb.operator_sub(cell(LEN_CELL), e.n(1))),
-                    e.mb.return_to(
-                        "pop",
-                        e.call(e.fld(slice_of(e.mb.operator_add(cell(LEN_CELL), e.n(1))), "at"), cell(LEN_CELL)),
-                    ),
-                ),
-            )
-            return e.call(
-                fn_of(e, e.lower(e.v("opt_of"))),
-                e.tup(
-                    e.mb.as_(has, e.lower(e.v("i32"))),
-                    e.if_else(has, last, e.mb.as_(e.n(0), e.lower(e.v("elem")))),
-                ),
-            )
-        if kind == "clear":
-            return e.mb.set(cell(LEN_CELL), e.n(0))
-        raise AssertionError(kind)
+            return e.call(dep(kind), e.tup(self_v(e), graft(e, a(e, "argument"))))
+        return e.call(dep(kind), self_v(e))
 
-    x.append(
-        e.impl_interface(
-            e.v("vmeth"),
-            asp_iface(e, "function"),
-            p(
-                "call",
-                body(
-                    e,
-                    *[
-                        e.let(f, vt_field(f))
-                        for f in ["elem", "pv", "pi32", "ppv", "pelem", "grow", "slice_of", "opt_of"]
-                    ],
-                    e.let("i32", e.lower(e.v("i32"))),
-                    *[
-                        e.if_only(e.eq(in_(e, "kind"), e.s(kind)), e.seq(*call_result(e, staged(method_body(kind)))))
-                        for kind in METHODS
-                    ],
-                    e.ret(err_cve(e, loc(e), e.cat(e.s("vec: unknown method "), in_(e, "kind")))),
-                ),
-            ),
-            p("exception_type", e.option_type_lowered_none()),
-        )
-    )
+    handle_methods(e, x, meth, "vt_m", fields, METHODS, method_body)
 
 
 def size_of(e, label, type_expr, bind):
@@ -601,8 +487,11 @@ def module(e, kind):
         e.let("name", e.cat(e.s("vec_"), ident_of(e, ty_desc(e, e.v("elem"))))),
     ]
     tg.host_lets(e, parts)
+    _host_types(e, parts)
     _deps(e, tg, parts)
-    parts.append(e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e)))))))
+    parts.append(
+        e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e, tg))))))
+    )
     const_fn(e, x, "vec_b", "vec.type", body(e, *parts))
     x.append(e.finish(e.v("d")))
     x.append(e.ret(e.rec(p("type", e.fld(e.v("vec_b"), "func")))))

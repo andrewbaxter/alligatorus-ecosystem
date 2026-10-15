@@ -71,6 +71,7 @@ from ..target_mb import (
     or_b,
     outer,
     push,
+    recv_of,
     reinterpret,
     ret_m,
     rt_bind_impl,
@@ -240,7 +241,7 @@ def _conv_methods(e, x):
                                     xx(e),
                                     loc(e),
                                     _xmod(e),
-                                    cv_of(e, cve_code(e, a(e, "self")), cve_value(e, in_(e, "self"))),
+                                    cv_of(e, cve_code(e, a(e, "self")), cve_value(e, recv_of(e))),
                                 ),
                                 cve_t(e),
                             ),
@@ -7267,6 +7268,16 @@ def module(e):
                         ),
                     ),
                     e.let("lv", _wval_of(e, e.v("r"))),
+                    # The slot keeps the value's declared type (a type over a wasm value stays that type).
+                    e.let("t0", cve_type(e, a(e, "cv"))),
+                    e.let(
+                        "base",
+                        e.if_else(
+                            has(e, xx(e), e.v("t0"), "wgtype_m"),
+                            acc(e, xx(e), e.v("t0"), "wgtype_m", "base"),
+                            e.v("t0"),
+                        ),
+                    ),
                     e.ret(
                         cv_of(
                             e,
@@ -7276,7 +7287,7 @@ def module(e):
                                 e.lower(e.fld(e.v("values"), "retag")),
                                 "retag",
                                 e.v("lv"),
-                                mk(e, "wt_slot", e.p("base", _wv_ty(e, e.v("lv"))), e.p("slot", e.v("lv"))),
+                                mk(e, "wt_slot", e.p("base", e.v("base")), e.p("slot", e.v("lv"))),
                             ),
                         )
                     ),
