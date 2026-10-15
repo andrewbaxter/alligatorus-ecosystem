@@ -72,7 +72,7 @@ def module(e, mode):
         e.let(
             "main",
             e.call(
-                e.fld(e.v("llvm"), "func_fn"),
+                e.fld(e.v("llvm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("ll")),
                     e.p("name", e.s("main")),

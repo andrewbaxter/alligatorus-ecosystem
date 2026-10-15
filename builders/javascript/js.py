@@ -1,4 +1,9 @@
-"""js-es2020.atz: JavaScript target (one `any` value type, globals, `new`, and definition functions)."""
+"""js-es2020.atz: JavaScript target (one `any` value type, globals, `new`, definition functions, structured `if`).
+
+Every call, `new` and `if` result lands in a fresh `const` (or `let` for an `if`); a binding of such a value is that
+variable itself (no copy), while a binding of any other expression copies it into a fresh `const`. Bindings are
+never reassigned. Names: functions and temporaries are minted per module (`hint$n`); `declare`d variables keep
+their names for the module's text helpers."""
 
 from .. import target_mb
 from ..core import values
@@ -13,6 +18,7 @@ from ..target_mb import (
     bim0,
     binding_drop_body,
     body,
+    bool_t,
     can_cast_from_self,
     cast_from_self,
     cast_to_panic,
@@ -125,7 +131,12 @@ def _jany_t(e):
 
 
 def _jval_new(e, expr):
-    return mk(e, "jval", e.p("ty", _jany_t(e)), e.p("expr", expr))
+    return mk(e, "jval", e.p("ty", _jany_t(e)), e.p("expr", expr), e.p("temp", e.b(False)))
+
+
+def _jval_temp(e, name):
+    """A value held in a fresh `const` of its own, which a binding reuses by name instead of copying."""
+    return mk(e, "jval", e.p("ty", _jany_t(e)), e.p("expr", name), e.p("temp", e.b(True)))
 
 
 def _jv_expr(e, cve_tp):
@@ -162,6 +173,162 @@ def _operand(e, xx_, loc_, cv):
 
 def _is_js(e, xx_, cv):
     return hf_rec(e, "h_is_js", e.p("xx", xx_), e.p("cv", cv))
+
+
+def _operand_m(e, cv):
+    return unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), cv), cve_t(e)))
+
+
+def _if_branch_stmts(e, cv_var):
+    """Appends a branch's statements to `bo`, assigning its value (if any) to the if's result variable, and tracks
+    in `st` whether branches have values and whether any falls through."""
+    valued = and_b(e, cve_has(e, e.v(cv_var)), _is_js(e, xx(e), e.v(cv_var)))
+    return e.seq(
+        e.if_only(
+            and_b(e, cve_has(e, e.v(cv_var)), e.not_(_is_js(e, xx(e), e.v(cv_var)))),
+            ret_m(e, err_cve(e, loc(e), "if branches must yield js values")),
+        ),
+        e.if_only(e.not_(valued), _append_code(e, e.v("bo"), cve_code(e, e.v(cv_var)))),
+        e.if_only(
+            valued,
+            e.seq(
+                e.mb.set(e.fld(e.v("st"), "has"), num(e, 1)),
+                e.let("bv", _operand_m(e, e.v(cv_var))),
+                _append_code(e, e.v("bo"), cve_code(e, e.v("bv"))),
+                push(
+                    e,
+                    e.v("bo"),
+                    _inst(e, e.cat(e.fld(e.v("st"), "res"), e.s(" = "), _jv_expr(e, e.v("bv")), e.s(";"))),
+                ),
+            ),
+        ),
+        e.if_only(
+            and_b(e, e.not_(valued), e.not_(cve_ended(e, e.v(cv_var)))),
+            e.mb.set(e.fld(e.v("st"), "novalue"), num(e, 1)),
+        ),
+        e.if_only(e.not_(cve_ended(e, e.v(cv_var))), e.mb.set(e.fld(e.v("st"), "ended"), num(e, 0))),
+    )
+
+
+def _indent(e, depth):
+    """Two spaces per nesting level up to `depth` (bounded by the condition count)."""
+    return e.seq(
+        e.let("__pre", e.rec(e.p("v", e.dstr("")))),
+        e.let("__k", e.rec(e.p("v", e.int_of(0)))),
+        e.foreach(
+            a(e, "conditions"),
+            "_",
+            e.seq(
+                e.if_only(
+                    e.mb.operator_lt(e.fld(e.v("__k"), "v"), depth),
+                    e.mb.set(e.fld(e.v("__pre"), "v"), e.cat(e.fld(e.v("__pre"), "v"), e.s("  "))),
+                ),
+                e.incr(e.fld(e.v("__k"), "v")),
+            ),
+        ),
+        e.ret(e.fld(e.v("__pre"), "v")),
+    )
+
+
+def _push_indented(e, insts, pre, extra):
+    return e.foreach(
+        insts, "i0", push(e, e.v("out"), _inst(e, e.cat(pre, e.s(extra), e.call_m(e.v("i0"), "text", e.tup()))))
+    )
+
+
+def _if_hook(e):
+    """A structured `if`: each later condition nests in the previous `else` (its statements run only there); a
+    valued `if` declares a result variable assigned in every branch."""
+    return body(
+        e,
+        e.let("mod", _xmod(e)),
+        e.let("out", _insts_new(e)),
+        e.let(
+            "st",
+            e.rec(
+                e.p("ended", e.int_of(1)),
+                e.p("has", e.int_of(0)),
+                e.p("novalue", e.int_of(0)),
+                e.p("res", _fresh(e, e.v("mod"))),
+            ),
+        ),
+        count_let(e, "nc"),
+        count_loop(e, "nc", a(e, "conditions")),
+        e.let("ci", e.rec(e.p("v", e.int_of(0)))),
+        e.foreach(
+            a(e, "conditions"),
+            "br",
+            e.seq(
+                e.let("c", _operand_m(e, e.fld(e.v("br"), "condition"))),
+                e.let("pre", _indent(e, e.fld(e.v("ci"), "v"))),
+                e.let("cl", _insts_new(e)),
+                _append_code(e, e.v("cl"), cve_code(e, e.v("c"))),
+                _push_indented(e, e.v("cl"), e.v("pre"), ""),
+                push(e, e.v("out"), _inst(e, e.cat(e.v("pre"), e.s("if ("), _jv_expr(e, e.v("c")), e.s(") {")))),
+                e.let("bo", _insts_new(e)),
+                e.let("b", e.fld(e.v("br"), "body")),
+                _if_branch_stmts(e, "b"),
+                _push_indented(e, e.v("bo"), e.v("pre"), "  "),
+                e.incr(e.fld(e.v("ci"), "v")),
+                e.if_else(
+                    or_b(
+                        e,
+                        e.mb.operator_lt(e.fld(e.v("ci"), "v"), e.fld(e.v("nc"), "v")),
+                        e.fld(a(e, "else"), "is_some"),
+                    ),
+                    push(e, e.v("out"), _inst(e, e.cat(e.v("pre"), e.s("} else {")))),
+                    push(e, e.v("out"), _inst(e, e.cat(e.v("pre"), e.s("}")))),
+                ),
+            ),
+        ),
+        e.if_only(
+            e.fld(a(e, "else"), "is_some"),
+            e.seq(
+                e.let("pre", _indent(e, e.fld(e.v("nc"), "v"))),
+                e.let("bo", _insts_new(e)),
+                e.let("b", e.fld(a(e, "else"), "value")),
+                _if_branch_stmts(e, "b"),
+                _push_indented(e, e.v("bo"), e.v("pre"), ""),
+                push(
+                    e,
+                    e.v("out"),
+                    _inst(e, e.cat(_indent(e, e.mb.operator_sub(e.fld(e.v("nc"), "v"), num(e, 1))), e.s("}"))),
+                ),
+            ),
+        ),
+        e.if_only(
+            e.not_(e.fld(a(e, "else"), "is_some")),
+            e.seq(
+                e.mb.set(e.fld(e.v("st"), "ended"), num(e, 0)),
+                e.if_only(e.eq(e.fld(e.v("st"), "has"), num(e, 1)), e.mb.set(e.fld(e.v("st"), "novalue"), num(e, 1))),
+            ),
+        ),
+        e.let("depth", e.rec(e.p("v", e.mb.operator_sub(e.fld(e.v("nc"), "v"), num(e, 2))))),
+        e.foreach(
+            a(e, "conditions"),
+            "_",
+            e.if_only(
+                e.mb.operator_ge(e.fld(e.v("depth"), "v"), num(e, 0)),
+                e.seq(
+                    push(e, e.v("out"), _inst(e, e.cat(_indent(e, e.fld(e.v("depth"), "v")), e.s("}")))),
+                    e.mb.set(e.fld(e.v("depth"), "v"), e.mb.operator_sub(e.fld(e.v("depth"), "v"), num(e, 1))),
+                ),
+            ),
+        ),
+        e.if_only(
+            e.eq(e.fld(e.v("st"), "ended"), num(e, 1)),
+            ret_m(e, ok_cve(e, e.call(e.eval_builtin("codevalue_control_ended"), _code_of(e, e.v("out"))))),
+        ),
+        e.if_only(e.eq(e.fld(e.v("st"), "has"), num(e, 0)), ret_m(e, ok_cve(e, cv_no(e, _code_of(e, e.v("out")))))),
+        e.if_only(
+            e.eq(e.fld(e.v("st"), "novalue"), num(e, 1)),
+            ret_m(e, err_cve(e, loc(e), "if: some branches yield a value and some do not")),
+        ),
+        e.let("all", _insts_new(e)),
+        push(e, e.v("all"), _inst(e, e.cat(e.s("let "), e.fld(e.v("st"), "res"), e.s(";")))),
+        e.foreach(e.v("out"), "i0", push(e, e.v("all"), e.v("i0"))),
+        e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("all")), _jval_new(e, e.fld(e.v("st"), "res"))))),
+    )
 
 
 def _const_str(e, cv):
@@ -238,12 +405,12 @@ def module(e):
     def_obj(e, x, "jcode", "js code", e.rec(e.p("insts", _insts_t(e))))
     x.append(e.impl_interface(e.v("jcode"), e.mb.builtin("eval", "code_dyn")))
     method(e, x, "jcode", "insts", e.tup(), _insts_t(e), in_(e, "insts"))
-    def_obj(e, x, "jval", "js value", e.rec(e.p("ty", ty(e)), e.p("expr", str_(e))))
+    def_obj(e, x, "jval", "js value", e.rec(e.p("ty", ty(e)), e.p("expr", str_(e)), e.p("temp", bool_t(e))))
     x.append(
         e.impl_interface(
             e.v("jval"),
             e.fld(e.v("values"), "retag"),
-            e.p("retag", mk(e, "jval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")))),
+            e.p("retag", mk(e, "jval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")), e.p("temp", in_(e, "temp")))),
         )
     )
     def_obj(
@@ -453,6 +620,7 @@ def module(e):
     accessor(e, x, "jinst", "text", str_(e))
     accessor(e, x, "jval", "expr", str_(e))
     accessor(e, x, "jval", "ty", ty(e))
+    accessor(e, x, "jval", "temp", bool_t(e))
     x.append(
         e.impl_interface(
             e.v("jval"),
@@ -502,6 +670,21 @@ def module(e):
         str_(e),
         e.seq(e.let("n", in_(e, "n")), e.incr(in_(e, "n")), e.ret(e.cat(e.s("$"), to_str(e, e.v("n"))))),
     )
+    # A module-unique name from a hint: every function the module defines gets one, so two definers with one hint
+    # never collide; the module's whole text runs in a function scope, so no name reaches the page.
+    method(
+        e,
+        x,
+        "jmod",
+        "mint",
+        str_(e),
+        str_(e),
+        e.seq(
+            e.let("n", in_(e, "n")),
+            e.incr(in_(e, "n")),
+            e.ret(e.cat(target_mb.ident_of(e, e.v("arg")), e.s("$"), to_str(e, e.v("n")))),
+        ),
+    )
     method(
         e,
         x,
@@ -549,6 +732,7 @@ def module(e):
         e.rec(e.p("name", str_(e)), e.p("params", e.list_type(str_(e))), e.p("body", e.mb.types_expr())),
         str_(e),
         e.seq(
+            e.let("fname", e.call_m(outer(e), "mint", a(e, "name"))),
             e.let("r", e.call_m(outer(e), "lower", e.rec(e.p("params", a(e, "params")), e.p("body", a(e, "body"))))),
             e.let("out", _insts_new(e)),
             _append_code(e, e.v("out"), cve_code(e, e.v("r"))),
@@ -558,34 +742,36 @@ def module(e):
             ),
             e.let("all", e.list_new(str_(e))),
             push(
-                e, e.v("all"), e.cat(e.s("function "), a(e, "name"), e.s("("), e.join(a(e, "params"), ", "), e.s(") {"))
+                e,
+                e.v("all"),
+                e.cat(e.s("function "), e.v("fname"), e.s("("), e.join(a(e, "params"), ", "), e.s(") {")),
             ),
             _lines(e, e.v("out"), e.v("all"), "  "),
             push(e, e.v("all"), e.s("}")),
             push(e, in_(e, "funcs"), e.join(e.v("all"), "\n")),
-            e.ret(a(e, "name")),
+            e.ret(e.v("fname")),
         ),
     )
-    x.append(
-        e.method_impl(
-            e.v("jmod"),
-            "func_text",
-            e.rec(e.p("name", str_(e)), e.p("params", e.list_type(str_(e))), e.p("lines", e.list_type(str_(e)))),
-            e.option_type_none(),
-            e.stage(
-                e.seq(
-                    e.let("all", e.list_new(str_(e))),
-                    push(
-                        e,
-                        e.v("all"),
-                        e.cat(e.s("function "), a(e, "name"), e.s("("), e.join(a(e, "params"), ", "), e.s(") {")),
-                    ),
-                    e.foreach(a(e, "lines"), "l", push(e, e.v("all"), e.cat(e.s("  "), e.v("l")))),
-                    push(e, e.v("all"), e.s("}")),
-                    push(e, in_(e, "funcs"), e.join(e.v("all"), "\n")),
-                )
+    method(
+        e,
+        x,
+        "jmod",
+        "func_text",
+        e.rec(e.p("name", str_(e)), e.p("params", e.list_type(str_(e))), e.p("lines", e.list_type(str_(e)))),
+        str_(e),
+        e.seq(
+            e.let("fname", e.call_m(outer(e), "mint", a(e, "name"))),
+            e.let("all", e.list_new(str_(e))),
+            push(
+                e,
+                e.v("all"),
+                e.cat(e.s("function "), e.v("fname"), e.s("("), e.join(a(e, "params"), ", "), e.s(") {")),
             ),
-        )
+            e.foreach(a(e, "lines"), "l", push(e, e.v("all"), e.cat(e.s("  "), e.v("l")))),
+            push(e, e.v("all"), e.s("}")),
+            push(e, in_(e, "funcs"), e.join(e.v("all"), "\n")),
+            e.ret(e.v("fname")),
+        ),
     )
     method(
         e,
@@ -594,6 +780,9 @@ def module(e):
         "declare",
         str_(e),
         str_(e),
+        # A variable keeps its name: the module's text helpers (`func_text` lines) refer to variables by name, and
+        # a let-bound variable's minted name cannot reach text at the staged level. The module's function scope keeps
+        # the name from the page.
         e.seq(push(e, in_(e, "stmts"), e.cat(e.s("let "), e.v("arg"), e.s(";"))), e.ret(e.v("arg"))),
     )
     x.append(
@@ -641,8 +830,11 @@ def module(e):
         _render_t(e),
         e.seq(
             e.let("all", e.list_new(str_(e))),
+            push(e, e.v("all"), e.s('"use strict";')),
+            push(e, e.v("all"), e.s("(() => {")),
             e.foreach(in_(e, "funcs"), "f", push(e, e.v("all"), e.v("f"))),
             e.foreach(in_(e, "stmts"), "s", push(e, e.v("all"), e.v("s"))),
+            push(e, e.v("all"), e.s("})();")),
             e.ret(e.rec(e.p("js", e.cat(e.join(e.v("all"), "\n"), e.s("\n"))))),
         ),
     )
@@ -730,7 +922,7 @@ def module(e):
                 ),
             ),
             e.p("stage", err_cve(e, loc(e), "js target: nested staging is not supported")),
-            e.p("if", err_cve(e, loc(e), "js target: if is not supported")),
+            e.p("if", _if_hook(e)),
             e.p("loop", err_cve(e, loc(e), "js target: loop is not supported")),
             e.p("try_catch_finally", err_cve(e, loc(e), "js target: try is not supported")),
             e.p("match", err_cve(e, loc(e), "js target: match is not supported")),
@@ -915,7 +1107,7 @@ def module(e):
                             ),
                         ),
                     ),
-                    e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _jval_new(e, e.v("r"))))),
+                    e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _jval_temp(e, e.v("r"))))),
                 ),
             ),
             e.p("exception_type", e.option_type_lowered_none()),
@@ -1006,11 +1198,20 @@ def module(e):
                     e.let("v", unwrap_m(e, try_er(e, _operand(e, xx(e), loc(e), a(e, "cv")), cve_t(e)), br_t)),
                     e.let("out", _insts_new(e)),
                     _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
-                    e.let("r", _fresh(e, _xmod_ret(e, br_t))),
-                    push(
-                        e,
-                        e.v("out"),
-                        _inst(e, e.cat(e.s("const "), e.v("r"), e.s(" = "), _jv_expr(e, e.v("v")), e.s(";"))),
+                    # A value already in a fresh `const` of its own is the binding; anything else is copied into one.
+                    e.let("jv", reinterpret(e, cve_value(e, e.v("v")), "jval")),
+                    e.let("temp", e.call_m(e.v("jv"), "temp", e.tup())),
+                    e.let(
+                        "r",
+                        e.if_else(e.v("temp"), e.call_m(e.v("jv"), "expr", e.tup()), _fresh(e, _xmod_ret(e, br_t))),
+                    ),
+                    e.if_only(
+                        e.not_(e.v("temp")),
+                        push(
+                            e,
+                            e.v("out"),
+                            _inst(e, e.cat(e.s("const "), e.v("r"), e.s(" = "), _jv_expr(e, e.v("v")), e.s(";"))),
+                        ),
                     ),
                     e.ret(
                         e.eresult_ok(
@@ -1163,7 +1364,7 @@ def module(e):
                             ),
                         ),
                     ),
-                    e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _jval_new(e, e.v("r"))))),
+                    e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _jval_temp(e, e.v("r"))))),
                 ),
             ),
             e.p("exception_type", e.option_type_lowered_none()),
@@ -1416,7 +1617,7 @@ def module(e):
             e.v("mod_o"),
             "func_text",
             e.rec(e.p("name", str_(e)), e.p("params", e.list_type(str_(e))), e.p("lines", e.list_type(str_(e)))),
-            e.option_type_none(),
+            e.option_type_some(str_(e)),
             e.stage(e.call_m(in_(e, "m"), "func_text", e.v("arg"))),
         )
     )

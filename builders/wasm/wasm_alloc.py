@@ -10,14 +10,15 @@ Free chunks sit in 80 bins of doubly linked lists: exact bins for sizes below 25
 power of two above. `malloc` takes the first fitting chunk from the smallest bin that has one, splitting off a
 remainder of at least 16 bytes; otherwise it carves from the top chunk, which starts at the first page boundary after
 the static data and grows with `memory.grow` (yielding 0 when that fails). `free` coalesces with free neighbours
-through the boundary tags, merges into the top chunk when adjacent to it, and bins the result; `free(0)` is a no-op.
+through the boundary tags, merges into the top chunk when adjacent to it, and bins the result; `free(0)` is a no-op
+and freeing a chunk that is not in use (a second free, or no allocation) traps.
 
 Everything is a dependency (`func_dep`/`alloc_dep`): a module that calls `malloc` or `free` gets the functions and the
 state block on first use; nothing is passed around.
 """
 
 from ..eco_mb import p
-from ..target_mb import fn_of
+from ..target_mb import conv, fn_of, is_const_expr
 
 FILE = "wasm-alloc.atz"
 
@@ -41,15 +42,35 @@ def _ty(e, name):
 
 
 def _i32(e, v):
+    """A constant as i32."""
     return e.mb.as_(v, _ty(e, "t_i32"))
 
 
+def _addr(e, ptr):
+    """A pointer's address (i32)."""
+    return conv(e, e.lower(e.fld(e.v("wasm"), "ptr_to_int")), ptr, _ty(e, "t_i32"))
+
+
 def _pv(e, v):
-    return e.mb.as_(v, _ty(e, "t_pv"))
+    """An address (i32, a constant or a runtime value) as a void pointer."""
+    if is_const_expr(v):
+        return e.mb.as_(v, _ty(e, "t_pv"))
+    return conv(e, e.lower(e.fld(e.v("wasm"), "int_to_ptr")), v, _ty(e, "t_pv"))
 
 
 def _i32p(e, addr):
-    return e.mb.as_(addr, _ty(e, "t_pi32"))
+    """An address (i32) as a pointer to i32 cells."""
+    return conv(e, e.lower(e.fld(e.v("wasm"), "int_to_ptr")), addr, _ty(e, "t_pi32"))
+
+
+def _state_cells(e):
+    """The state block as i32 cells."""
+    return conv(
+        e,
+        e.lower(e.fld(e.v("wasm"), "ptr_cast")),
+        e.call(fn_of(e, e.lower(e.v("state"))), e.tup()),
+        _ty(e, "t_pi32"),
+    )
 
 
 def _cell(e, addr, index):
@@ -59,18 +80,21 @@ def _cell(e, addr, index):
 
 def _state(e, index):
     """A cell of the state block: 0 top, 1 top size, then the bin heads."""
-    return e.mb.field(_i32p(e, e.call(fn_of(e, e.lower(e.v("state"))), e.tup())), e.n(index))
+    return e.mb.field(_state_cells(e), e.n(index))
 
 
 def _bin(e, idx):
-    return e.mb.field(
-        _i32p(e, e.call(fn_of(e, e.lower(e.v("state"))), e.tup())), e.mb.operator_add(idx, e.n(STATE_BINS))
-    )
+    return e.mb.field(_state_cells(e), e.mb.operator_add(idx, e.n(STATE_BINS)))
 
 
 def _hook(e, name):
     """A wat intrinsic made where it is used: only its TYPE is lowered into the body."""
     return e.call(e.lower(e.fld(e.v("wasm"), name)), e.rec())
+
+
+def _hook_t(e, name):
+    """A wat intrinsic that is a callable type (`trap`), lowered into the body."""
+    return e.lower(e.fld(e.v("wasm"), name))
 
 
 def _dep(e, name, arg):
@@ -250,9 +274,11 @@ def _free_body(e):
     return e.mb.labeled(
         "fn",
         e.seq(
-            e.let("addr", _i32(e, e.v("p"))),
+            e.let("addr", _addr(e, e.v("p"))),
             e.if_only(e.eq(e.v("addr"), e.n(0)), e.mb.return_label("fn")),
             e.let("c", e.mb.operator_sub(e.v("addr"), e.n(OVERHEAD))),
+            # A chunk not in use is being freed twice (or the pointer is no allocation): trap.
+            e.if_only(e.not_(_flag(e, e.v("c"), CINUSE)), e.call(fn_of(e, _hook_t(e, "trap")), e.tup())),
             e.let("s", _size_of(e, e.v("c"))),
             # coalesce backward
             e.if_only(

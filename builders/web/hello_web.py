@@ -58,11 +58,13 @@ def module(e):
     top.append(e.let("set_text", _hook(e, "set", "Node", "textContent")))
     top.append(e.let("body", _hook(e, "get", "Document", "body")))
     top.append(e.let("append", _hook(e, "op", "Node", "appendChild")))
+    # The body handle read from the out cell is adopted as what `Document.body` returns.
+    top.append(e.let("body_h", e.call(e.fld(e.v("webidl"), "handle"), e.s("HTMLElement"))))
     top.append(
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -90,7 +92,7 @@ def module(e):
                                     "b",
                                     e.mb.as_(
                                         e.mb.field(e.lower(e.v("cell")), e.n(1)),
-                                        e.lower(e.fld(e.v("webidl"), "handle")),
+                                        e.lower(e.fld(e.v("body_h"), "own")),
                                     ),
                                 ),
                                 e.call(e.lower(e.v("append")), e.tup(e.v("b"), e.v("h1"))),
@@ -101,6 +103,5 @@ def module(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("web"), "build"), e.call_m0(e.v("m"), "render"))))
     return top

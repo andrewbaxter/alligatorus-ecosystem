@@ -2,7 +2,9 @@
 
 `main_loop`, `stream` and `properties` are destructor.atz types over `pv` whose destroy functions are
 `pw_main_loop_destroy`, `pw_stream_destroy` and `pw_properties_free`: a binding holding one destroys it when dropped.
-`pw_stream_new_simple` takes ownership of its properties, so the caller hands them over with `.forget()`."""
+`pw_stream_new_simple` takes ownership of its properties, so the caller hands them over with `.forget()`. Extern
+parameters carry their struct pointer types where the C API fixes them (`pw_stream_new_simple`'s events,
+`pw_stream_connect`'s parameter array), so callers never cast to `ptr(void)`."""
 
 from collections import namedtuple
 
@@ -20,8 +22,8 @@ _EXTERNS = [
     Extern("pw_main_loop_run", ["pv"], "i32", False),
     Extern("pw_main_loop_quit", ["pv"], "i32", False),
     Extern("pw_main_loop_destroy", ["pv"], "void", False),
-    Extern("pw_stream_new_simple", ["pv", "pu8", "pv", "pv", "pv"], "pv", False),
-    Extern("pw_stream_connect", ["pv", "u32", "u32", "u32", "pv", "u32"], "i32", False),
+    Extern("pw_stream_new_simple", ["pv", "pu8", "pv", "p_pw_stream_events", "pv"], "pv", False),
+    Extern("pw_stream_connect", ["pv", "u32", "u32", "u32", "p_params_arr", "u32"], "i32", False),
     Extern("pw_stream_destroy", ["pv"], "void", False),
     Extern("pw_properties_new", ["pu8"], "pv", True),
     Extern("pw_properties_free", ["pv"], "void", False),
@@ -268,6 +270,11 @@ def module(e):
                 ),
             )
         )
+    # The stream parameters: a pointer to a one-pod array of pod pointers (the globals below, and connect's argument).
+    exprs.append(
+        e.let("params_arr_t", e.call(llvm("array"), e.rec(e.p("elem", e.v("t_pv")), e.p("count", e.int_of(1)))))
+    )
+    exprs.append(e.let("t_p_params_arr", e.call(llvm("ptr"), e.v("params_arr_t"))))
     members = []
     for ex in _EXTERNS:
         members.append(ex.name)
@@ -276,6 +283,8 @@ def module(e):
     for name, _ in _OWNED:
         members.append(name)
         exprs.append(e.let(name + "_t", e.mb.eval_type()))
+        members.append("own_" + name)
+        exprs.append(e.let("own_" + name + "_t", e.mb.eval_type()))
     exprs.append(e.let("konst_t", global_t(e, llvm, e.v("t_u32"))))
     for k in _KONSTS:
         members.append(k.name)
@@ -287,12 +296,9 @@ def module(e):
     for g in _POD_GLOBALS:
         members.append(g.name)
         exprs.append(e.let(g.name + "_t", llvm("gref_t")))
-    exprs.append(
-        e.let("params_arr_t", e.call(llvm("array"), e.rec(e.p("elem", e.v("t_pv")), e.p("count", e.int_of(1)))))
-    )
     for g in _PARAMS_GLOBALS:
         members.append(g.name)
-        exprs.append(e.let(g.name + "_t", global_t(e, llvm, e.call(llvm("ptr"), e.v("params_arr_t")))))
+        exprs.append(e.let(g.name + "_t", global_t(e, llvm, e.v("t_p_params_arr"))))
 
     exprs.append(e.let("d", e.define()))
     exprs.append(e.option_type_let())
@@ -402,13 +408,15 @@ def module(e):
     for name, destroy in _OWNED:
         body.append(
             e.let(
-                name,
+                name + "_r",
                 e.call(
                     e.lower(e.fld(e.v("destructor"), "type")),
                     e.rec(e.p("under", e.lower_v("t_pv")), e.p("destroy", e.v(destroy))),
                 ),
             )
         )
+        body.append(e.let(name, e.fld(e.v(name + "_r"), "type")))
+        body.append(e.let("own_" + name, e.fld(e.v(name + "_r"), "own")))
     for k in _KONSTS:
         body.append(
             e.let(

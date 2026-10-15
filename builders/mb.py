@@ -331,6 +331,9 @@ class Mb:
     def types_string(self):
         return self.builtin("types", "string")
 
+    def types_unique(self):
+        return self.builtin("types", "unique")
+
     def seq_of(self, *exprs):
         return self.seq(exprs)
 

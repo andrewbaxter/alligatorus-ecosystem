@@ -1,4 +1,9 @@
-"""webidl.atz: WebIDL spec parser, definition table, and the shared `sig` ABI over it."""
+"""webidl.atz: WebIDL spec parser, definition table, and the shared `sig` ABI over it.
+
+A signature names the interface of every handle it carries: `iparam.iface` for a handle-kinded parameter and
+`isig.ret_iface` for a handle-kinded return (the interface definition's name, or "" for any handle: unions, mixins,
+callbacks and strings handed over as handles); `ancestor({table, iface, of})` is the spec's inheritance (`parent`
+chain, "" above all), which the wasm side turns into handle upcasts."""
 
 from .. import target_mb
 from ..target_mb import (
@@ -107,6 +112,7 @@ def _sig_of(e):
         e.p("args", e.v("args")),
         e.p("ret_out", e.eq(e.fld(e.v("st"), "ret_out"), num(e, 1))),
         e.p("ret_kind", e.fld(e.v("st"), "ret_kind")),
+        e.p("ret_iface", e.fld(e.v("st"), "ret_iface")),
     )
 
 
@@ -318,11 +324,12 @@ def module(e):
         x,
         "iparam",
         "webidl abi parameter",
-        e.rec(e.p("optional", bool_t(e)), e.p("nullable", bool_t(e)), e.p("kind", str_(e))),
+        e.rec(e.p("optional", bool_t(e)), e.p("nullable", bool_t(e)), e.p("kind", str_(e)), e.p("iface", str_(e))),
     )
     accessor(e, x, "iparam", "optional", bool_t(e))
     accessor(e, x, "iparam", "nullable", bool_t(e))
     accessor(e, x, "iparam", "kind", str_(e))
+    accessor(e, x, "iparam", "iface", str_(e))
     def_obj(
         e,
         x,
@@ -339,11 +346,12 @@ def module(e):
             e.p("args", e.list_type(t(e, "iparam"))),
             e.p("ret_out", bool_t(e)),
             e.p("ret_kind", str_(e)),
+            e.p("ret_iface", str_(e)),
         ),
     )
     for f in ["ok", "self", "ret_out"]:
         accessor(e, x, "isig", f, bool_t(e))
-    for f in ["err", "iface", "member", "base", "kind", "ret_kind"]:
+    for f in ["err", "iface", "member", "base", "kind", "ret_kind", "ret_iface"]:
         accessor(e, x, "isig", f, str_(e))
     accessor(e, x, "isig", "args", e.list_type(t(e, "iparam")))
     for vo in ["tok", "lex", "cur", "itype", "iarg", "imember", "idef", "itable", "ifound", "iparam", "isig"]:
@@ -439,9 +447,23 @@ def module(e):
     _fn_def(
         e,
         x,
+        "h_handle_iface",
+        e.rec(e.p("table", t(e, "itable")), e.p("kind", str_(e)), e.p("name", str_(e))),
+        str_(e),
+    )
+    _fn_def(
+        e,
+        x,
+        "h_ancestor",
+        e.rec(e.p("table", t(e, "itable")), e.p("iface", str_(e)), e.p("of", str_(e))),
+        bool_t(e),
+    )
+    _fn_def(
+        e,
+        x,
         "h_abi_ret",
         e.rec(e.p("table", t(e, "itable")), e.p("ty", t(e, "itype"))),
-        e.rec(e.p("out", bool_t(e)), e.p("kind", str_(e))),
+        e.rec(e.p("out", bool_t(e)), e.p("kind", str_(e)), e.p("iface", str_(e))),
     )
     _fn_def(
         e,
@@ -1346,13 +1368,15 @@ def module(e):
         body(
             e,
             e.let("r", hf(e, "h_resolve", e.rec(e.p("table", a(e, "table")), e.p("ty", a(e, "ty"))))),
+            e.let("k", hf(e, "h_kind", e.rec(e.p("table", a(e, "table")), e.p("ty", a(e, "ty"))))),
             e.ret(
                 mk(
                     e,
                     "iparam",
                     e.p("optional", a(e, "optional")),
                     e.p("nullable", e.call_m(e.v("r"), "nullable", e.tup())),
-                    e.p("kind", hf(e, "h_kind", e.rec(e.p("table", a(e, "table")), e.p("ty", a(e, "ty"))))),
+                    e.p("kind", e.v("k")),
+                    e.p("iface", hf(e, "h_handle_iface", e.rec(e.p("table", a(e, "table")), e.p("kind", e.v("k")), e.p("name", e.call_m(e.v("r"), "name", e.tup()))))),
                 )
             ),
         ),
@@ -1365,7 +1389,52 @@ def module(e):
             e,
             e.let("r", hf(e, "h_resolve", e.rec(e.p("table", a(e, "table")), e.p("ty", a(e, "ty"))))),
             e.let("k", hf(e, "h_kind", e.rec(e.p("table", a(e, "table")), e.p("ty", a(e, "ty"))))),
-            e.ret(e.rec(e.p("out", e.call_m(e.v("r"), "nullable", e.tup())), e.p("kind", e.v("k")))),
+            e.ret(
+                e.rec(
+                    e.p("out", e.call_m(e.v("r"), "nullable", e.tup())),
+                    e.p("kind", e.v("k")),
+                    e.p("iface", hf(e, "h_handle_iface", e.rec(e.p("table", a(e, "table")), e.p("kind", e.v("k")), e.p("name", e.call_m(e.v("r"), "name", e.tup()))))),
+                )
+            ),
+        ),
+    )
+    # The interface a handle-kinded type names: an interface definition's name, else "" (any handle: unions, mixins
+    # and the rest that JS hands over as a handle).
+    fn_impl(
+        e,
+        x,
+        "h_handle_iface",
+        body(
+            e,
+            e.if_only(e.not_(e.eq(a(e, "kind"), e.s("handle"))), ret_m(e, e.dstr(""))),
+            e.let("defs", e.call_m(a(e, "table"), "defs", e.tup())),
+            e.if_only(
+                e.not_(hf(e, "h_has", e.rec(e.p("defs", e.v("defs")), e.p("name", a(e, "name"))))), ret_m(e, e.dstr(""))
+            ),
+            e.if_only(
+                e.not_(e.eq(e.call_m(e.call_m(e.v("defs"), "get", a(e, "name")), "kind", e.tup()), e.s("interface"))),
+                ret_m(e, e.dstr("")),
+            ),
+            e.ret(a(e, "name")),
+        ),
+    )
+    # Whether the interface `iface` is `of` or inherits from it (along `parent`); "" (any handle) is above every
+    # interface.
+    fn_impl(
+        e,
+        x,
+        "h_ancestor",
+        body(
+            e,
+            e.if_only(e.eq(a(e, "of"), e.s("")), ret_m(e, e.mb.as_(e.b(True), bool_t(e)))),
+            e.if_only(e.eq(a(e, "iface"), a(e, "of")), ret_m(e, e.mb.as_(e.b(True), bool_t(e)))),
+            e.let("defs", e.call_m(a(e, "table"), "defs", e.tup())),
+            e.if_only(
+                e.not_(hf(e, "h_has", e.rec(e.p("defs", e.v("defs")), e.p("name", a(e, "iface"))))), ret_m(e, e.mb.as_(e.b(False), bool_t(e)))
+            ),
+            e.let("parent", e.call_m(e.call_m(e.v("defs"), "get", a(e, "iface")), "parent", e.tup())),
+            e.if_only(e.eq(e.v("parent"), e.s("")), ret_m(e, e.mb.as_(e.b(False), bool_t(e)))),
+            e.ret(hf(e, "h_ancestor", e.rec(e.p("table", a(e, "table")), e.p("iface", e.v("parent")), e.p("of", a(e, "of"))))),
         ),
     )
     fn_impl(
@@ -1612,11 +1681,16 @@ def module(e):
                     e.p("self", e.int_of(0)),
                     e.p("ret_out", e.int_of(0)),
                     e.p("ret_kind", e.dstr("void")),
+                    e.p("ret_iface", e.dstr("")),
                 ),
             ),
             e.if_only(
                 e.eq(a(e, "kind"), e.s("global")),
-                e.seq(e.mb.set(e.fld(e.v("st"), "ret_kind"), e.dstr("handle")), ret_m(e, _sig_of(e))),
+                e.seq(
+                    e.mb.set(e.fld(e.v("st"), "ret_kind"), e.dstr("handle")),
+                    e.mb.set(e.fld(e.v("st"), "ret_iface"), e.dstr("Window")),
+                    ret_m(e, _sig_of(e)),
+                ),
             ),
             e.if_only(
                 e.eq(a(e, "kind"), e.s("callback")),
@@ -1631,6 +1705,7 @@ def module(e):
                             e.p("optional", e.b(False)),
                             e.p("nullable", e.b(False)),
                             e.p("kind", e.dstr("str")),
+                            e.p("iface", e.dstr("")),
                         ),
                     ),
                     ret_m(e, _sig_of(e)),
@@ -1751,7 +1826,13 @@ def module(e):
                     ),
                 ),
             ),
-            e.if_only(e.eq(a(e, "kind"), e.s("ctor")), e.mb.set(e.fld(e.v("st"), "ret_kind"), e.dstr("handle"))),
+            e.if_only(
+                e.eq(a(e, "kind"), e.s("ctor")),
+                e.seq(
+                    e.mb.set(e.fld(e.v("st"), "ret_kind"), e.dstr("handle")),
+                    e.mb.set(e.fld(e.v("st"), "ret_iface"), a(e, "iface")),
+                ),
+            ),
             e.if_only(
                 or_b(e, e.eq(a(e, "kind"), e.s("op")), e.eq(a(e, "kind"), e.s("get"))),
                 e.seq(
@@ -1765,6 +1846,7 @@ def module(e):
                     ),
                     e.if_only(e.fld(e.v("ar"), "out"), e.mb.set(e.fld(e.v("st"), "ret_out"), e.int_of(1))),
                     e.mb.set(e.fld(e.v("st"), "ret_kind"), e.fld(e.v("ar"), "kind")),
+                    e.mb.set(e.fld(e.v("st"), "ret_iface"), e.fld(e.v("ar"), "iface")),
                 ),
             ),
             e.if_only(
@@ -1969,7 +2051,7 @@ def module(e):
     defs = []
     defs.append(e.p("parse", e.v("h_parse")))
     defs.append(e.p("table", e.v("h_table")))
-    for fn in ["has", "resolve", "kind", "abi_ret", "find", "mangle", "sig", "sig_name", "const_value"]:
+    for fn in ["has", "resolve", "kind", "abi_ret", "find", "mangle", "sig", "sig_name", "const_value", "ancestor"]:
         defs.append(e.p(fn, e.v("h_" + fn)))
     for obj in ["itype", "iarg", "imember", "idef", "itable", "ifound", "iparam", "isig"]:
         defs.append(e.p(obj + "_t", t(e, obj)))
@@ -2011,6 +2093,7 @@ def module(e):
         "sig",
         "sig_name",
         "const_value",
+        "ancestor",
         "itype_t",
         "iarg_t",
         "imember_t",

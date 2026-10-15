@@ -56,7 +56,7 @@ def module(e):
         )
     )
     body.append(e.let("m", e.call(e.lower(e.fld(e.v("js"), "new")), e.tup())))
-    body.append(e.call(e.lower(e.fld(e.v("webidl"), "runtime")), e.rec(e.p("mod", e.v("m")))))
+    body.append(e.let("rt", e.call(e.lower(e.fld(e.v("webidl"), "runtime")), e.rec(e.p("mod", e.v("m"))))))
     body.append(
         e.let(
             "imports",
@@ -64,7 +64,10 @@ def module(e):
         )
     )
     body.append(e.call_m(e.v("m"), "run", e.stage(e.mb.set(e.lower(e.v("imports")), e.rec(e.p("webidl", e.rec()))))))
-    define = e.call(e.lower(e.fld(e.v("webidl"), "define")), e.rec(e.p("mod", e.v("m")), e.p("name", p_(e, "name"))))
+    define = e.call(
+        e.lower(e.fld(e.v("webidl"), "define")),
+        e.rec(e.p("mod", e.v("m")), e.p("name", p_(e, "name")), e.p("rt", e.v("rt"))),
+    )
     assign = e.call_m(
         e.v("m"),
         "assign_index",

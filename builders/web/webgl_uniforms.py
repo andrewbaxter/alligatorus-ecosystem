@@ -122,11 +122,18 @@ def _place(e, self_cv, kind, byte_offset):
     return e.seq(
         e.let("__et", _elem_type(e, kind)),
         e.let("__pt", e.call(e.lower_v("c_ptr"), e.v("__et"))),
+        # The block's pointer as the field's element pointer: the named conversion, staged over the tagged value.
+        e.let("__gv", unwrap_cve_m(e, tag_value(e, self_cv, e.lower_v("t_gpv")))),
+        e.let("__pc", e.lower_v("c_ptr_cast")),
         e.let(
             "__pv",
             unwrap_cve_m(
                 e,
-                cast_value(e, xx(e), loc(e), e.v("__pt"), unwrap_cve_m(e, tag_value(e, self_cv, e.lower_v("t_gpv")))),
+                const_eval_in(
+                    e,
+                    xx(e),
+                    e.stage(tm.conv(e, e.lower(e.v("__pc")), graft(e, e.v("__gv")), e.lower(e.v("__pt")))),
+                ),
             ),
         ),
         e.ret(
@@ -156,6 +163,7 @@ def module(e):
     for t_ in ["f32", "i32", "u32", "void"]:
         x.append(e.let("t_" + t_, e.fld(e.v("wasm"), t_)))
     x.append(e.let("c_ptr", e.fld(e.v("wasm"), "ptr")))
+    x.append(e.let("c_ptr_cast", e.fld(e.v("wasm"), "ptr_cast")))
     x.append(e.let("t_gpv", e.call(e.fld(e.v("wasm"), "global_t"), e.call(e.v("c_ptr"), e.v("t_void")))))
     x.append(e.let("d", e.define()))
     x.append(e.option_type_let())

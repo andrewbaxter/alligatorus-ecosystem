@@ -4,7 +4,7 @@
     python3 -m tests --build    also build every code/<project>/*.atz first
     python3 -m tests GROUP ...  only these case groups
 
-A case group is a directory tests/cases/GROUP holding an `apps` file (one code/ module per line, as
+A case group is a directory tests/cases/GROUP holding cases; its optional `apps` file (one code/ module per line, as
 `<project>/<file>.atz`: the apps the group's cases run against) and, per case NAME, NAME.in (stdin), NAME.out
 (the stdout the app must produce) and optionally NAME.status (the exit status it must end with, 0 when
 absent). A case with a NAME.app file runs only on the module that file names, instead of the group's apps. A
@@ -36,7 +36,12 @@ def _lines(path):
 
 
 def _groups():
-    return sorted(p.name for p in CASES.iterdir() if (p / "apps").exists() or (p / "build-fails").exists())
+    """Every directory under tests/cases holding cases (`*.in`), an `apps` file or a `build-fails` file."""
+    return sorted(
+        p.name
+        for p in CASES.iterdir()
+        if p.is_dir() and (any(p.glob("*.in")) or (p / "apps").exists() or (p / "build-fails").exists())
+    )
 
 
 def build_roots(skip):

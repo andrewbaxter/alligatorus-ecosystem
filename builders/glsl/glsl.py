@@ -110,7 +110,7 @@ TARGET = "glsl"
 
 KINDS = ["float", "int", "uint", "bool"]
 
-GGFN_KINDS = ["func_fn", "in_fn", "out_fn", "uniform_block_fn", "gl_fn"]
+GGFN_KINDS = ["func_fn", "export_fn", "in_fn", "out_fn", "uniform_block_fn", "gl_fn"]
 
 GL_VARS = [
     ["gl_Position", "float", "4"],
@@ -229,7 +229,12 @@ def _inst(e, text):
 
 
 def _gval_new(e, ty_, expr):
-    return mk(e, "gval", e.p("ty", ty_), e.p("expr", expr))
+    return mk(e, "gval", e.p("ty", ty_), e.p("expr", expr), e.p("temp", e.b(False)))
+
+
+def _gval_temp(e, ty_, name):
+    """A value held in a fresh variable of its own, which a binding reuses by name instead of copying."""
+    return mk(e, "gval", e.p("ty", ty_), e.p("expr", name), e.p("temp", e.b(True)))
 
 
 def _gv_expr(e, cve_tp):
@@ -657,19 +662,26 @@ def _bind_impl(e, x, obj):
                     ),
                     e.let("out", _insts_new(e)),
                     _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
-                    e.let("r", _fresh(e, _xmod(e, br_t))),
-                    push(
-                        e,
-                        e.v("out"),
-                        _inst(
+                    # A value already in a fresh variable of its own is the binding; anything else is copied into
+                    # one.
+                    e.let("gv", reinterpret(e, cve_value(e, e.v("v")), "gval")),
+                    e.let("temp", e.call_m(e.v("gv"), "temp", e.tup())),
+                    e.let("r", e.if_else(e.v("temp"), e.call_m(e.v("gv"), "expr", e.tup()), _fresh(e, _xmod(e, br_t)))),
+                    e.if_only(
+                        e.not_(e.v("temp")),
+                        push(
                             e,
-                            e.cat(
-                                _ir_of(e, xx(e), outer(e)),
-                                e.s(" "),
-                                e.v("r"),
-                                e.s(" = "),
-                                _gv_expr(e, e.v("v")),
-                                e.s(";"),
+                            e.v("out"),
+                            _inst(
+                                e,
+                                e.cat(
+                                    _ir_of(e, xx(e), outer(e)),
+                                    e.s(" "),
+                                    e.v("r"),
+                                    e.s(" = "),
+                                    _gv_expr(e, e.v("v")),
+                                    e.s(";"),
+                                ),
                             ),
                         ),
                     ),
@@ -1792,6 +1804,19 @@ def _def_module(e, x):
         str_(e),
         e.seq(e.let("n", in_(e, "n")), e.incr(in_(e, "n")), e.ret(e.cat(e.s("t"), to_str(e, e.v("n"))))),
     )
+    method(
+        e,
+        x,
+        "gmod",
+        "mint",
+        str_(e),
+        str_(e),
+        e.seq(
+            e.let("n", in_(e, "n")),
+            e.incr(in_(e, "n")),
+            e.ret(e.cat(tm.ident_of(e, e.v("arg")), e.s("_"), to_str(e, e.v("n")))),
+        ),
+    )
     x.append(
         e.method_impl(
             e.v("gmod"),
@@ -1854,10 +1879,14 @@ def _def_module(e, x):
             e.p("params", e.list_type(str_(e))),
             e.p("ty", ty(e)),
             e.p("body", e.mb.types_expr()),
+            e.p("public", bool_t(e)),
         ),
         str_(e),
         body(
             e,
+            # A public function keeps its name (the shader's entry point); any other function's name is a hint,
+            # minted into a module-unique symbol.
+            e.let("fname", e.if_else(a(e, "public"), a(e, "name"), e.call_m(outer(e), "mint", a(e, "name")))),
             e.let("loc", e.call(e.eval_builtin("expr_loc"), a(e, "body"))),
             e.let("ptypes", acc(e, in_(e, "xx", "value"), a(e, "ty"), "gfn", "params")),
             e.let("fret", acc(e, in_(e, "xx", "value"), a(e, "ty"), "gfn", "ret")),
@@ -1953,7 +1982,7 @@ def _def_module(e, x):
                 e.cat(
                     _ir_of(e, in_(e, "xx", "value"), e.v("fret")),
                     e.s(" "),
-                    a(e, "name"),
+                    e.v("fname"),
                     e.s("("),
                     e.join(e.v("sig"), ", "),
                     e.s(") {"),
@@ -1962,7 +1991,7 @@ def _def_module(e, x):
             e.foreach(e.v("out"), "i0", push(e, e.v("all"), e.cat(e.s("  "), e.call_m(e.v("i0"), "text", e.tup())))),
             push(e, e.v("all"), e.s("}")),
             push(e, in_(e, "funcs"), e.join(e.v("all"), "\n")),
-            e.ret(a(e, "name")),
+            e.ret(e.v("fname")),
         ),
     )
     method(
@@ -2244,7 +2273,7 @@ def _def_target(e, x):
                             cv_of(
                                 e,
                                 _code_of(e, e.v("all")),
-                                _gval_new(e, e.fld(e.v("st"), "ty", "value"), e.fld(e.v("st"), "res")),
+                                _gval_temp(e, e.fld(e.v("st"), "ty", "value"), e.fld(e.v("st"), "res")),
                             ),
                         )
                     ),
@@ -2450,7 +2479,7 @@ def _def_hooks(e, x):
             e.let(
                 "want",
                 e.if_else(
-                    _ggfn_is(e, "func_fn"),
+                    or_b(e, _ggfn_is(e, "func_fn"), _ggfn_is(e, "export_fn")),
                     _want_list(e, "mod", "name", "params", "ty", "body"),
                     e.if_else(
                         _ggfn_is(e, "uniform_block_fn"),
@@ -2725,6 +2754,7 @@ def _def_hooks(e, x):
                             e.p("params", e.lower(e.v("names"))),
                             e.p("ty", e.lower(e.v("tyv"))),
                             e.p("body", graft(e, e.v("bodycv"))),
+                            e.p("public", e.lower(_ggfn_is(e, "export_fn"))),
                         ),
                     ),
                 ),
@@ -3235,16 +3265,17 @@ def _def_data(e, x):
     def_obj(e, x, "gcode", "glsl code", e.rec(e.p("insts", _insts_t(e))))
     x.append(e.impl_interface(e.v("gcode"), e.mb.builtin("eval", "code_dyn")))
     method(e, x, "gcode", "insts", e.tup(), _insts_t(e), in_(e, "insts"))
-    def_obj(e, x, "gval", "glsl value", e.rec(e.p("ty", ty(e)), e.p("expr", str_(e))))
+    def_obj(e, x, "gval", "glsl value", e.rec(e.p("ty", ty(e)), e.p("expr", str_(e)), e.p("temp", bool_t(e))))
     x.append(
         e.impl_interface(
             e.v("gval"),
             e.fld(e.v("values"), "retag"),
-            e.p("retag", mk(e, "gval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")))),
+            e.p("retag", mk(e, "gval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")), e.p("temp", in_(e, "temp")))),
         )
     )
     accessor(e, x, "gval", "expr", str_(e))
     accessor(e, x, "gval", "ty", ty(e))
+    accessor(e, x, "gval", "temp", bool_t(e))
     x.append(
         e.impl_interface(
             e.v("gval"),
@@ -3684,7 +3715,7 @@ def _def_helpers(e, x):
                     ),
                 ),
             ),
-            e.ret(cv_of(e, _code_of(e, a(e, "out")), _gval_new(e, a(e, "ty"), e.v("r")))),
+            e.ret(cv_of(e, _code_of(e, a(e, "out")), _gval_temp(e, a(e, "ty"), e.v("r")))),
         ),
     )
     fn_impl(

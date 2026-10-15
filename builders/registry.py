@@ -122,6 +122,9 @@ PROJECTS = {
         ("set-llvm.atz", "hashmap", ("llvm", False)),
         ("hashmap-test-wasm.atz", "hashmap_test_wasm", ()),
         ("hashmap-test.atz", "hashmap_test", ()),
+        ("owned-test-wasm.atz", "owned_test", ("wasm",)),
+        ("owned-test.atz", "owned_test", ("llvm",)),
+        ("owned-test-ir.atz", "owned_test", ("llvm", "ir")),
     ],
 }
 

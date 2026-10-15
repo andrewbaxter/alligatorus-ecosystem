@@ -1,9 +1,10 @@
 """values-test.atz (llvm) / values-test-wasm.atz (wasi): `values.hash` checked, in the program itself, against the
 published SipHash-1-3 test vector (Rust's library/coretests/tests/hash/sip.rs: key 00..0f, message 00..07 ->
-0x369095118d299a8e). The app seeds the module's `siphash_key` block with that key, hashes the message as an i64 and
+0x369095118d299a8e). The app seeds the module's SipHash key block (`mod.siphash_key()`) with that key, hashes the message as an i64 and
 exits with 0 when the hash equals the vector's low 32 bits, else 1."""
 
 from ..root_mode import APP, root_mode_finish
+from .. import target_mb as tm
 from ..target_mb import fn_of
 from ..wasm.wat import bind_types
 
@@ -36,7 +37,9 @@ def _i64(e, hi, lo):
 
 def _seed_and_hash(e, hash_fn):
     def key_cell(i):
-        return e.mb.field(e.mb.as_(e.call(fn_of(e, _lo(e, "key")), e.tup()), _lo(e, "t_pi64")), e.n(i))
+        return e.mb.field(
+            tm.conv(e, _lo(e, "ptr_cast"), e.call(fn_of(e, _lo(e, "key")), e.tup()), _lo(e, "t_pi64")), e.n(i)
+        )
 
     return [
         e.mb.set(key_cell(0), _i64(e, *KEY[0])),
@@ -59,7 +62,7 @@ def module(e, kind):
                 e.call(e.fld(lib, "fn"), e.rec(e.p("params", e.list_new(e.mb.eval_type())), e.p("ret", e.v("t_i32")))),
             )
         )
-        key_ty = e.p("ty", e.call(e.fld(lib, "array"), e.rec(e.p("elem", e.v("t_i64")), e.p("count", e.int_of(2)))))
+        mod = e.v("ll")
         exported = ["llvm", "ll", "t_i32", "t_i64", "t_pi64", "key", "main_fn_t"]
     else:
         setup.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
@@ -74,11 +77,14 @@ def module(e, kind):
                 e.call(e.fld(lib, "fn"), e.rec(e.p("params", e.list_new(e.mb.eval_type())), e.p("ret", e.v("t_void")))),
             )
         )
-        key_ty = e.p("size", e.int_of(16))
+        mod = e.v("m")
         exported = ["m", "t_i32", "t_i64", "t_u32", "t_pi64", "key", "proc_exit_fn_t", "start_fn_t"]
     setup.append(e.let("values", e.import_local("values", "values.atz")))
     setup.append(e.let("t_pi64", e.call(e.fld(lib, "ptr"), e.v("t_i64"))))
-    setup.append(e.let("key", e.call(e.fld(lib, "alloc_dep"), e.rec(e.p("name", e.s("siphash_key")), key_ty))))
+    setup.append(e.let("ptr_cast", e.fld(lib, "ptr_cast")))
+    exported.append("ptr_cast")
+    # The module's own key block (an alloc dependency is its instance, so a block of the same name would be another).
+    setup.append(e.let("key", e.call_m(mod, "siphash_key", e.tup())))
     exported.append("values")
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
@@ -96,7 +102,7 @@ def module(e, kind):
             e.let(
                 "main",
                 e.call(
-                    e.fld(e.v("llvm"), "func_fn"),
+                    e.fld(e.v("llvm"), "export_fn"),
                     e.rec(
                         e.p("mod", e.v("ll")),
                         e.p("name", e.s("main")),
@@ -127,7 +133,7 @@ def module(e, kind):
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -138,6 +144,5 @@ def module(e, kind):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top

@@ -7,6 +7,7 @@ of the document into the writer. A malformed document prints `json error <code>`
 """
 
 from ..root_mode import APP, root_mode_finish
+from .. import target_mb as tm
 from ..target_mb import fn_of
 from ..wasm.wat import bind_types
 
@@ -55,12 +56,12 @@ def _json_lets(e, top, lib_file, read, write):
     """The parser over `read` and the writer over `write`, as top-level values the body lowers."""
     top.append(e.let("json", e.import_local("json", lib_file)))
     top.append(e.let("jp", e.call(e.fld(e.v("json"), "parser"), e.rec(e.p("name", e.s(read)), e.p("read", e.v(read))))))
-    for f in ["type", "new"]:
+    for f in ["type", "own", "new"]:
         top.append(e.let("jp_" + f, e.fld(e.v("jp"), f)))
     top.append(
         e.let("jw", e.call(e.fld(e.v("json"), "writer"), e.rec(e.p("name", e.s(write)), e.p("write", e.v(write)))))
     )
-    for f in ["type", "new"]:
+    for f in ["type", "own", "new"]:
         top.append(e.let("jw_" + f, e.fld(e.v("jw"), f)))
 
 
@@ -74,8 +75,8 @@ def _echo(e, null, on_error, write_byte):
         return e.p(name, method("w", name, *args) if args else method("w", name, e.tup()))
 
     return e.seq(
-        e.let("p", e.mb.as_(e.call(_lo(e, "jp_new"), null), _lo(e, "jp_type"))),
-        e.let("w", e.mb.as_(e.call(_lo(e, "jw_new"), null), _lo(e, "jw_type"))),
+        e.let("p", e.mb.as_(e.call(_lo(e, "jp_new"), null), _lo(e, "jp_own"))),
+        e.let("w", e.mb.as_(e.call(_lo(e, "jw_new"), null), _lo(e, "jw_own"))),
         e.mb.labeled(
             "doc",
             e.mb.loop(
@@ -106,7 +107,7 @@ def _error_report(e, null, write_byte, code):
     return e.seq(
         *[write_byte(e.n(ord(ch))) for ch in ERROR_TEXT],
         e.seq(
-            e.let("w2", e.mb.as_(e.call(_lo(e, "jw_new"), null), _lo(e, "jw_type"))),
+            e.let("w2", e.mb.as_(e.call(_lo(e, "jw_new"), null), _lo(e, "jw_own"))),
             e.call(e.fld(e.v("w2"), "int"), code),
         ),
         write_byte(e.n(ord("\n"))),
@@ -168,7 +169,7 @@ def _llvm(e, mode):
         e.let(
             "main",
             e.call(
-                e.fld(e.v("llvm"), "func_fn"),
+                e.fld(e.v("llvm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("ll")),
                     e.p("name", e.s("main")),
@@ -230,9 +231,12 @@ def _wasm(e):
             )
         )
 
+    def _lo_lib_fn(name):
+        return e.lower(e.fld(e.v("wasm"), name))
+
     def block(name, ptr_type):
         """A static block as a typed pointer (in a body)."""
-        return e.mb.as_(e.call(fn_of(e, _lo(e, name)), e.tup()), _lo(e, ptr_type))
+        return tm.conv(e, _lo_lib_fn("ptr_cast"), e.call(fn_of(e, _lo(e, name)), e.tup()), _lo(e, ptr_type))
 
     def cell(index):
         return e.mb.field(block("cells", "t_pi32"), e.n(index))
@@ -245,7 +249,7 @@ def _wasm(e):
 
     def addr(name):
         """A static block's address as u32 (for an iovec)."""
-        return e.mb.as_(block(name, "t_pv"), _lo(e, "t_u32"))
+        return tm.conv(e, _lo_lib_fn("ptr_to_int"), block(name, "t_pv"), _lo(e, "t_u32"))
 
     def count(name):
         """The i32 a wasi call stored in the block."""
@@ -261,7 +265,7 @@ def _wasm(e):
                 e.mb.set(e.mb.field(block("in_iov", "t_pu32"), e.n(1)), conv("t_u32", e.n(BUF))),
                 e.let(
                     "errno",
-                    e.call(_lo(e, "fd_read"), e.tup(e.n(0), block("in_iov", "t_pv"), e.n(1), block("nread", "t_pv"))),
+                    e.call(_lo(e, "fd_read"), e.tup(e.n(0), block("in_iov", "t_pv"), e.n(1), block("nread", "t_pu32"))),
                 ),
                 e.if_only(
                     e.eq(e.v("errno"), e.n(0)),
@@ -293,7 +297,7 @@ def _wasm(e):
                 e.mb.field(block("out_iov", "t_pu32"), e.n(1)),
                 e.call(e.fld(cell(CELL_OUT_LEN), "wrap"), _lo(e, "t_u32")),
             ),
-            e.call(_lo(e, "fd_write"), e.tup(e.n(1), block("out_iov", "t_pv"), e.n(1), block("nwritten", "t_pv"))),
+            e.call(_lo(e, "fd_write"), e.tup(e.n(1), block("out_iov", "t_pv"), e.n(1), block("nwritten", "t_pu32"))),
             e.mb.set(cell(CELL_OUT_LEN), e.n(0)),
         ),
     )
@@ -312,6 +316,7 @@ def _wasm(e):
         "t_u32",
         "t_void",
         "t_pv",
+        "t_pu32",
         "start_fn_t",
         "proc_exit",
         "stdin_read",
@@ -345,7 +350,7 @@ def _wasm(e):
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -356,7 +361,6 @@ def _wasm(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top
 

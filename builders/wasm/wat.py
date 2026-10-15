@@ -1,8 +1,17 @@
-"""wat-2.0.atz: WebAssembly text target."""
+"""wat-2.0.atz: WebAssembly text target.
+
+Conversions: `as` only converts losslessly and never between pointer types or between pointers and integers; a
+pointer type casts from itself and from constant literals. The unsafe conversions are named constant functions
+taking `{value, to}`: `ptr_cast` (pointer to another pointer type), `ptr_to_int` (pointer to i32) and `int_to_ptr`
+(i32 to a pointer type). Internal symbols are minted per module from a hint; only exports and imports carry user
+names. Dependencies (`func_dep`, `alloc_dep`, `data_dep`, `cstr_dep`) are identified by the instance, never by
+name: two apps or libraries naming a dependency alike define two items. The module's SipHash key block is reached
+through `mod.siphash_key()`."""
 
 from ..core import meta, values
 from .. import target_mb as tm
 from ..target_mb import (
+    panic_errs,
     a,
     acc,
     accessor,
@@ -449,13 +458,14 @@ def _sip_hash(e, to_i64, key_arg):
     dependency under the module's key block; `key_arg` is the `alloc_dep` size/type field for that block."""
 
     def key(i):
-        return e.mb.field(e.mb.as_(graft(e, e.v("keyp")), e.lower(e.v("pi64"))), e.n(i))
+        return e.mb.field(graft(e, e.v("keypc")), e.n(i))
 
     return try_er(
         e,
         e.mb.labeled(
             "h",
             e.seq(
+                e.let("sipmod", _xmod_must(e)),
                 e.let(
                     "siphash_t",
                     mk(
@@ -472,9 +482,33 @@ def _sip_hash(e, to_i64, key_arg):
                         "h_allocdep_call",
                         e.p("xx", a(e, "xx")),
                         e.p("loc", a(e, "loc")),
+                        e.p("id", e.call_m(e.v("sipmod"), "sip_key_id", e.tup())),
                         e.p("name", e.s("siphash_key")),
                         key_arg,
                     ),
+                ),
+                # The key block's pointer as the cell type (a retag: the block is the module's).
+                e.let(
+                    "keyv",
+                    unwrap_cve_t(
+                        e,
+                        try_er(
+                            e,
+                            _operand(
+                                e,
+                                a(e, "xx"),
+                                a(e, "loc"),
+                                _xmod_must(e),
+                                mk(e, "wt_ptr", e.p("pointee", mk_arg(e, "wt_void", e.tup()))),
+                                e.v("keyp"),
+                            ),
+                            cve_t(e),
+                        ),
+                    ),
+                ),
+                e.let(
+                    "keypc",
+                    hf_rec(e, "h_retag", e.p("mod", _xmod_must(e)), e.p("cv", e.v("keyv")), e.p("ty", e.v("pi64"))),
                 ),
                 e.let(
                     "args",
@@ -489,6 +523,7 @@ def _sip_hash(e, to_i64, key_arg):
                         "h_funcdep_call",
                         e.p("xx", a(e, "xx")),
                         e.p("loc", a(e, "loc")),
+                        e.p("id", e.call_m(e.v("sipmod"), "sip_fn_id", e.tup())),
                         e.p("name", e.s("siphash13_u64")),
                         e.p("params", e.list_new(e.mb.types_string(), e.s("m"), e.s("k0"), e.s("k1"))),
                         e.p("ty", e.v("siphash_t")),
@@ -1509,9 +1544,13 @@ def _val_shape_impls(e, x):
     )
 
 
+# The named unsafe conversions (const functions `{value, to}`), exported beside the type factories.
+CONV_NAMES = ["ptr_cast", "ptr_to_int", "int_to_ptr"]
+
 WGFN_KINDS = [
     "import_fn",
     "func_fn",
+    "export_fn",
     "data_fn",
     "cstr_fn",
     "alloc_fn",
@@ -2767,6 +2806,7 @@ def module(e):
     x.append(e.impl_interface(e.v("wcode"), e.mb.builtin("eval", "code_dyn")))
     method(e, x, "wcode", "insts", e.tup(), _insts_t(e), in_(e, "insts"))
 
+    tm.module_defs(e, x, "wdef", "wasm definition")
     def_obj(
         e,
         x,
@@ -2780,7 +2820,11 @@ def module(e):
             e.p("data", e.list_type(t(e, "wdata"))),
             e.p("data_end", int_t(e)),
             e.p("funcs", e.list_type(str_(e))),
-            e.p("fn_names", e.list_type(str_(e))),
+            e.p("defs", e.list_type(t(e, "wdef"))),
+            # The SipHash key block and function are one dependency each per module: their identities are minted
+            # with the module, so every hash in it shares them.
+            e.p("sip_key_id", tm.unique_t(e)),
+            e.p("sip_fn_id", tm.unique_t(e)),
             e.p("exports", e.list_type(str_(e))),
             e.p("labels", e.list_type(t(e, "wlabel"))),
             e.p("locals", e.list_type(t(e, "wlocal"))),
@@ -3488,6 +3532,7 @@ def module(e):
         e.rec(
             e.p("xx", xx_t(e)),
             e.p("loc", loc_t(e)),
+            e.p("id", tm.unique_t(e)),
             e.p("name", str_(e)),
             e.p("params", e.list_type(str_(e))),
             e.p("ty", ty(e)),
@@ -3504,27 +3549,26 @@ def module(e):
         body(
             e,
             e.let("mod", _xmod_must(e)),
-            e.if_only(
-                e.not_(e.call_m(e.v("mod"), "has_func", a(e, "name"))),
-                e.seq(
-                    e.let(
-                        "__f",
-                        e.call_m(
-                            e.v("mod"),
-                            "func",
-                            e.rec(
-                                e.p("name", a(e, "name")),
-                                e.p("params", a(e, "params")),
-                                e.p("ty", a(e, "ty")),
-                                e.p("body", a(e, "body")),
-                            ),
+            e.let(
+                "fref",
+                tm.def_once(
+                    e,
+                    e.v("mod"),
+                    a(e, "id"),
+                    e.call_m(
+                        e.v("mod"),
+                        "func",
+                        e.rec(
+                            e.p("name", a(e, "name")),
+                            e.p("params", a(e, "params")),
+                            e.p("ty", a(e, "ty")),
+                            e.p("body", a(e, "body")),
+                            e.p("public", e.b(False)),
                         ),
-                    )
+                    ),
                 ),
             ),
-            e.let(
-                "ref", cv_of(e, code_none(e, loc(e)), _wval_new(e, a(e, "ty"), "func", e.cat(e.s("$"), a(e, "name"))))
-            ),
+            e.let("ref", cv_of(e, code_none(e, loc(e)), _wval_new(e, a(e, "ty"), "func", e.v("fref")))),
             e.ret(
                 _must(
                     e,
@@ -3548,7 +3592,13 @@ def module(e):
         e,
         x,
         "h_allocdep_call",
-        e.rec(e.p("xx", xx_t(e)), e.p("loc", loc_t(e)), e.p("name", str_(e)), e.p("size", int_t(e))),
+        e.rec(
+            e.p("xx", xx_t(e)),
+            e.p("loc", loc_t(e)),
+            e.p("id", tm.unique_t(e)),
+            e.p("name", str_(e)),
+            e.p("size", int_t(e)),
+        ),
         cve_t(e),
     )
     fn_throws(e, "h_allocdep_call", errs_t(e))
@@ -3560,7 +3610,12 @@ def module(e):
             e,
             e.let("mod", _xmod_must(e)),
             e.let(
-                "ref", e.call_m(e.v("mod"), "alloc_once", e.rec(e.p("name", a(e, "name")), e.p("size", a(e, "size"))))
+                "ref",
+                e.call_m(
+                    e.v("mod"),
+                    "alloc_once",
+                    e.rec(e.p("id", a(e, "id")), e.p("name", a(e, "name")), e.p("size", a(e, "size"))),
+                ),
             ),
             e.ret(
                 cv_of(
@@ -3592,6 +3647,7 @@ def module(e):
         e.rec(
             e.p("xx", xx_t(e)),
             e.p("loc", loc_t(e)),
+            e.p("id", tm.unique_t(e)),
             e.p("name", str_(e)),
             e.p("elem", ty(e)),
             e.p("values", e.list_type(int_t(e))),
@@ -3736,7 +3792,12 @@ def module(e):
                 ),
             ),
             e.let(
-                "ref", e.call_m(e.v("mod"), "data_once", e.rec(e.p("name", a(e, "name")), e.p("bytes", e.v("bytes"))))
+                "ref",
+                e.call_m(
+                    e.v("mod"),
+                    "data_once",
+                    e.rec(e.p("id", a(e, "id")), e.p("name", a(e, "name")), e.p("bytes", e.v("bytes"))),
+                ),
             ),
             e.ret(
                 cv_of(
@@ -3808,6 +3869,7 @@ def module(e):
                     mk(
                         e,
                         "wfdep",
+                        e.p("id", tm.fresh_unique(e)),
                         e.p("name", a(e, "name")),
                         e.p("params", a(e, "params")),
                         e.p("ty", a(e, "ty")),
@@ -3836,6 +3898,7 @@ def module(e):
                     mk(
                         e,
                         "wddep",
+                        e.p("id", tm.fresh_unique(e)),
                         e.p("name", a(e, "name")),
                         e.p("elem", a(e, "elem")),
                         e.p("values", a(e, "values")),
@@ -3882,6 +3945,7 @@ def module(e):
                     mk(
                         e,
                         "wadep",
+                        e.p("id", tm.fresh_unique(e)),
                         e.p("name", a(e, "name")),
                         e.p("size", a(e, "size")),
                     ),
@@ -4021,6 +4085,8 @@ def module(e):
     accessor(e, x, "winst", "k", t(e, "winst_u"))
     accessor(e, x, "wdep", "k", t(e, "wdep_u"))
     accessor(e, x, "wmeta", "k", t(e, "wmeta_u"))
+    accessor(e, x, "wmod", "sip_key_id", tm.unique_t(e))
+    accessor(e, x, "wmod", "sip_fn_id", tm.unique_t(e))
     for vo in ["wlocal", "wlabel", "winst", "wmod", "wdata", "wblock"]:
         marker_type(e, x, vo, vo, vo + "_m", e.aspect_dispatch(lv(e, vo + "_m_id")))
         x.append(e.impl_interface(e.v(vo), t(e, vo + "_m")))
@@ -4216,14 +4282,7 @@ def module(e):
         e.rec(e.p("name", str_(e)), e.p("size", int_t(e))),
         str_(e),
         e.seq(
-            e.foreach(
-                in_(e, "data"),
-                "d0",
-                e.if_only(
-                    e.eq(e.call_m(e.v("d0"), "name", e.tup()), a(e, "name")),
-                    e.mb.panic(e.cat(e.s("wasm: duplicate data segment "), a(e, "name"))),
-                ),
-            ),
+            e.let("dname", e.call_m(outer(e), "mint", a(e, "name"))),
             e.let(
                 "addr",
                 e.mb.operator_mul(
@@ -4233,29 +4292,13 @@ def module(e):
             push(
                 e,
                 in_(e, "data"),
-                mk(e, "wdata", e.p("name", a(e, "name")), e.p("addr", e.v("addr")), e.p("bytes", e.list_new(int_t(e)))),
+                mk(e, "wdata", e.p("name", e.v("dname")), e.p("addr", e.v("addr")), e.p("bytes", e.list_new(int_t(e)))),
             ),
             e.mb.set(in_(e, "data_end"), e.mb.operator_add(e.v("addr"), a(e, "size"))),
-            e.ret(a(e, "name")),
+            e.ret(e.v("dname")),
         ),
     )
-    method(
-        e,
-        x,
-        "wmod",
-        "has_func",
-        str_(e),
-        bool_t(e),
-        e.seq(
-            e.let("hit", e.rec(e.p("v", e.int_of(0)))),
-            e.foreach(
-                in_(e, "fn_names"),
-                "n0",
-                e.if_only(e.eq(e.v("n0"), e.v("arg")), e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1))),
-            ),
-            e.ret(e.eq(e.fld(e.v("hit"), "v"), num(e, 1))),
-        ),
-    )
+    tm.module_defs_methods(e, x, "wmod", "wdef")
     # A zeroed block defined on first use (dependencies ask for it from every use site).
     # A data segment defined on first use (dependencies ask for it from every use site).
     method(
@@ -4263,28 +4306,13 @@ def module(e):
         x,
         "wmod",
         "data_once",
-        e.rec(e.p("name", str_(e)), e.p("bytes", e.list_type(int_t(e)))),
+        e.rec(e.p("id", tm.unique_t(e)), e.p("name", str_(e)), e.p("bytes", e.list_type(int_t(e)))),
         str_(e),
-        e.seq(
-            e.let("hit", e.rec(e.p("v", e.int_of(0)))),
-            e.foreach(
-                in_(e, "data"),
-                "d0",
-                e.if_only(
-                    e.eq(e.call_m(e.v("d0"), "name", e.tup()), a(e, "name")),
-                    e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1)),
-                ),
-            ),
-            e.if_only(
-                e.eq(e.fld(e.v("hit"), "v"), num(e, 0)),
-                e.seq(
-                    e.let(
-                        "__d",
-                        e.call_m(outer(e), "data", e.rec(e.p("name", a(e, "name")), e.p("bytes", a(e, "bytes")))),
-                    )
-                ),
-            ),
-            e.ret(a(e, "name")),
+        tm.def_once(
+            e,
+            outer(e),
+            a(e, "id"),
+            e.call_m(outer(e), "data", e.rec(e.p("name", a(e, "name")), e.p("bytes", a(e, "bytes")))),
         ),
     )
     method(
@@ -4292,27 +4320,13 @@ def module(e):
         x,
         "wmod",
         "alloc_once",
-        e.rec(e.p("name", str_(e)), e.p("size", int_t(e))),
+        e.rec(e.p("id", tm.unique_t(e)), e.p("name", str_(e)), e.p("size", int_t(e))),
         str_(e),
-        e.seq(
-            e.let("hit", e.rec(e.p("v", e.int_of(0)))),
-            e.foreach(
-                in_(e, "data"),
-                "d0",
-                e.if_only(
-                    e.eq(e.call_m(e.v("d0"), "name", e.tup()), a(e, "name")),
-                    e.mb.set(e.fld(e.v("hit"), "v"), num(e, 1)),
-                ),
-            ),
-            e.if_only(
-                e.eq(e.fld(e.v("hit"), "v"), num(e, 0)),
-                e.seq(
-                    e.let(
-                        "__a", e.call_m(outer(e), "alloc", e.rec(e.p("name", a(e, "name")), e.p("size", a(e, "size"))))
-                    )
-                ),
-            ),
-            e.ret(a(e, "name")),
+        tm.def_once(
+            e,
+            outer(e),
+            a(e, "id"),
+            e.call_m(outer(e), "alloc", e.rec(e.p("name", a(e, "name")), e.p("size", a(e, "size")))),
         ),
     )
     method(
@@ -4369,14 +4383,7 @@ def module(e):
         e.rec(e.p("name", str_(e)), e.p("bytes", e.list_type(int_t(e)))),
         str_(e),
         e.seq(
-            e.foreach(
-                in_(e, "data"),
-                "d0",
-                e.if_only(
-                    e.eq(e.call_m(e.v("d0"), "name", e.tup()), a(e, "name")),
-                    e.mb.panic(e.cat(e.s("wasm: duplicate data segment "), a(e, "name"))),
-                ),
-            ),
+            e.let("dname", e.call_m(outer(e), "mint", a(e, "name"))),
             e.let(
                 "addr",
                 e.mb.operator_mul(
@@ -4386,12 +4393,12 @@ def module(e):
             push(
                 e,
                 in_(e, "data"),
-                mk(e, "wdata", e.p("name", a(e, "name")), e.p("addr", e.v("addr")), e.p("bytes", a(e, "bytes"))),
+                mk(e, "wdata", e.p("name", e.v("dname")), e.p("addr", e.v("addr")), e.p("bytes", a(e, "bytes"))),
             ),
             count_let(e, "n"),
             count_loop(e, "n", a(e, "bytes")),
             e.mb.set(in_(e, "data_end"), e.mb.operator_add(e.v("addr"), e.fld(e.v("n"), "v"))),
-            e.ret(a(e, "name")),
+            e.ret(e.v("dname")),
         ),
     )
     method(
@@ -4474,7 +4481,7 @@ def module(e):
                     outer(e),
                     "data",
                     e.rec(
-                        e.p("name", e.cat(e.s("str"), to_str(e, e.call_m(outer(e), "fresh_n", e.tup())))),
+                        e.p("name", e.s("str")),
                         e.p("bytes", e.v("bytes")),
                     ),
                 )
@@ -4527,17 +4534,6 @@ def module(e):
                     ),
                     e.p("other", push(e, in_(e, "meta"), e.v("arg"))),
                 )
-            ),
-        )
-    )
-    x.append(
-        e.method_impl(
-            e.v("wmod"),
-            "export",
-            str_(e),
-            e.option_type_none(),
-            e.stage(
-                push(e, in_(e, "exports"), e.cat(e.s('(export "'), e.v("arg"), e.s('" (func $'), e.v("arg"), e.s("))")))
             ),
         )
     )
@@ -4880,10 +4876,22 @@ def module(e):
             e.p("params", e.list_type(str_(e))),
             e.p("ty", ty(e)),
             e.p("body", e.mb.types_expr()),
+            e.p("public", bool_t(e)),
         ),
         str_(e),
         body(
             e,
+            # A public function keeps its name and is exported under it (the name is its interface); any other
+            # function's name is a hint, minted into a module-unique symbol.
+            e.let("fname", e.if_else(a(e, "public"), a(e, "name"), e.call_m(outer(e), "mint", a(e, "name")))),
+            e.if_only(
+                a(e, "public"),
+                push(
+                    e,
+                    in_(e, "exports"),
+                    e.cat(e.s('(export "'), a(e, "name"), e.s('" (func $'), e.v("fname"), e.s("))")),
+                ),
+            ),
             e.let("loc", e.call(e.eval_builtin("expr_loc"), a(e, "body"))),
             e.let("ptypes", acc(e, in_(e, "xx", "value"), a(e, "ty"), "wfn", "params")),
             e.let("fret", acc(e, in_(e, "xx", "value"), a(e, "ty"), "wfn", "ret")),
@@ -5015,6 +5023,9 @@ def module(e):
                     e.let("drops", e.map_new(str_(e), code_t(e))),
                     count_let(e, "pn"),
                     count_loop(e, "pn", e.v("entries")),
+                    # The bindings as they stand after the body (a parameter's setter may have replaced its
+                    # binding: an owned parameter moved out is dropped as moved), by the parameters' names.
+                    e.let("cur", e.call(e.eval_builtin("scope_bindings"), e.v("sc"))),
                     e.let("di", e.rec(e.p("v", e.int_of(0)))),
                     e.foreach(
                         e.v("entries"),
@@ -5031,7 +5042,7 @@ def module(e):
                                             e,
                                             e.mb.eval_binding(),
                                             "drop",
-                                            e.fld(e.v("en"), "value"),
+                                            e.call_m(e.v("cur"), "get", e.fld(e.v("en"), "key")),
                                             e.rec(e.p("xx", e.v("ctx")), e.p("loc", e.v("loc"))),
                                         ),
                                         "parameter drop",
@@ -5129,20 +5140,19 @@ def module(e):
                 ),
             ),
             e.foreach(e.fld(e.v("rendered"), "lines"), "l", push(e, e.v("all"), e.cat(e.s("    "), e.v("l")))),
-            push(e, in_(e, "fn_names"), a(e, "name")),
             push(
                 e,
                 in_(e, "funcs"),
                 e.cat(
                     e.s("  (func $"),
-                    a(e, "name"),
+                    e.v("fname"),
                     e.join(e.v("sig"), ""),
                     e.s("\n"),
                     e.join(e.v("all"), "\n"),
                     e.s("\n  )"),
                 ),
             ),
-            e.ret(e.cat(e.s("$"), a(e, "name"))),
+            e.ret(e.cat(e.s("$"), e.v("fname"))),
         ),
     )
 
@@ -5193,18 +5203,14 @@ def module(e):
                     or_b(
                         e,
                         is_const(e, xx(e), src_type(e)),
-                        or_b(
+                        and_b(
                             e,
+                            has(e, xx(e), src_type(e), "wint"),
                             and_b(
                                 e,
-                                has(e, xx(e), src_type(e), "wint"),
-                                and_b(
-                                    e,
-                                    e.mb.operator_ge(acc(e, xx(e), src_type(e), "wint", "min"), in_(e, "min")),
-                                    e.mb.operator_le(acc(e, xx(e), src_type(e), "wint", "max"), in_(e, "max")),
-                                ),
+                                e.mb.operator_ge(acc(e, xx(e), src_type(e), "wint", "min"), in_(e, "min")),
+                                e.mb.operator_le(acc(e, xx(e), src_type(e), "wint", "max"), in_(e, "max")),
                             ),
-                            and_b(e, has(e, xx(e), src_type(e), "wptr"), e.eq(in_(e, "bits"), num(e, 32))),
                         ),
                     ),
                 )
@@ -5214,27 +5220,6 @@ def module(e):
             e,
             e.let("st", cve_type(e, a(e, "cv"))),
             e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
-            e.if_only(
-                has(e, xx(e), e.v("st"), "wptr"),
-                e.seq(
-                    e.let(
-                        "pty",
-                        e.if_else(
-                            has(e, xx(e), e.v("st"), "wgtype_m"),
-                            acc(e, xx(e), e.v("st"), "wgtype_m", "base"),
-                            e.v("st"),
-                        ),
-                    ),
-                    e.let(
-                        "pv",
-                        unwrap_cve_m(
-                            e,
-                            try_er(e, _operand(e, xx(e), loc(e), _xmod(e), e.v("pty"), a(e, "cv")), cve_t(e)),
-                        ),
-                    ),
-                    ret_m(e, _retag(e, e.v("pv"), outer(e))),
-                ),
-            ),
             e.if_only(
                 is_const(e, xx(e), e.v("st")),
                 e.seq(
@@ -5604,27 +5589,9 @@ def module(e):
                 or_b(
                     e,
                     is_equal(e, xx(e), outer(e), src_type(e)),
-                    or_b(
-                        e,
-                        is_const(e, xx(e), src_type(e)),
-                        or_b(
-                            e,
-                            and_b(
-                                e,
-                                has(e, xx(e), src_type(e), "wptr"),
-                                or_b(
-                                    e,
-                                    has(e, xx(e), in_(e, "pointee"), "wvoid"),
-                                    has(e, xx(e), acc(e, xx(e), src_type(e), "wptr", "pointee"), "wvoid"),
-                                ),
-                            ),
-                            and_b(
-                                e,
-                                has(e, xx(e), src_type(e), "wint"),
-                                e.eq(acc(e, xx(e), src_type(e), "wint", "bits"), num(e, 32)),
-                            ),
-                        ),
-                    ),
+                    # A pointer literal (a constant address); any other pointer or an integer only through the
+                    # named conversions `ptr_cast`, `ptr_to_int` and `int_to_ptr`.
+                    is_const(e, xx(e), src_type(e)),
                 )
             ),
         ),
@@ -5660,7 +5627,7 @@ def module(e):
                     ),
                 ),
             ),
-            e.ret(_retag(e, a(e, "cv"), outer(e))),
+            e.ret(err_cve(e, loc(e), e.cat(e.s("wasm: no cast to a pointer from "), ty_desc(e, e.v("st"))))),
         ),
         no_cast_to(e),
         cast_to_panic(e),
@@ -5700,13 +5667,77 @@ def module(e):
                         ),
                     ),
                     e.let("i32", _int_ty(e, "i32")),
+                    e.let("w", e.call_m(_xmod(e), "width", in_(e, "pointee"))),
+                    # A constant index folds into the access's `offset=`: the place is the pointer itself.
+                    e.if_only(
+                        and_b(
+                            e,
+                            e.not_(is_runtime(e, a(e, "key"))),
+                            is_const(e, xx(e), cve_type(e, a(e, "key"))),
+                        ),
+                        e.seq(
+                            e.let(
+                                "ki",
+                                e.call(
+                                    e.eval_builtin("const_numeric_to_double"),
+                                    e.rec(e.p("xx", xx(e)), e.p("value", cve_value(e, a(e, "key")))),
+                                ),
+                            ),
+                            e.if_only(
+                                or_b(
+                                    e,
+                                    e.not_(
+                                        e.eq(e.mb.as_(e.mb.as_(e.v("ki"), int_t(e)), e.types_double()), e.v("ki"))
+                                    ),
+                                    e.mb.operator_lt(e.v("ki"), num(e, 0)),
+                                ),
+                                ret_m(e, err_cve(e, loc(e), "pointer index must be a non-negative integer")),
+                            ),
+                            e.let("pi", unwrap_cve_m(e, _retag(e, e.v("pv"), e.v("i32")))),
+                            # A place's address is a local: the pointer is set into a fresh one (folded back onto
+                            # the stack when used once).
+                            e.let("out", _insts_new(e)),
+                            _append_code(e, e.v("out"), cve_code(e, e.v("pi"))),
+                            e.let("r", _fresh(e, _xmod(e), e.v("i32"))),
+                            push(e, e.v("out"), _store_inst(e, _wval_of(e, e.v("pi")), e.v("r"))),
+                            ret_m(
+                                e,
+                                ok_cve(
+                                    e,
+                                    cv_of(
+                                        e,
+                                        _code_of(e, e.v("out")),
+                                        mk(
+                                            e,
+                                            "wval",
+                                            e.p("ty", in_(e, "pointee")),
+                                            e.p(
+                                                "source",
+                                                e.call(
+                                                    e.lower_v("ws_mem"),
+                                                    e.rec(
+                                                        e.p("addr", e.v("r")),
+                                                        e.p(
+                                                            "offset",
+                                                            e.mb.as_(
+                                                                e.mb.operator_mul(e.v("ki"), e.v("w")), int_t(e)
+                                                            ),
+                                                        ),
+                                                    ),
+                                                ),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
                     e.let(
                         "iv",
                         unwrap_cve_m(
                             e, try_er(e, _operand(e, xx(e), loc(e), _xmod(e), e.v("i32"), a(e, "key")), cve_t(e))
                         ),
                     ),
-                    e.let("w", e.call_m(_xmod(e), "width", in_(e, "pointee"))),
                     e.let(
                         "scaled",
                         unwrap_cve_m(
@@ -6837,7 +6868,7 @@ def module(e):
                         _wgfn_is(e, "import_fn"),
                         e.list_new(str_(e), e.s("module"), e.s("name"), e.s("ty")),
                         e.if_else(
-                            _wgfn_is(e, "func_fn"),
+                            or_b(e, _wgfn_is(e, "func_fn"), _wgfn_is(e, "export_fn")),
                             e.list_new(str_(e), e.s("mod"), e.s("name"), e.s("params"), e.s("ty"), e.s("body")),
                             e.if_else(
                                 _wgfn_is(e, "alloc_fn"),
@@ -7130,6 +7161,7 @@ def module(e):
                 ),
             ),
             e.let("bodycv", _wgfn_field(e, "body")),
+            e.let("public", _wgfn_is(e, "export_fn")),
             e.let(
                 "refcv",
                 _wgfn_staged(
@@ -7142,6 +7174,7 @@ def module(e):
                             e.p("params", e.lower(e.v("names"))),
                             e.p("ty", e.lower(e.v("tyv"))),
                             e.p("body", graft(e, e.v("bodycv"))),
+                            e.p("public", e.lower(e.v("public"))),
                         ),
                     ),
                 ),
@@ -7264,7 +7297,7 @@ def module(e):
                             "__r",
                             None,
                             e.p("ok", e.v("__r")),
-                            e.p("errs", e.mb.panic(e.s("wasm target: return value could not be stored"))),
+                            e.p("errs", panic_errs(e, "wasm target", "return value store", e.v("__r"))),
                         ),
                     ),
                     e.let("lv", _wval_of(e, e.v("r"))),
@@ -7334,7 +7367,9 @@ def module(e):
                             e.p("data", e.list_new(lt(e, "wdata"))),
                             e.p("data_end", e.int_of(8)),
                             e.p("funcs", e.list_new(str_(e))),
-                            e.p("fn_names", e.list_new(str_(e))),
+                            e.p("defs", e.list_new(lt(e, "wdef"))),
+                            e.p("sip_key_id", tm.fresh_unique(e)),
+                            e.p("sip_fn_id", tm.fresh_unique(e)),
                             e.p("exports", e.list_new(str_(e))),
                             e.p("labels", e.list_new(lt(e, "wlabel"))),
                             e.p("locals", e.list_new(lt(e, "wlocal"))),
@@ -7377,6 +7412,36 @@ def module(e):
     _initial_bind_impl(e, x, "wt_ptr")
     _initial_bind_impl(e, x, "wt_fn")
     _initial_bind_impl(e, x, "wt_void")
+
+    # The unsafe conversions, named: a pointer to another pointer type, a pointer to a 32-bit integer, a 32-bit
+    # integer to a pointer. All are retags (every pointer is an i32).
+    def base_of(ty_):
+        return e.if_else(has(e, xx(e), ty_, "wgtype_m"), acc(e, xx(e), ty_, "wgtype_m", "base"), ty_)
+
+    def wptr(ty_):
+        return has(e, xx(e), base_of(ty_), "wptr")
+
+    def wint32(ty_):
+        return and_b(
+            e,
+            has(e, xx(e), base_of(ty_), "wint"),
+            e.eq(acc(e, xx(e), base_of(ty_), "wint", "bits"), num(e, 32)),
+        )
+
+    def loaded_retag(cv, to):
+        # The value as its base type (a global cast to its base, which loads its address), retagged.
+        return e.mb.labeled(
+            "c",
+            e.seq(
+                e.let("__pty", base_of(cve_type(e, cv))),
+                e.let("__pv", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), e.v("__pty"), cv))),
+                e.mb.return_to("c", _retag(e, e.v("__pv"), to)),
+            ),
+        )
+
+    tm.named_conv(e, x, "ptr_cast_b", "wasm.ptr_cast", wptr, wptr, loaded_retag)
+    tm.named_conv(e, x, "ptr_to_int_b", "wasm.ptr_to_int", wptr, wint32, loaded_retag)
+    tm.named_conv(e, x, "int_to_ptr_b", "wasm.int_to_ptr", wint32, wptr, loaded_retag)
     x.append(e.finish(e.v("d")))
     passthrough = ["ptr", "fn", "tuple", "global_t", "import_t", "func_dep", "alloc_dep", "data_dep", "cstr_dep"]
     defs = []
@@ -7387,6 +7452,8 @@ def module(e):
     defs.append(e.p("meta_new", e.fld(e.v("wmeta"), "new")))
     for name in passthrough:
         defs.append(e.p(name, e.v("c_" + name)))
+    for name in CONV_NAMES:
+        defs.append(e.p(name, e.fld(e.v(name + "_b"), "func")))
     for obj in [
         "wt_int",
         "wt_float",
@@ -7402,6 +7469,7 @@ def module(e):
         "wtrap",
         "wunit",
         "wt_tuple",
+        "wadep",
     ]:
         defs.append(e.p(obj + "_new", e.fld(e.v(obj), "new")))
     x.append(e.ret(e.rec(*defs)))
@@ -7490,16 +7558,34 @@ def module(e):
     )
     y.append(
         e.method_impl(
-            e.v("mod_o"), "export", str_(e), e.option_type_none(), e.stage(e.call_m(in_(e, "m"), "export", e.v("arg")))
-        )
-    )
-    y.append(
-        e.method_impl(
             e.v("mod_o"),
             "cstr",
             str_(e),
             e.option_type_some(e.v("cstr_t")),
             e.stage(e.call(e.lower_v("cstr_fn"), e.rec(e.p("mod", outer(e)), e.p("value", e.v("arg"))))),
+        )
+    )
+    # The module's SipHash key block (16 zeroed bytes `values.hash` reads) as the alloc dependency defining it, so
+    # an app seeds the same block: dependencies are identified by id, never by name.
+    y.append(
+        e.method_impl(
+            e.v("mod_o"),
+            "siphash_key",
+            e.tup(),
+            e.option_type_some(e.mb.eval_type()),
+            e.stage(
+                e.mb.as_(
+                    e.call(
+                        e.fld(e.lower_v("k"), "wadep_new"),
+                        e.rec(
+                            e.p("id", e.call_m(in_(e, "m"), "sip_key_id", e.tup())),
+                            e.p("name", e.s("siphash_key")),
+                            e.p("size", e.int_of(16)),
+                        ),
+                    ),
+                    e.mb.eval_type(),
+                )
+            ),
         )
     )
     y.append(e.let("wasm_b", e.def_func(e.v("d"), "wasm")))
@@ -7537,7 +7623,7 @@ def module(e):
     ydefs.append(e.p("mod_t", e.fld(e.v("mod_o"), "type")))
     for name in META_EXPORTS:
         ydefs.append(e.p(name, e.fld(e.v("k"), name)))
-    for name in passthrough:
+    for name in passthrough + CONV_NAMES:
         ydefs.append(e.p(name, e.fld(e.v("k"), name)))
     for name in exported:
         ydefs.append(e.p(name, e.v(name)))
@@ -7550,7 +7636,7 @@ def module(e):
         exports.append(e.p(name, e.fld(e.v("k"), name)))
     for name in META_EXPORTS:
         exports.append(e.p(name, e.fld(e.v("k"), name)))
-    for name in passthrough:
+    for name in passthrough + CONV_NAMES:
         exports.append(e.p(name, e.fld(e.v("k"), name)))
     for name in exported:
         exports.append(e.p(name, e.fld(e.v("k"), name)))

@@ -1,5 +1,6 @@
 """web-wiggle.atz: wasm + WebGL2 demo drawing a wiggling square via glsl shaders and a uniform block."""
 
+from .. import target_mb as tm
 from ..target_mb import fn_of, int_as
 from ..wasm.wat import bind_types
 
@@ -138,7 +139,7 @@ def shaders(e, out):
     )
     out.append(
         e.call(
-            e.fld(e.v("glsl"), "func_fn"),
+            e.fld(e.v("glsl"), "export_fn"),
             e.rec(
                 e.p("mod", e.v("vs")),
                 e.p("name", e.s("main")),
@@ -150,7 +151,7 @@ def shaders(e, out):
     )
     out.append(
         e.call(
-            e.fld(e.v("glsl"), "func_fn"),
+            e.fld(e.v("glsl"), "export_fn"),
             e.rec(
                 e.p("mod", e.v("fs")),
                 e.p("name", e.s("main")),
@@ -191,6 +192,8 @@ def module(e):
     setup.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
     setup.append(e.let("m", e.call(e.fld(e.v("wasm"), "new"), e.tup())))
     bind_types(e, setup)
+    setup.append(e.let("t_pu8", e.call(e.fld(e.v("wasm"), "ptr"), e.fld(e.v("wasm"), "u8"))))
+    setup.append(e.let("ptr_cast", e.fld(e.v("wasm"), "ptr_cast")))
     setup.append(
         e.let(
             "start_fn_t",
@@ -210,7 +213,7 @@ def module(e):
         )
     )
     setup_out = []
-    for n in ["m", "start_fn_t", "frame_fn_t", "t_i32", "t_u32", "t_f32", "t_f64"]:
+    for n in ["m", "start_fn_t", "frame_fn_t", "t_i32", "t_u32", "t_f32", "t_f64", "t_pu8", "ptr_cast"]:
         setup_out.append(e.p(n, e.v(n)))
     setup.append(e.ret(e.rec(*setup_out)))
     shader_setup_ = shader_setup(e)
@@ -222,7 +225,7 @@ def module(e):
     top.append(e.let("glsl", e.import_local("glsl", "glsl-es-3.00.atz")))
     top.append(e.let("uniforms", e.import_local("uniforms", "webgl-uniforms.atz")))
     top.append(e.let("k", e.lower(e.mb.seq(setup))))
-    for n in ["m", "start_fn_t", "frame_fn_t", "t_i32", "t_u32", "t_f32", "t_f64"]:
+    for n in ["m", "start_fn_t", "frame_fn_t", "t_i32", "t_u32", "t_f32", "t_f64", "t_pu8", "ptr_cast"]:
         top.append(e.let(n, e.fld(e.v("k"), n)))
     top.append(e.let("g", e.lower(e.mb.seq(shader_setup_))))
     for n in ["vs", "fs", "main_t"]:
@@ -392,7 +395,7 @@ def module(e):
                 e.v("gl"),
                 e.lower(e.v("c_uniform_buffer")),
                 e.n(1),
-                e.fld(e.lower(e.v("ub")), "ptr"),
+                tm.conv(e, e.lower(e.v("ptr_cast")), e.fld(e.lower(e.v("ub")), "ptr"), e.lower(e.v("t_pu8"))),
                 e.fld(e.lower(e.v("ub")), "size"),
                 e.lower(e.v("c_dynamic_draw")),
             ),
@@ -406,7 +409,7 @@ def module(e):
         )
     top.append(
         e.call(
-            e.fld(e.v("wasm"), "func_fn"),
+            e.fld(e.v("wasm"), "export_fn"),
             e.rec(
                 e.p("mod", e.v("m")),
                 e.p("name", e.s("_start")),
@@ -418,7 +421,7 @@ def module(e):
     )
     top.append(
         e.call(
-            e.fld(e.v("wasm"), "func_fn"),
+            e.fld(e.v("wasm"), "export_fn"),
             e.rec(
                 e.p("mod", e.v("m")),
                 e.p("name", e.s("frame")),
@@ -428,7 +431,5 @@ def module(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
-    top.append(e.call_m(e.v("m"), "export", e.s("frame")))
     top.append(e.ret(e.call(e.fld(e.v("web"), "build"), e.call_m0(e.v("m"), "render"))))
     return top

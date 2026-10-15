@@ -4,6 +4,7 @@ import math
 
 from ..pipewire import pipewire
 from ..root_mode import root_mode_finish
+from .. import target_mb as tm
 from ..target_mb import fn_of, int_as
 
 TWO_PI = 2.0 * math.pi
@@ -104,7 +105,7 @@ def _func(e, cx, name, param_names, param_types, ret, body):
         cx,
         name,
         e.call(
-            e.fld(_refs_top(e)("llvm"), "func_fn"),
+            e.fld(_refs_top(e)("llvm"), "export_fn" if name == "main" else "func_fn"),
             e.rec(
                 e.p("mod", top("ll")),
                 e.p("name", e.s(name)),
@@ -117,6 +118,7 @@ def _func(e, cx, name, param_names, param_types, ret, body):
 
 
 def _events(e, cx, bind, name, process):
+    top = _refs_top(e)
     fields = []
     fields.append(e.p("version", e.n(2)))
     for f in [
@@ -133,7 +135,6 @@ def _events(e, cx, bind, name, process):
         "trigger_done",
     ]:
         fields.append(e.p(f, e.v(process if f == "process" else "nullp")))
-    top = _refs_top(e)
     _def_value(
         e,
         cx,
@@ -166,6 +167,9 @@ def module(e, mode):
     setup.append(e.let("t_events", _pw_t(e, _refs_setup(e), "pw_stream_events")))
     for n in ["llvm", "ll", "c", "pw", "t_pv", "t_events"]:
         cx.fields.append(e.p(n, e.v(n)))
+    # The control pointer type: a sequence's end (its `next`) is compared against the control cursor as one.
+    setup.append(e.let("t_pctrl", e.call_m(e.v("llvm"), "ptr", _pw_t(e, _refs_setup(e), "spa_pod_control"))))
+    cx.fields.append(e.p("t_pctrl", e.v("t_pctrl")))
     for stream in ["audio", "midi"]:
         payload = e.fld(e.v("llvm"), "f32") if stream == "audio" else _pw_t(e, _refs_setup(e), "spa_pod_sequence")
         setup.append(
@@ -174,6 +178,18 @@ def module(e, mode):
                 e.call_m(e.v("pw"), "buffer_t", e.rec(e.p("name", e.s(stream)), e.p("payload", payload))),
             )
         )
+        # The global (reference) types of the pointers compared against null (null is a reference of a global type).
+        for kind, pointee in [("pbuf", e.v("t_buf_" + stream)), ("ppayload", payload)]:
+            setup.append(
+                e.let(
+                    "gt_" + kind + "_" + stream,
+                    e.call(
+                        e.fld(e.v("llvm"), "global_t"),
+                        e.rec(e.p("ty", e.call_m(e.v("llvm"), "ptr", pointee)), e.p("mem", e.b(False))),
+                    ),
+                )
+            )
+            cx.fields.append(e.p("gt_" + kind + "_" + stream, e.v("gt_" + kind + "_" + stream)))
         for op in ["dequeue", "queue"]:
             _def_type(e, cx, op + "_" + stream + "_fn_t", e.call_m(e.v("pw"), op + "_buffer_t", e.v("t_buf_" + stream)))
             _def_value(
@@ -191,6 +207,20 @@ def module(e, mode):
             )
     _def_type(e, cx, "t_range_u32", e.call_m(e.v("llvm"), "range", e.fld(e.v("llvm"), "u32")))
     _def_value(e, cx, "nullp", e.call_m(_refs_top(e)("ll"), "null", e.tup()))
+    _def_value(e, cx, "ptr_cast", e.fld(_refs_top(e)("llvm"), "ptr_cast"))
+    _def_value(e, cx, "t_pctrl", _refs_top(e)("t_pctrl"))
+    # The null reference under each pointer type it is compared against (pointers never convert implicitly).
+    for stream in ["audio", "midi"]:
+        for kind in ["pbuf", "ppayload"]:
+            _def_value(
+                e,
+                cx,
+                "null_" + kind + "_" + stream,
+                e.call(
+                    e.fld(_refs_top(e)("llvm"), "ref_fn"),
+                    e.rec(e.p("ref", e.s("null")), e.p("ty", _refs_top(e)("gt_" + kind + "_" + stream))),
+                ),
+            )
     _def_value(e, cx, "range_u32", _refs_top(e)("t_range_u32"))
     _def_value(
         e,
@@ -216,6 +246,9 @@ def module(e, mode):
         "main_loop",
         "stream",
         "properties",
+        "own_main_loop",
+        "own_stream",
+        "own_properties",
         "direction_input",
         "direction_output",
         "id_any",
@@ -257,12 +290,12 @@ def module(e, mode):
         e.seq(
             e.let("buf", _call_fn(e, "dequeue_audio", _lo(e, "g_audio_stream"))),
             e.if_only(
-                e.mb.operator_ne(e.v("buf"), _lo(e, "nullp")),
+                e.mb.operator_ne(e.v("buf"), _lo(e, "null_pbuf_audio")),
                 e.seq(
                     e.let("datas", e.fld(e.v("buf"), "buffer", "datas")),
                     e.let("out", e.fld(e.v("datas"), "data")),
                     e.if_only(
-                        e.mb.operator_ne(e.v("out"), _lo(e, "nullp")),
+                        e.mb.operator_ne(e.v("out"), _lo(e, "null_ppayload_audio")),
                         e.seq(
                             e.let("maxframes", e.mb.operator_div(e.fld(e.v("datas"), "maxsize"), e.n(4))),
                             e.let("req", e.fld(e.v("buf"), "requested")),
@@ -377,15 +410,18 @@ def module(e, mode):
         e.seq(
             e.let("buf", _call_fn(e, "dequeue_midi", _lo(e, "g_midi_stream"))),
             e.if_only(
-                e.mb.operator_ne(e.v("buf"), _lo(e, "nullp")),
+                e.mb.operator_ne(e.v("buf"), _lo(e, "null_pbuf_midi")),
                 e.seq(
                     e.let("seqp", e.fld(e.v("buf"), "buffer", "datas", "data")),
                     e.if_only(
-                        e.mb.operator_ne(e.v("seqp"), _lo(e, "nullp")),
+                        e.mb.operator_ne(e.v("seqp"), _lo(e, "null_ppayload_midi")),
                         e.if_only(
                             e.eq(e.fld(e.v("seqp"), "pod", "type"), _lo(e, "pod_type_sequence")),
                             e.seq(
-                                e.let("end", e.fld(e.v("seqp"), "next")),
+                                e.let(
+                                    "end",
+                                    tm.conv(e, _lo(e, "ptr_cast"), e.fld(e.v("seqp"), "next"), _lo(e, "t_pctrl")),
+                                ),
                                 e.let("c", e.fld(e.v("seqp"), "controls")),
                                 e.mb.labeled(
                                     "scan",
@@ -432,12 +468,11 @@ def module(e, mode):
             # The PipeWire objects live in this block: at its end the streams are destroyed, then the loop, before
             # pw_deinit. The streams take ownership of their properties.
             e.seq(
-                e.let("mloop", e.mb.as_(_call_fn(e, "pw_main_loop_new", _lo(e, "nullp")), _lo(e, "main_loop"))),
+                e.let("mloop", e.mb.as_(_call_fn(e, "pw_main_loop_new", _lo(e, "nullp")), _lo(e, "own_main_loop"))),
                 e.let("l", _call_fn(e, "pw_main_loop_get_loop", e.v("mloop"))),
                 e.let(
                     "aprops",
-                    e.mb.as_(
-                        _call_fn_tup(
+                    e.mb.as_(_call_fn_tup(
                             e,
                             "pw_properties_new",
                             _lo(e, "s_media_type"),
@@ -447,14 +482,11 @@ def module(e, mode):
                             _lo(e, "s_media_role"),
                             _lo(e, "s_music"),
                             _lo(e, "nullp"),
-                        ),
-                        _lo(e, "properties"),
-                    ),
+                        ), _lo(e, "own_properties")),
                 ),
                 e.let(
                     "astream",
-                    e.mb.as_(
-                        _call_fn_tup(
+                    e.mb.as_(_call_fn_tup(
                             e,
                             "pw_stream_new_simple",
                             e.v("l"),
@@ -462,15 +494,12 @@ def module(e, mode):
                             e.call(e.fld(e.v("aprops"), "forget"), e.tup()),
                             _lo(e, "g_audio_events"),
                             _lo(e, "nullp"),
-                        ),
-                        _lo(e, "stream"),
-                    ),
+                        ), _lo(e, "own_stream")),
                 ),
                 _set(e, _lo(e, "g_audio_stream"), e.v("astream")),
                 e.let(
                     "mprops",
-                    e.mb.as_(
-                        _call_fn_tup(
+                    e.mb.as_(_call_fn_tup(
                             e,
                             "pw_properties_new",
                             _lo(e, "s_media_type"),
@@ -480,14 +509,11 @@ def module(e, mode):
                             _lo(e, "s_media_role"),
                             _lo(e, "s_dsp"),
                             _lo(e, "nullp"),
-                        ),
-                        _lo(e, "properties"),
-                    ),
+                        ), _lo(e, "own_properties")),
                 ),
                 e.let(
                     "mstream",
-                    e.mb.as_(
-                        _call_fn_tup(
+                    e.mb.as_(_call_fn_tup(
                             e,
                             "pw_stream_new_simple",
                             e.v("l"),
@@ -495,9 +521,7 @@ def module(e, mode):
                             e.call(e.fld(e.v("mprops"), "forget"), e.tup()),
                             _lo(e, "g_midi_events"),
                             _lo(e, "nullp"),
-                        ),
-                        _lo(e, "stream"),
-                    ),
+                        ), _lo(e, "own_stream")),
                 ),
                 _set(e, _lo(e, "g_midi_stream"), e.v("mstream")),
                 _call_fn_tup(

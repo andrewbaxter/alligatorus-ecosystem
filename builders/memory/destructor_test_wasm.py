@@ -2,6 +2,7 @@
 of destroy calls, expected 3 (a reassignment, the moved-into binding, the reassigned binding; the moved-from binding
 is not destroyed)."""
 
+from .. import target_mb as tm
 from ..wasm.wat import bind_types
 
 EXPECTED_DESTROYS = 3
@@ -93,16 +94,18 @@ def module(e):
     )
     top.append(
         e.let(
-            "owned_blk",
+            "owned_r",
             e.call(e.fld(e.v("destructor"), "type"), e.rec(e.p("under", e.v("t_pv")), e.p("destroy", e.v("release")))),
         )
     )
+    top.append(e.let("owned_blk", e.fld(e.v("owned_r"), "type")))
+    top.append(e.let("own_blk", e.fld(e.v("owned_r"), "own")))
 
     def malloc(n):
         return e.call(e.fld(lo("heap"), "malloc"), e.n(n))
 
     def owned(v):
-        return e.mb.as_(v, lo("owned_blk"))
+        return e.mb.as_(v, lo("own_blk"))
 
     body = e.seq(
         e.seq(
@@ -110,16 +113,19 @@ def module(e):
             e.let("b", owned(malloc(16))),
             e.let("c", e.call(e.fld(e.v("b"), "move"), e.tup())),
             e.mb.set(e.v("a"), owned(malloc(16))),
-            e.mb.set(e.mb.field(e.mb.as_(e.v("c"), lo("t_pi32")), e.n(0)), e.n(5)),
+            e.mb.set(
+                e.mb.field(tm.conv(e, lo("ptr_cast"), e.mb.as_(e.v("c"), lo("t_pv")), lo("t_pi32")), e.n(0)), e.n(5)
+            ),
         ),
         e.call(lo("proc_exit"), e.call(e.fld(cell(), "wrap"), lo("t_u32"))),
     )
     top.append(e.let("t_pi32", e.call(e.fld(e.v("wasm"), "ptr"), e.v("t_i32"))))
+    top.append(e.let("ptr_cast", e.fld(e.v("wasm"), "ptr_cast")))
     top.append(
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -130,6 +136,5 @@ def module(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top

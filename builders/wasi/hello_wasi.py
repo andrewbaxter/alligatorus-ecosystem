@@ -1,5 +1,6 @@
 """hello-wasi.atz / hello-wasi-wat.atz: wasm module printing a message via WASI fd_write."""
 
+from ..target_mb import conv
 from ..wasm.wat import bind_types
 
 MESSAGE = "hello wasi!\n"
@@ -25,7 +26,8 @@ def module(e, mode):
             ),
         )
     )
-    exported = ["m", "fd_write_fn_t", "start_fn_t", "t_u32"]
+    setup.append(e.let("t_pv", e.call(e.fld(e.v("wasm"), "ptr"), e.fld(e.v("wasm"), "void"))))
+    exported = ["m", "fd_write_fn_t", "start_fn_t", "t_u32", "t_pv"]
     exported_fields = []
     for n in exported:
         exported_fields.append(e.p(n, e.v(n)))
@@ -83,7 +85,7 @@ def module(e, mode):
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -95,7 +97,17 @@ def module(e, mode):
                             e.seq(
                                 e.call(
                                     e.lower(e.v("fd_write")),
-                                    e.tup(e.n(1), e.lower(e.v("iov")), e.n(1), e.lower(e.v("nwritten"))),
+                                    e.tup(
+                                        e.n(1),
+                                        conv(
+                                            e,
+                                            e.lower(e.fld(e.v("wasm"), "ptr_cast")),
+                                            e.lower(e.v("iov")),
+                                            e.lower(e.v("t_pv")),
+                                        ),
+                                        e.n(1),
+                                        e.lower(e.v("nwritten")),
+                                    ),
                                 )
                             )
                         ),
@@ -104,7 +116,6 @@ def module(e, mode):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     if mode == APP:
         top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     elif mode == WAT:

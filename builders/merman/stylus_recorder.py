@@ -8,6 +8,7 @@ whenever the document is loaded or a level is applied.
 """
 
 from .merman_editor import FILE as EDITOR_FILE
+from ..target_mb import conv
 from ..wasm.wat import bind_types
 
 FIELDS = 7
@@ -56,7 +57,9 @@ def _cell(e, index):
 
 
 def _float(e, index):
-    return e.mb.field(e.mb.as_(e.lower(e.v("floats")), e.lower(e.v("t_pf64"))), e.n(index))
+    return e.mb.field(
+        conv(e, e.lower(e.fld(e.v("wasm"), "ptr_cast")), e.lower(e.v("floats")), e.lower(e.v("t_pf64"))), e.n(index)
+    )
 
 
 def _call(e, name, args):
@@ -72,8 +75,12 @@ def _fn(e, name, *args):
     return _call(e, name, args)
 
 
+def _u8p(e, addr):
+    return conv(e, e.lower(e.fld(e.v("wasm"), "int_to_ptr")), addr, e.lower(e.v("t_pu8")))
+
+
 def _f64p(e, addr):
-    return e.mb.as_(addr, e.lower(e.v("t_pf64")))
+    return conv(e, e.lower(e.fld(e.v("wasm"), "int_to_ptr")), addr, e.lower(e.v("t_pf64")))
 
 
 def _i32(e, v):
@@ -249,7 +256,7 @@ def module(e):
                 e.mb.operator_add(_cell(e, CELL_BUF), e.mb.operator_mul(e.v("first"), e.n(ROW))),
                 e.mb.operator_mul(e.v("rows"), e.n(ROW)),
             ),
-            _host(e, "doc_edit", e.v("lvl"), e.v("len")),
+            _host(e, "doc_edit", _u8p(e, e.v("lvl")), e.v("len")),
         )
     )
     # redraw(): the strokes in the document, a segment per move row after a down row.
@@ -292,7 +299,10 @@ def module(e):
     )
     start_body = e.stage(
         e.seq(
-            e.mb.set(_cell(e, CELL_HEAP), e.lower(e.v("heap"))),
+            e.mb.set(
+                _cell(e, CELL_HEAP),
+                conv(e, e.lower(e.fld(e.v("wasm"), "ptr_to_int")), e.lower(e.v("heap")), e.lower(e.v("t_i32"))),
+            ),
             e.mb.set(_cell(e, CELL_BUF), _fn(e, "bump", e.n(0))),
             e.mb.set(
                 _cell(e, CELL_CLEAR),
@@ -441,7 +451,7 @@ def module(e):
             e.let(
                 name,
                 e.call(
-                    e.fld(e.v("wasm"), "func_fn"),
+                    e.fld(e.v("wasm"), "export_fn" if name in EXPORTS else "func_fn"),
                     e.rec(
                         e.p("mod", e.v("m")),
                         e.p("name", e.s(name)),
@@ -452,7 +462,5 @@ def module(e):
                 ),
             )
         )
-    for name in EXPORTS:
-        top.append(e.call_m(e.v("m"), "export", e.s(name)))
     top.append(e.ret(e.call(e.fld(e.v("editor"), "build"), e.call_m0(e.v("m"), "render"))))
     return top

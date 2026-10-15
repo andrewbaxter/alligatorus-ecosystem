@@ -120,11 +120,11 @@ def _wasm(e):
     def lo(name):
         return e.lower(e.v(name))
 
-    def func(name, params, fn_t, body_):
+    def func(name, params, fn_t, body_, kind="func_fn"):
         return e.let(
             name,
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), kind),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s(name)),
@@ -144,8 +144,7 @@ def _wasm(e):
         e.seq(*_checks(e, lo, check, lo("dec"))),
         e.call(lo("proc_exit"), e.call(e.fld(e.v("fails"), "wrap"), lo("t_u32"))),
     )
-    top.append(func("_start", [], "start_fn_t", body))
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
+    top.append(func("_start", [], "start_fn_t", body, "export_fn"))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top
 
@@ -184,11 +183,11 @@ def _llvm(e):
     def lo(name):
         return e.lower(e.v(name))
 
-    def func(name, params, fn_t, body_):
+    def func(name, params, fn_t, body_, kind="func_fn"):
         return e.let(
             name,
             e.call(
-                e.fld(e.v("llvm"), "func_fn"),
+                e.fld(e.v("llvm"), kind),
                 e.rec(
                     e.p("mod", e.v("ll")),
                     e.p("name", e.s(name)),
@@ -204,7 +203,7 @@ def _llvm(e):
 
     top.append(func("dec", ["p"], "dec_fn_t", _dec_body(e, lo)))
     body = e.seq(e.seq(*_checks(e, lo, check, lo("dec"))), e.ret(e.n(0)))
-    top.append(func("main", [], "main_fn_t", body))
+    top.append(func("main", [], "main_fn_t", body, "export_fn"))
     top.append(root_mode_finish(APP, e, e.v("llvm"), e.v("ll")))
     return top
 

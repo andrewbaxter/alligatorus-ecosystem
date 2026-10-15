@@ -6,6 +6,7 @@ json work is all done by the time that app is built. A malformed document makes 
 and the app exit with status 1.
 """
 
+from .. import target_mb as tm
 from ..wasm.wat import bind_types
 from . import json_dynamic
 
@@ -106,7 +107,8 @@ def module(e):
             ),
         )
     )
-    exported = ["m", "fd_write_fn_t", "proc_exit_fn_t", "start_fn_t", "t_u32"]
+    setup.append(e.let("ptr_cast", e.fld(e.v("wasm"), "ptr_cast")))
+    exported = ["m", "fd_write_fn_t", "proc_exit_fn_t", "start_fn_t", "t_u32", "t_pv", "ptr_cast"]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
@@ -143,14 +145,22 @@ def module(e):
             )
         )
     body = e.seq(
-        e.call(e.lower(e.v("fd_write")), e.tup(e.n(1), e.lower(e.v("iov")), e.n(1), e.lower(e.v("nwritten")))),
+        e.call(
+            e.lower(e.v("fd_write")),
+            e.tup(
+                e.n(1),
+                tm.conv(e, e.lower(e.v("ptr_cast")), e.lower(e.v("iov")), e.lower(e.v("t_pv"))),
+                e.n(1),
+                e.lower(e.v("nwritten")),
+            ),
+        ),
         e.call(e.lower(e.v("proc_exit")), e.mb.as_(e.lower(e.fld(e.v("h"), "status")), e.lower(e.v("t_u32")))),
     )
     top.append(
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -161,6 +171,5 @@ def module(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top

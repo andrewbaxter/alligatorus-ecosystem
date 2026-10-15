@@ -52,13 +52,15 @@ def module(e, mode):
     top.append(e.let("destructor", e.import_local("destructor", "destructor.atz")))
     top.append(
         e.let(
-            "owned_str",
+            "owned_r",
             e.call(
                 e.fld(e.v("destructor"), "type"),
                 e.rec(e.p("under", e.v("t_pu8")), e.p("destroy", e.fld(e.v("c"), "puts"))),
             ),
         )
     )
+    top.append(e.let("owned_str", e.fld(e.v("owned_r"), "type")))
+    top.append(e.let("own_str", e.fld(e.v("owned_r"), "own")))
     for name, text in [("s_a", "A"), ("s_a2", "A2"), ("s_b", "B"), ("s_c", "C"), ("s_end", "end")]:
         top.append(e.let(name, e.call_m(e.v("ll"), "cstr", e.s(text))))
     # A function taking an owned parameter: the callee owns it and destroys it when it returns (a dependency, so
@@ -89,11 +91,11 @@ def module(e, mode):
     puts = e.lower(e.fld(e.v("c"), "puts"))
     if mode == APP:
         body = e.seq(
-            e.let("a", e.mb.as_(_lo(e, "s_a"), _lo(e, "owned_str"))),
-            e.let("b", e.mb.as_(_lo(e, "s_b"), _lo(e, "owned_str"))),
+            e.let("a", e.mb.as_(_lo(e, "s_a"), _lo(e, "own_str"))),
+            e.let("b", e.mb.as_(_lo(e, "s_b"), _lo(e, "own_str"))),
             e.let("c2", e.call(e.fld(e.v("b"), "move"), e.tup())),
-            e.mb.set(e.v("a"), e.mb.as_(_lo(e, "s_a2"), _lo(e, "owned_str"))),
-            e.let("c3", e.mb.as_(_lo(e, "s_c"), _lo(e, "owned_str"))),
+            e.mb.set(e.v("a"), e.mb.as_(_lo(e, "s_a2"), _lo(e, "own_str"))),
+            e.let("c3", e.mb.as_(_lo(e, "s_c"), _lo(e, "own_str"))),
             e.call(fn_of(e, _lo(e, "consume")), e.call(e.fld(e.v("c3"), "move"), e.tup())),
             e.call(puts, e.v("a")),
             e.call(puts, _lo(e, "s_end")),
@@ -103,7 +105,7 @@ def module(e, mode):
             e.let(
                 "main",
                 e.call(
-                    e.fld(e.v("llvm"), "func_fn"),
+                    e.fld(e.v("llvm"), "export_fn"),
                     e.rec(
                         e.p("mod", e.v("ll")),
                         e.p("name", e.s("main")),
@@ -117,7 +119,7 @@ def module(e, mode):
         top.append(root_mode_finish(APP, e, e.v("llvm"), e.v("ll")))
     elif mode == ERR:
         body = e.seq(
-            e.let("a", e.mb.as_(_lo(e, "s_a"), _lo(e, "owned_str"))),
+            e.let("a", e.mb.as_(_lo(e, "s_a"), _lo(e, "own_str"))),
             e.if_only(e.mb.operator_gt(e.v("x"), e.n(0)), e.seq(e.let("m", e.call(e.fld(e.v("a"), "move"), e.tup())))),
         )
         top.append(

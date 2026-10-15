@@ -1,6 +1,8 @@
 """json-wasm.atz / json-llvm.atz: json parsers and writers as ordinary target functions, one module per target from
 this builder. The parsing and serializing logic comes from json.atz; this module gives it a representation.
 
+Memory comes from wasm-alloc.atz (wasm) or libc (llvm); an allocation that fails traps.
+
 `parser({name, read})` yields `{type, raw, new, event}` for a constant reader `read`, a target function
 `(ptr(void)) -> i32` (a dependency made in a lowered setup block, a `func_fn` result or an import) returning the
 next byte of input or a negative int at its end; the value passed to it is whatever the parser was made with;
@@ -47,6 +49,7 @@ from ..memory import destructor
 from ..target_mb import (
     a,
     acc,
+    alloc_or_trap,
     and_b,
     asp_id,
     asp_iface,
@@ -61,6 +64,7 @@ from ..target_mb import (
     const_eval_in,
     const_fn,
     const_type_arg,
+    conv,
     cv_of,
     cve_code,
     cve_has,
@@ -129,7 +133,7 @@ INT_EVENTS = ["error", "bool"]
 # What the event type carries: the target's i32, the byte pointer type, the target's unit (the payload type of the
 # bare variants), the tuple type `(i32 tag, ptr(u8) data, i32 len, i32 value)` the event is a view of, and the
 # byte slice constructor (the payload of number, string and key is a slice).
-EVENT_BASE = ["i32", "pu8", "unit", "pt", "slice_t"]
+EVENT_BASE = ["i32", "pu8", "unit", "pt", "slice_t", "slice_of"]
 
 WRITER_PIECES = {
     "null": [],
@@ -188,7 +192,7 @@ class _Target:
 
     def null_let(self, e, out, depth):
         """In host code `depth` below the module: llvm's null byte pointer (a reference whose type must be a
-        constant there)."""
+        constant there) and the pointer conversion that retags it."""
         if self.kind == LLVM:
             out.append(
                 e.let(
@@ -199,13 +203,14 @@ class _Target:
                     ),
                 )
             )
+            out.append(e.let("null_cast", _up(e, e.v("ptr_cast"), depth)))
 
     def null(self, e, pu8):
         """The null byte pointer in staged code one below host code that ran `null_let`; `pu8` is the lowered
         pointer type."""
         if self.kind == WASM:
             return e.mb.as_(e.n(0), pu8)
-        return e.mb.as_(_up(e, e.v("null_v"), BODY_HOST), pu8)
+        return conv(e, _up(e, e.v("null_cast"), BODY_HOST), _up(e, e.v("null_v"), BODY_HOST), pu8)
 
     def size(self, e, n, depth):
         """`n` as the allocator's size argument."""
@@ -213,8 +218,19 @@ class _Target:
             return n
         return int_as(e, n, _up(e, e.fld(e.v("lib"), "u64"), depth))
 
+    def trap(self, e, depth):
+        """A trap statement in target code: the target's trap, a callable type, called through its function value."""
+        return e.call(fn_of(e, _up(e, e.fld(e.v("lib"), "trap"), depth)), e.tup())
+
     def malloc(self, e, n, depth):
-        return e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth))
+        """`n` bytes from the heap, or a trap when the allocation fails."""
+        return alloc_or_trap(
+            e,
+            e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth)),
+            _up(e, e.v("ptr_to_int"), depth),
+            _up(e, e.v("i32" if self.kind == WASM else "i64"), depth),
+            self.trap(e, depth),
+        )
 
     def free(self, e, ptr, depth):
         return e.call(_up(e, e.fld(e.v("heap"), "free"), depth), ptr)
@@ -229,12 +245,18 @@ def _variant(e, key, type_):
 
 def _pcell(e, h, slot, depth):
     """Pointer slot `slot` of the header `h` (a ptr(void) place)."""
-    return e.mb.field(e.mb.as_(h, _up(e, e.v("ppv"), depth)), e.n(slot))
+    return e.mb.field(
+        conv(e, _up(e, e.v("ptr_cast"), depth), e.mb.as_(h, _up(e, e.v("pv"), depth)), _up(e, e.v("ppv"), depth)),
+        e.n(slot),
+    )
 
 
 def _cell(e, h, index, depth):
     """i32 cell `index` of the header `h`."""
-    return e.mb.field(e.mb.as_(h, _up(e, e.v("pi32"), depth)), e.n(index))
+    return e.mb.field(
+        conv(e, _up(e, e.v("ptr_cast"), depth), e.mb.as_(h, _up(e, e.v("pv"), depth)), _up(e, e.v("pi32"), depth)),
+        e.n(index),
+    )
 
 
 def _event_objs(e, x, tg):
@@ -392,7 +414,7 @@ def _event_objs(e, x, tg):
         if kind in SLICE_EVENTS:
             payload = e.mb.as_(
                 e.tup(e.mb.field(graft(e, e.v("tv")), e.n(1)), e.mb.field(graft(e, e.v("tv")), e.n(2))),
-                e.lower(in_(e, "slice_t")),
+                e.lower(in_(e, "slice_of")),
             )
             return ret_m(e, e.eresult_ok(cve_t(e), staged_in(e, payload)))
         if kind in INT_EVENTS:
@@ -510,7 +532,8 @@ def _buffer_types(e, x):
         if kind == "clear":
             return e.call(e.fld(vec(), "clear"), e.tup())
         if kind == "pop":
-            return e.mb.set(e.fld(vec(), "len"), e.mb.operator_sub(e.fld(vec(), "len"), e.n(1)))
+            # The vec's `len` is read-only: the last byte comes off through `pop` (its value unused).
+            return e.call(e.fld(vec(), "pop"), e.tup())
         if kind == "len":
             return e.fld(vec(), "len")
         if kind == "at":
@@ -573,7 +596,7 @@ def _parser_free_body(e, tg):
 
     def owned_vec(slot):
         return e.mb.as_(
-            e.mb.as_(_pcell(e, e.v("p"), slot, d), _up(e, e.v("bytes_raw"), d)), _up(e, e.v("bytes_type"), d)
+            e.mb.as_(_pcell(e, e.v("p"), slot, d), _up(e, e.v("bytes_raw"), d)), _up(e, e.v("bytes_own"), d)
         )
 
     return e.seq(
@@ -598,7 +621,7 @@ def _parser_setup(e):
     out = []
     for name in ["new", "free", "next", "event_t"] + ["ev_" + kind for kind in EVENTS]:
         out.append(e.let(name, e.lower(e.v(name))))
-    for name in ["pv", "pi32", "ppv"]:
+    for name in ["pv", "pi32", "ppv", "ptr_cast"]:
         out.append(e.let(name, _up(e, e.v(name), SETUP_MOD)))
     out.append(e.let("buf", e.lower(e.v("buf"))))
     out.append(
@@ -612,7 +635,7 @@ def _parser_setup(e):
     )
     out.append(
         e.let(
-            "owned",
+            "owned_r",
             e.call(
                 e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
                 e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free")))),
@@ -622,7 +645,8 @@ def _parser_setup(e):
     out.append(
         e.ret(
             e.rec(
-                p("type", e.v("owned")),
+                p("type", e.fld(e.v("owned_r"), "type")),
+                p("own", e.fld(e.v("owned_r"), "own")),
                 p("raw", e.v("raw")),
                 p("new", fn_of(e, e.v("new"))),
                 p(
@@ -654,7 +678,9 @@ def _parser_const_fn(e, x, tg):
     places = _handle_places(
         e, {"ctx": PTR_SLOT["ctx"]}, REGISTER_CELL, [("data", PTR_SLOT["data"]), ("stack", PTR_SLOT["stack"])]
     )
-    meth = handle_type(e, x, "jpt", "jpt_m", "json parser", fields, places, ["next"])
+    meth = handle_type(
+        e, x, "jpt", "jpt_m", "json parser", fields, places, ["next"], ptr_cast=e.lower(e.v("ptr_cast"))
+    )
 
     def method_body(kind):
         return e.call(fn_of(e, e.lower(e.v("next"))), self_v(e))
@@ -734,7 +760,7 @@ def _parser_const_fn(e, x, tg):
     parts.append(e.let("new_t", _fn_t(e, [e.v("pv")], e.v("pv"), 1)))
     parts.append(e.let("free_t", _fn_t(e, [e.v("pv")], e.v("void"), 1)))
     parts.append(e.let("next_t", _fn_t(e, [e.v("pv")], e.v("event_t"), 1)))
-    for name in ["pi32", "ppv", "bytes_raw", "u8"]:
+    for name in ["pi32", "ppv", "bytes_raw", "u8", "ptr_cast"]:
         parts.append(e.let(name, e.lower(e.v(name))))
     parts.append(
         e.let(
@@ -808,7 +834,7 @@ def _writer_setup(e):
     out = []
     for name in ["new", "free"] + list(WRITER_PIECES):
         out.append(e.let(name, e.lower(e.v(name))))
-    for name in ["pv", "pi32", "ppv"]:
+    for name in ["pv", "pi32", "ppv", "ptr_cast"]:
         out.append(e.let(name, _up(e, e.v(name), SETUP_MOD)))
     out.append(
         e.let(
@@ -821,25 +847,39 @@ def _writer_setup(e):
     )
     out.append(
         e.let(
-            "owned",
+            "owned_r",
             e.call(
                 e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
                 e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free")))),
             ),
         )
     )
-    out.append(e.ret(e.rec(p("type", e.v("owned")), p("raw", e.v("raw")), p("new", fn_of(e, e.v("new"))))))
+    out.append(
+        e.ret(
+            e.rec(
+                p("type", e.fld(e.v("owned_r"), "type")),
+                p("own", e.fld(e.v("owned_r"), "own")),
+                p("raw", e.v("raw")),
+                p("new", fn_of(e, e.v("new"))),
+            )
+        )
+    )
     return e.mb.seq(out)
 
 
 def _writer_const_fn(e, x, tg):
     fields = [p(f, ty(e)) for f in WRITER_FIELDS]
     places = _handle_places(e, {"ctx": 0}, {"pending": PENDING_CELL})
-    meth = handle_type(e, x, "jwt", "jwt_m", "json writer", fields, places, WRITER_METHODS)
+    meth = handle_type(
+        e, x, "jwt", "jwt_m", "json writer", fields, places, WRITER_METHODS, ptr_cast=e.lower(e.v("ptr_cast"))
+    )
 
     def method_body(kind):
         if kind == "clear":
-            return e.mb.set(e.mb.field(self_v(e, "pi32"), e.n(PENDING_CELL)), e.n(0))
+            return e.mb.set(
+                e.mb.field(conv(e, e.lower(e.v("ptr_cast")), self_v(e), e.lower(e.v("pi32"))), e.n(PENDING_CELL)),
+                e.n(0),
+            )
         params = WRITER_PIECES[kind]
         dep = fn_of(e, e.lower(e.v(kind)))
         if not params:
@@ -851,7 +891,16 @@ def _writer_const_fn(e, x, tg):
             e.call(dep, e.tup(self_v(e), e.fld(e.v("s"), "data"), e.fld(e.v("s"), "len"))),
         )
 
-    handle_methods(e, x, meth, "jwt_m", fields, WRITER_METHODS, method_body)
+    handle_methods(
+        e,
+        x,
+        meth,
+        "jwt_m",
+        fields,
+        WRITER_METHODS,
+        method_body,
+        prelude=[e.let("ptr_cast", e.lower(e.v("ptr_cast")))],
+    )
 
     parts = [
         e.let("argv", a(e, "argument")),
@@ -896,7 +945,7 @@ def _writer_const_fn(e, x, tg):
             ),
         ),
     ]
-    for name in ["pv", "pu8", "i32", "void"]:
+    for name in ["pv", "pu8", "i32", "void", "ptr_cast"]:
         parts.append(e.let(name, e.lower(e.v(name))))
     parts.append(e.let("new_t", _fn_t(e, [e.v("pv")], e.v("pv"), 1)))
     parts.append(e.let("w_t", _fn_t(e, [e.v("pv")], e.v("void"), 1)))
@@ -979,7 +1028,12 @@ def _readers(e, x, tg):
                         e.v("b"),
                         e.mb.as_(
                             e.mb.field(
-                                e.mb.as_(_pcell(e, e.v("r"), 0, d), _up(e, e.v("pu8"), d)),
+                                conv(
+                                    e,
+                                    _up(e, e.v("ptr_cast"), d),
+                                    _pcell(e, e.v("r"), 0, d),
+                                    _up(e, e.v("pu8"), d),
+                                ),
                                 _cell(e, e.v("r"), SR_POS_CELL, d),
                             ),
                             _up(e, e.v("i32"), d),
@@ -1000,7 +1054,7 @@ def _readers(e, x, tg):
         ["ptr", "len"],
         e.seq(
             e.let("r", tg.malloc(e, e.n(SR_HEADER), d)),
-            e.mb.set(_pcell(e, e.v("r"), 0, d), e.v("ptr")),
+            e.mb.set(_pcell(e, e.v("r"), 0, d), conv(e, _up(e, e.v("ptr_cast"), d), e.v("ptr"), _up(e, e.v("pv"), d))),
             e.mb.set(_cell(e, e.v("r"), SR_LEN_CELL, d), e.v("len")),
             e.mb.set(_cell(e, e.v("r"), SR_POS_CELL, d), e.n(0)),
             e.ret(e.v("r")),
@@ -1044,6 +1098,9 @@ def module(e, kind):
     x.append(e.let("pi32", e.call(e.fld(e.v("lib"), "ptr"), e.v("i32"))))
     x.append(e.let("ppv", e.call(e.fld(e.v("lib"), "ptr"), e.v("pv"))))
     x.append(e.let("pu8", e.call(e.fld(e.v("lib"), "ptr"), e.v("u8"))))
+    x.append(e.let("ptr_cast", e.fld(e.v("lib"), "ptr_cast")))
+    x.append(e.let("ptr_to_int", e.fld(e.v("lib"), "ptr_to_int")))
+    x.append(e.let("i64", e.fld(e.v("lib"), "i64")))
     x.append(
         e.let(
             "pt",
@@ -1058,9 +1115,11 @@ def module(e, kind):
     x.append(e.let("write_t", _fn_t(e, [e.v("pv"), e.v("i32")], e.v("void"), 0)))
     tg.module_lets(e, x)
     x.append(e.let("bytes", e.call(e.fld(e.v("vec"), "type"), e.v("u8"))))
-    for f in ["type", "raw", "new"]:
+    for f in ["type", "own", "raw", "new"]:
         x.append(e.let("bytes_" + f, e.fld(e.v("bytes"), f)))
-    x.append(e.let("slice_t", e.fld(e.call(e.fld(e.v("slice"), "type"), e.v("u8")), "type")))
+    x.append(e.let("slice_r", e.call(e.fld(e.v("slice"), "type"), e.v("u8"))))
+    x.append(e.let("slice_t", e.fld(e.v("slice_r"), "type")))
+    x.append(e.let("slice_of", e.fld(e.v("slice_r"), "of")))
     _event_objs(e, x, tg)
     _buffer_types(e, x)
     _parser_const_fn(e, x, tg)

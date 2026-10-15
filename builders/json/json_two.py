@@ -8,6 +8,7 @@ sink, shared by both parsers and both writers.
 """
 
 from ..root_mode import APP, root_mode_finish
+from .. import target_mb as tm
 from ..target_mb import fn_of, int_as
 from ..wasm.wat import bind_types
 
@@ -41,7 +42,7 @@ def _json_lets(e, top, lib_file, vec_file, t_u8):
     top.append(e.let("json", e.import_local("json", lib_file)))
     top.append(e.let("vec", e.import_local("vec", vec_file)))
     top.append(e.let("bytes", e.call(e.fld(e.v("vec"), "type"), e.v(t_u8))))
-    for f in ["type", "new"]:
+    for f in ["type", "own", "new"]:
         top.append(e.let("bytes_" + f, e.fld(e.v("bytes"), f)))
     top.append(e.let("sr", e.fld(e.v("json"), "slice_reader")))
     for f in ["read", "new", "free"]:
@@ -50,12 +51,12 @@ def _json_lets(e, top, lib_file, vec_file, t_u8):
     top.append(
         e.let("jp", e.call(e.fld(e.v("json"), "parser"), e.rec(e.p("name", e.s("slice")), e.p("read", e.v("sr_read")))))
     )
-    for f in ["type", "new"]:
+    for f in ["type", "own", "new"]:
         top.append(e.let("jp_" + f, e.fld(e.v("jp"), f)))
     top.append(
         e.let("jw", e.call(e.fld(e.v("json"), "writer"), e.rec(e.p("name", e.s("vec")), e.p("write", e.v("vw_write")))))
     )
-    for f in ["type", "new"]:
+    for f in ["type", "own", "new"]:
         top.append(e.let("jw_" + f, e.fld(e.v("jw"), f)))
 
 
@@ -94,14 +95,14 @@ def _body(e, docs, write_byte, t_i32):
 
     def print_vec(i):
         return e.seq(
-            e.let("n", e.fld(e.v(f"v{i}"), "len")),
+            e.let("n", e.fld(e.v(f"v{i}p"), "len")),
             e.let("j", e.mb.as_(e.n(0), _lo(e, t_i32))),
             e.mb.labeled(
                 "out",
                 e.mb.loop(
                     e.seq(
                         e.if_only(e.mb.operator_ge(e.v("j"), e.v("n")), e.mb.return_label("out")),
-                        write_byte(e.mb.as_(method(f"v{i}", "at", e.v("j")), _lo(e, t_i32))),
+                        write_byte(e.mb.as_(method(f"v{i}p", "at", e.v("j")), _lo(e, t_i32))),
                         e.mb.set(e.v("j"), e.mb.operator_add(e.v("j"), e.n(1))),
                     )
                 ),
@@ -112,10 +113,9 @@ def _body(e, docs, write_byte, t_i32):
     parts = []
     for i, (doc_ptr, doc_len) in enumerate(docs):
         parts.append(e.let(f"r{i}", e.call(fn_of(e, _lo(e, "sr_new")), e.tup(doc_ptr, e.n(doc_len)))))
-        parts.append(e.let(f"p{i}", e.mb.as_(e.call(_lo(e, "jp_new"), e.v(f"r{i}")), _lo(e, "jp_type"))))
-        parts.append(e.let(f"v{i}p", e.call(_lo(e, "bytes_new"), e.tup())))
-        parts.append(e.let(f"v{i}", e.mb.as_(e.v(f"v{i}p"), _lo(e, "bytes_type"))))
-        parts.append(e.let(f"w{i}", e.mb.as_(e.call(_lo(e, "jw_new"), e.v(f"v{i}p")), _lo(e, "jw_type"))))
+        parts.append(e.let(f"p{i}", e.mb.as_(e.call(_lo(e, "jp_new"), e.v(f"r{i}")), _lo(e, "jp_own"))))
+        parts.append(e.let(f"v{i}p", e.mb.as_(e.call(_lo(e, "bytes_new"), e.tup()), _lo(e, "bytes_own"))))
+        parts.append(e.let(f"w{i}", e.mb.as_(e.call(_lo(e, "jw_new"), e.v(f"v{i}p")), _lo(e, "jw_own"))))
         parts.append(e.let(f"done{i}", e.mb.as_(e.n(0), _lo(e, t_i32))))
     parts.append(
         e.mb.labeled(
@@ -167,7 +167,7 @@ def _llvm(e, mode):
         e.let(
             "main",
             e.call(
-                e.fld(e.v("llvm"), "func_fn"),
+                e.fld(e.v("llvm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("ll")),
                     e.p("name", e.s("main")),
@@ -206,7 +206,10 @@ def _wasm(e):
                 e.call(e.fld(e.v("wasm"), "cstr_dep"), e.rec(e.p("name", e.s(f"doc{i}")), e.p("text", e.s(doc)))),
             )
         )
+    for name in ["ptr_cast", "ptr_to_int"]:
+        setup.append(e.let(name, e.fld(e.v("wasm"), name)))
     exported = ["m", "t_i32", "t_u8", "t_u32", "t_void", "t_pv", "t_pu8", "t_pu32", "start_fn_t", "fd_write_fn_t"]
+    exported += ["ptr_cast", "ptr_to_int"]
     exported += ["ch", "iov", "nwritten"] + [f"doc{i}" for i in range(len(DOCS))]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
@@ -232,15 +235,18 @@ def _wasm(e):
     _json_lets(e, top, "json-wasm.atz", "vec-wasm.atz", "t_u8")
 
     def block(name, ptr_type):
-        return e.mb.as_(e.call(fn_of(e, _lo(e, name)), e.tup()), _lo(e, ptr_type))
+        return tm.conv(e, _lo(e, "ptr_cast"), e.call(fn_of(e, _lo(e, name)), e.tup()), _lo(e, ptr_type))
 
     def write_byte(b):
         """One byte to stdout through fd_write (unbuffered: this app prints little)."""
         return e.seq(
             e.mb.set(e.mb.field(block("ch", "t_pu8"), e.n(0)), _byte(e, b)),
-            e.mb.set(e.mb.field(block("iov", "t_pu32"), e.n(0)), e.mb.as_(block("ch", "t_pv"), _lo(e, "t_u32"))),
+            e.mb.set(
+                e.mb.field(block("iov", "t_pu32"), e.n(0)),
+                tm.conv(e, _lo(e, "ptr_to_int"), block("ch", "t_pv"), _lo(e, "t_u32")),
+            ),
             e.mb.set(e.mb.field(block("iov", "t_pu32"), e.n(1)), e.mb.as_(e.n(1), _lo(e, "t_u32"))),
-            e.call(_lo(e, "fd_write"), e.tup(e.n(1), block("iov", "t_pv"), e.n(1), block("nwritten", "t_pv"))),
+            e.call(_lo(e, "fd_write"), e.tup(e.n(1), block("iov", "t_pv"), e.n(1), block("nwritten", "t_pu32"))),
         )
 
     docs = [(e.call(fn_of(e, _lo(e, f"doc{i}")), e.tup()), len(doc.encode())) for i, doc in enumerate(DOCS)]
@@ -249,7 +255,7 @@ def _wasm(e):
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -260,7 +266,6 @@ def _wasm(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top
 

@@ -672,12 +672,166 @@ def bind_empty(e, binding_obj):
     )
 
 
+def unique_t(e):
+    return e.mb.types_unique()
+
+
+def fresh_unique(e):
+    """A fresh identity. Definitions and dependencies are keyed by one, never by a name: names are hints."""
+    return e.call(e.eval_builtin("fresh_unique"), e.tup())
+
+
+def module_defs(e, x, defobj, desc):
+    """The record a target module keeps per definition it made for an identity: `{id, ref}`, `ref` the symbol."""
+    def_obj(e, x, defobj, desc, e.rec(p("id", unique_t(e)), p("ref", str_(e))))
+    accessor(e, x, defobj, "id", unique_t(e))
+    accessor(e, x, defobj, "ref", str_(e))
+
+
+def module_defs_methods(e, x, mod, defobj):
+    """On a target module holding `defs` (a list of `defobj`) and counting with `fresh_n`: `mint(hint)` yields a
+    fresh module-unique symbol name `<ident>.<n>` (the hint only makes the output readable, so two definers with one
+    hint never collide); `def_ref(id)` yields the symbol defined for `id`, none when the module has none; and
+    `def_add({id, ref})` records one, yielding `ref`."""
+    method(
+        e,
+        x,
+        mod,
+        "mint",
+        str_(e),
+        str_(e),
+        e.cat(ident_of(e, e.v("arg")), e.s("."), to_str(e, e.call_m(outer(e), "fresh_n", e.tup()))),
+    )
+    method(
+        e,
+        x,
+        mod,
+        "def_ref",
+        unique_t(e),
+        e.call(e.mb.types_option(), str_(e)),
+        e.seq(
+            e.let("hit", e.rec(p("v", e.opt_none(str_(e))))),
+            e.foreach(
+                in_(e, "defs"),
+                "d0",
+                e.if_only(
+                    e.eq(e.call_m(e.v("d0"), "id", e.tup()), e.v("arg")),
+                    e.mb.set(e.fld(e.v("hit"), "v"), e.opt_some(str_(e), e.call_m(e.v("d0"), "ref", e.tup()))),
+                ),
+            ),
+            e.ret(e.fld(e.v("hit"), "v")),
+        ),
+    )
+    method(
+        e,
+        x,
+        mod,
+        "def_add",
+        e.rec(p("id", unique_t(e)), p("ref", str_(e))),
+        str_(e),
+        e.seq(
+            push(e, in_(e, "defs"), mk(e, defobj, p("id", a(e, "id")), p("ref", a(e, "ref")))),
+            e.ret(a(e, "ref")),
+        ),
+    )
+
+
+def def_once(e, mod, id_, define):
+    """The symbol `mod` defines for the identity `id_`: the one already recorded, else `define` (an expression
+    yielding the new symbol) recorded under `id_`."""
+    return e.match_of(
+        e.call_m(mod, "def_ref", id_),
+        "__d",
+        None,
+        p("some", e.v("__d")),
+        p("none", e.call_m(mod, "def_add", e.rec(p("id", id_), p("ref", define)))),
+    )
+
+
+def named_conv(e, x, bind, name, src_ok, to_ok, make):
+    """A named conversion as a const function `{value, to}`: `make(cv, to)` (an eresult(cve)) when the value's type
+    satisfies `src_ok` and the constant type `to` satisfies `to_ok`, else an error naming both. The unsafe
+    conversions (pointer to pointer, pointer to integer, integer to pointer) are these: `as` never does them."""
+    const_fn(
+        e,
+        x,
+        bind,
+        name,
+        body(
+            e,
+            e.let("argv", a(e, "argument")),
+            e.if_only(e.not_(cve_has(e, e.v("argv"))), ret_m(e, err_cve(e, loc(e), name + ": argument has no value"))),
+            e.let("rk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "record"))),
+            e.if_only(
+                e.not_(e.fld(e.v("rk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), name + ": argument must be {value, to}")),
+            ),
+            e.let(
+                "fields",
+                bim(
+                    e,
+                    asp_iface(e, "record"),
+                    "take_fields",
+                    e.fld(e.v("rk"), "value"),
+                    e.rec(p("xx", xx(e)), p("loc", loc(e)), p("value", cve_value(e, e.v("argv")))),
+                ),
+            ),
+            e.let("valuecv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("value")))),
+            e.if_only(
+                e.not_(cve_has(e, e.v("valuecv"))), ret_m(e, err_cve(e, loc(e), name + ": value has no value"))
+            ),
+            *const_type_arg(e, name, unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("to"))), "to"),
+            e.let("st", cve_type(e, e.v("valuecv"))),
+            e.if_only(
+                e.not_(and_b(e, src_ok(e.v("st")), to_ok(e.v("to")))),
+                ret_m(
+                    e,
+                    err_cve(
+                        e,
+                        loc(e),
+                        e.cat(
+                            e.s(name + ": no conversion from "),
+                            ty_desc(e, e.v("st")),
+                            e.s(" to "),
+                            ty_desc(e, e.v("to")),
+                        ),
+                    ),
+                ),
+            ),
+            e.ret(make(e.v("valuecv"), e.v("to"))),
+        ),
+    )
+
+
+def alloc_or_trap(e, alloc, to_int, int_ty, trap):
+    """`alloc` (a pointer expression) when it is not null, else `trap` (a statement): `to_int` is the target's
+    `ptr_to_int` and `int_ty` its address-sized integer type, both resolved for the staging depth. Allocation failure
+    is never a value to handle: nothing in the language can recover from it."""
+    return e.mb.labeled(
+        "alloc",
+        e.seq(
+            e.let("__p", alloc),
+            e.if_only(e.eq(conv(e, to_int, e.v("__p"), int_ty), e.n(0)), trap),
+            e.mb.return_to("alloc", e.v("__p")),
+        ),
+    )
+
+
+def conv(e, fn, value, to):
+    """A call of a named conversion `fn` (`ptr_cast`, `ptr_to_int`, `int_to_ptr`, `fn_to_ptr`, resolved for the
+    caller's staging depth) of `value` to the type `to`."""
+    return e.call(fn, e.rec(p("value", value), p("to", to)))
+
+
 def dep_type(e, x, obj, desc, fields, h_fn, with_argument, binding_obj):
     """A dependency as a callable type: its function value (the unit cast to it) calls the host function `h_fn` with
-    the stored `fields` (name first), and the call's argument when `with_argument`."""
-    def_iface(e, x, obj + "_m", p("name", str_(e)))
+    the stored `fields` (name first) after its identity `id` (a fresh unique the constructor mints: two dependencies
+    are the same only when they are the same instance, never because their names agree), and the call's argument
+    when `with_argument`."""
+    fields = [("id", unique_t(e))] + list(fields)
+    def_iface(e, x, obj + "_m", p("id", unique_t(e)))
     def_obj(e, x, obj, desc, e.rec(*[p(f, ft) for f, ft in fields]))
-    x.append(e.impl_interface(e.v(obj), t(e, obj + "_m"), p("name", in_(e, "name"))))
+    x.append(e.impl_interface(e.v(obj), t(e, obj + "_m"), p("id", in_(e, "id"))))
     self_type(
         e,
         x,
@@ -694,7 +848,7 @@ def dep_type(e, x, obj, desc, fields, h_fn, with_argument, binding_obj):
                 and_b(
                     e,
                     has(e, xx(e), a(e, "other"), obj + "_m"),
-                    e.eq(in_(e, "name"), acc(e, xx(e), a(e, "other"), obj + "_m", "name")),
+                    e.eq(in_(e, "id"), acc(e, xx(e), a(e, "other"), obj + "_m", "id")),
                 )
             ),
         ),
@@ -711,6 +865,14 @@ def dep_type(e, x, obj, desc, fields, h_fn, with_argument, binding_obj):
         )
     )
     x.append(e.impl_interface(e.v(obj), e.mb.eval_aspect_bind(), p("bind", bind_empty(e, binding_obj))))
+    # Its function value lifts as itself: the empty value of the (same) dependency type, still callable.
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            e.mb.eval_aspect_lift(),
+            p("lift", e.eresult_ok(e.mb.eval_value(), e.call(e.eval_builtin("value_empty"), outer(e)))),
+        )
+    )
 
 
 def can_cast_from_self(e):
@@ -927,21 +1089,35 @@ def ident_of(e, s):
 
 
 def const_type_arg(e, label, cv, bind):
-    """Binds `bind` to the constant type the code-value `cv` holds, else errors out of the const function."""
+    """Binds `bind` to the type the code-value `cv` holds, else errors out of the const function: a constant type
+    (its type has the `type` aspect), or a type value computed at compile time (typed `eval.type`, as a type made in
+    a const function's staged result is), never target code."""
     return [
         e.let(bind + "_tk", lookup(e, xx(e), cve_type(e, cv), asp_iface(e, "type"))),
+        e.let(bind + "_dyn", is_equal(e, xx(e), cve_type(e, cv), e.mb.eval_type())),
         e.if_only(
-            or_b(e, is_runtime(e, cv), e.not_(e.fld(e.v(bind + "_tk"), "is_some"))),
+            is_runtime(e, cv),
+            ret_m(e, err_cve(e, loc(e), label + ": " + bind + " must be a type known at compile time, not target code")),
+        ),
+        e.if_only(
+            e.not_(or_b(e, e.fld(e.v(bind + "_tk"), "is_some"), e.v(bind + "_dyn"))),
             ret_m(
                 e,
                 err_cve(
                     e,
                     loc(e),
-                    e.cat(e.s(label + ": " + bind + " must be a constant type, not "), ty_desc(e, cve_type(e, cv))),
+                    e.cat(e.s(label + ": " + bind + " must be a type, not a "), ty_desc(e, cve_type(e, cv))),
                 ),
             ),
         ),
-        e.let(bind, bim(e, asp_iface(e, "type"), "type", e.fld(e.v(bind + "_tk"), "value"), cve_value(e, cv))),
+        e.let(
+            bind,
+            e.if_else(
+                e.v(bind + "_dyn"),
+                e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, cv), e.mb.eval_type())),
+                bim(e, asp_iface(e, "type"), "type", e.fld(e.v(bind + "_tk"), "value"), cve_value(e, cv)),
+            ),
+        ),
     ]
 
 
@@ -1258,14 +1434,29 @@ def handle_binds(e, x, obj, under, binding_obj, desc):
 
 
 def handle_type(
-    e, x, obj, iface, desc, fields, places, methods, under="pv", construct=False, desc_expr=None, identity=None
+    e,
+    x,
+    obj,
+    iface,
+    desc,
+    fields,
+    places,
+    methods,
+    under="pv",
+    from_under=True,
+    desc_expr=None,
+    identity=None,
+    ptr_cast=None,
 ):
     """A handle type over a representation (the field `under`: a pointer, or a tuple): its field aspect gives the
-    places (`places` maps a name to the staged place over `self_as`, the handle as one of its types) and the methods;
-    it delegates the rest to the representation and retags from its values. With `construct`, anything that casts to
-    the representation casts to the handle (so a tuple literal makes a tuple-handle). `desc_expr` is the type's
-    description when it is not the constant `desc`; `identity` names the field that two handle types must agree on to
-    be equal (the element or key type), else any two are."""
+    places (`places` maps a name to the staged place over `self_as`, the handle as its representation or, through
+    `ptr_cast`, a host expression for the target's pointer conversion bound as the host local `ptr_cast`, as one of
+    its other pointer-typed fields) and the methods;
+    it delegates the rest to the representation and retags from its values. With `from_under`, a value of exactly
+    the representation type casts to the handle (a pointer handle is made from its pointer); without, only the handle
+    itself does, and the module offers a constructor. `desc_expr` is the type's description when it is not the
+    constant `desc`; `identity` names the field that two handle types must agree on to be equal (the element or key
+    type), else any two are."""
     def_iface(e, x, iface, *fields)
     def_obj(e, x, obj, desc, e.rec(*fields))
     x.append(e.impl_interface(e.v(obj), t(e, iface), *[p(k, in_(e, k)) for k, _ in fields]))
@@ -1286,24 +1477,21 @@ def handle_type(
         body(
             e,
             e.ret(
-                or_b(
-                    e,
-                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
-                    (
-                        type_can_cast_from(e, xx(e), loc(e), in_(e, under), a(e, "source_type"))
-                        if construct
-                        else is_equal(e, xx(e), in_(e, under), a(e, "source_type"))
-                    ),
+                (
+                    or_b(
+                        e,
+                        is_equal(e, xx(e), outer(e), a(e, "source_type")),
+                        is_equal(e, xx(e), in_(e, under), a(e, "source_type")),
+                    )
+                    if from_under
+                    else is_equal(e, xx(e), outer(e), a(e, "source_type"))
                 )
             ),
         ),
         body(
             e,
             e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
-            e.let(
-                "uv",
-                unwrap_cve_m(e, cast_value(e, xx(e), loc(e), in_(e, under), a(e, "cv"))) if construct else a(e, "cv"),
-            ),
+            e.let("uv", a(e, "cv")),
             e.match_of(
                 e.call(
                     e.mb.reinterpret(),
@@ -1350,7 +1538,12 @@ def handle_type(
     def_obj(e, x, meth, desc + " method", e.rec(p("kind", str_(e)), p("ht", ty(e))))
 
     def self_as(type_field):
-        return e.mb.as_(graft(e, a(e, "self")), e.lower(in_(e, type_field)))
+        as_under = e.mb.as_(graft(e, a(e, "self")), e.lower(in_(e, under)))
+        if type_field == under:
+            return as_under
+        if ptr_cast is None:
+            raise ValueError(obj + ": places over " + type_field + " need the handle type's ptr_cast")
+        return conv(e, e.lower(e.v("ptr_cast")), as_under, e.lower(in_(e, type_field)))
 
     x.append(
         e.impl_interface(
@@ -1374,6 +1567,7 @@ def handle_type(
                             cve_value(e, a(e, "key")),
                         ),
                     ),
+                    *([] if ptr_cast is None else [e.let("ptr_cast", ptr_cast)]),
                     *[
                         e.if_only(e.eq(e.v("key"), e.s(name)), ret_m(e, ok_cve(e, staged_in(e, place(self_as)))))
                         for name, place in places.items()

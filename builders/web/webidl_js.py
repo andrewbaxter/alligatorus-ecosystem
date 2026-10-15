@@ -8,11 +8,32 @@ def _var(e, name):
     return e.call(e.lower(e.fld(e.v("js"), "var_fn")), e.rec(e.p("mod", e.v("m")), e.p("name", e.s(name))))
 
 
-def _func(e, name, params, body_):
-    return e.call(
-        e.lower(e.fld(e.v("js"), "func_fn")),
-        e.rec(e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("params", params), e.p("body", e.stage(body_))),
+def _text(e, name, params, *lines):
+    """A function of plain lines in the module `m`, named from the hint `name`; its minted name."""
+    return e.call_m(
+        e.v("m"),
+        "func_text",
+        e.rec(
+            e.p("name", e.s(name)),
+            e.p("params", e.list_new(e.mb.types_string(), *params)),
+            e.p("lines", e.list_new(e.mb.types_string(), *lines)),
+        ),
     )
+
+
+def _rt_t(e):
+    """What `runtime` yields: the minted names of the runtime's helpers, which the wrappers `define` makes refer
+    to."""
+    return e.rec(
+        e.p("h_new", e.mb.types_string()),
+        e.p("h_get", e.mb.types_string()),
+        e.p("h_free", e.mb.types_string()),
+        e.p("str", e.mb.types_string()),
+    )
+
+
+def _rt(e, field):
+    return e.fld(e.fld(e.v("arg"), "rt"), field)
 
 
 def _sig(e, field):
@@ -44,13 +65,13 @@ def module(e):
     top.append(e.let("runtime_b", e.def_func(e.v("d"), "runtime")))
     runtime = []
     runtime.append(e.let("m", e.fld(e.v("arg"), "mod")))
-    for g in ["handles", "free_handles", "instance", "decoder", "Array", "TextDecoder", "Uint8Array"]:
+    # The module variables, which the text below refers to by name; `instance` is assigned by the caller when the
+    # wasm module is ready.
+    for g in ["handles", "free_handles", "freed", "instance", "decoder"]:
+        runtime.append(e.let(g, _var(e, g)))
+    for g in ["Array", "Object", "TextDecoder"]:
         runtime.append(e.let(g, e.call(e.lower(e.fld(e.v("js"), "global_fn")), e.rec(e.p("name", e.s(g))))))
     runtime.append(e.let("new", e.call(e.lower(e.fld(e.v("js"), "new_fn")), e.tup())))
-    runtime.append(e.let("handles_v", _var(e, "handles")))
-    runtime.append(e.let("free_handles_v", _var(e, "free_handles")))
-    runtime.append(e.let("instance_v", _var(e, "instance")))
-    runtime.append(e.let("decoder_v", _var(e, "decoder")))
     runtime.append(
         e.call_m(
             e.v("m"),
@@ -59,6 +80,9 @@ def module(e):
                 e.seq(
                     e.mb.set(e.lower(e.v("handles")), e.call(e.lower(e.v("new")), e.lower(e.v("Array")))),
                     e.mb.set(e.lower(e.v("free_handles")), e.call(e.lower(e.v("new")), e.lower(e.v("Array")))),
+                    # The marker a freed slot holds (distinct from every value a handle can hold, `undefined`
+                    # included), so a use or a second free of a freed handle throws instead of reading a stale slot.
+                    e.mb.set(e.lower(e.v("freed")), e.call(e.lower(e.v("new")), e.lower(e.v("Object")))),
                     e.mb.set(e.lower(e.v("decoder")), e.call(e.lower(e.v("new")), e.lower(e.v("TextDecoder")))),
                 )
             ),
@@ -66,70 +90,70 @@ def module(e):
     )
     # The handle table reuses freed slots; these need `if`, so they are plain text.
     runtime.append(
-        e.call_m(
-            e.v("m"),
-            "func_text",
-            e.rec(
-                e.p("name", e.s("h_new")),
-                e.p("params", e.list_new(e.mb.types_string(), e.s("o"))),
-                e.p(
-                    "lines",
-                    e.list_new(
-                        e.mb.types_string(),
-                        e.s("if (free_handles.length > 0) { const i = free_handles.pop(); handles[i] = o; return i; }"),
-                        e.s("const i = handles.length;"),
-                        e.s("handles.push(o);"),
-                        e.s("return i;"),
-                    ),
-                ),
-            ),
-        )
-    )
-    runtime.append(e.let("h_get_f", _func(e, "h_get", e.tup(e.s("h")), e.mb.field(e.lower(e.v("handles")), e.v("h")))))
-    runtime.append(
-        e.call_m(
-            e.v("m"),
-            "func_text",
-            e.rec(
-                e.p("name", e.s("h_free")),
-                e.p("params", e.list_new(e.mb.types_string(), e.s("h"))),
-                e.p(
-                    "lines",
-                    e.list_new(e.mb.types_string(), e.s("handles[h] = undefined;"), e.s("free_handles.push(h);")),
-                ),
+        e.let(
+            "h_new_n",
+            _text(
+                e,
+                "h_new",
+                [e.s("o")],
+                e.s("if (free_handles.length > 0) { const i = free_handles.pop(); handles[i] = o; return i; }"),
+                e.s("const i = handles.length;"),
+                e.s("handles.push(o);"),
+                e.s("return i;"),
             ),
         )
     )
     runtime.append(
         e.let(
-            "str_f",
-            _func(
+            "h_get_n",
+            _text(
+                e,
+                "h_get",
+                [e.s("h")],
+                e.s('if (h >= handles.length || handles[h] === freed) throw new Error("webidl: handle " + h + " is not live");'),
+                e.s("return handles[h];"),
+            ),
+        )
+    )
+    runtime.append(
+        e.let(
+            "h_free_n",
+            _text(
+                e,
+                "h_free",
+                [e.s("h")],
+                e.s('if (h >= handles.length || handles[h] === freed) throw new Error("webidl: handle " + h + " freed twice");'),
+                e.s("handles[h] = freed;"),
+                e.s("free_handles.push(h);"),
+            ),
+        )
+    )
+    runtime.append(
+        e.let(
+            "str_n",
+            _text(
                 e,
                 "str",
-                e.tup(e.s("ptr"), e.s("len")),
-                e.seq(
-                    e.let(
-                        "bytes",
-                        e.call(
-                            e.lower(e.v("new")),
-                            e.tup(
-                                e.lower(e.v("Uint8Array")),
-                                e.fld(e.lower(e.v("instance")), "exports", "memory", "buffer"),
-                                e.v("ptr"),
-                                e.v("len"),
-                            ),
-                        ),
-                    ),
-                    e.ret(e.call(e.fld(e.lower(e.v("decoder")), "decode"), e.v("bytes"))),
-                ),
+                [e.s("ptr"), e.s("len")],
+                e.s("return decoder.decode(new Uint8Array(instance.exports.memory.buffer, ptr, len));"),
             ),
+        )
+    )
+    runtime.append(
+        e.ret(
+            e.rec(
+                e.p("h_new", e.v("h_new_n")),
+                e.p("h_get", e.v("h_get_n")),
+                e.p("h_free", e.v("h_free_n")),
+                e.p("str", e.v("str_n")),
+            )
         )
     )
     top.append(
         e.func_impl(
             e.v("runtime_b"),
             e.rec(e.p("mod", e.fld(e.v("js"), "mod_t"))),
-            e.option_type_none(),
+            e.option_type_some(_rt_t(e)),
             e.mb.opt_none_type(),
             e.stage(e.mb.seq(runtime)),
         )
@@ -142,19 +166,7 @@ def module(e):
     define.append(
         e.if_only(
             e.eq(e.fld(e.v("arg"), "name"), e.s("release")),
-            e.seq(
-                e.let("rname", e.cat(e.s("wi"), e.call_m0(e.v("m"), "fresh"))),
-                e.call_m(
-                    e.v("m"),
-                    "func_text",
-                    e.rec(
-                        e.p("name", e.v("rname")),
-                        e.p("params", e.list_new(e.mb.types_string(), e.s("h"))),
-                        e.p("lines", e.list_new(e.mb.types_string(), e.s("h_free(h);"))),
-                    ),
-                ),
-                ret_m(e, e.v("rname")),
-            ),
+            ret_m(e, _text(e, "wi_release", [e.s("h")], e.cat(_rt(e, "h_free"), e.s("(h);")))),
         )
     )
     define.append(
@@ -167,13 +179,17 @@ def module(e):
         )
     )
     define.append(e.if_only(e.not_(_sig(e, "ok")), e.mb.panic(e.cat(e.s("webidl-js: "), _sig(e, "err")))))
-    define.append(e.let("fname", e.cat(e.s("wi"), e.call_m0(e.v("m"), "fresh"))))
     define.append(e.let("kind", _sig(e, "kind")))
     define.append(e.let("member", _sig(e, "base")))
     define.append(e.let("params", e.list_new(e.mb.types_string())))
     define.append(e.let("lines", e.list_new(e.mb.types_string())))
     define.append(e.let("exprs", e.list_new(e.mb.types_string())))
-    define.append(e.if_only(_sig(e, "self"), e.seq(_param(e, e.s("self")), _line(e, e.s("const recv = h_get(self);")))))
+    define.append(
+        e.if_only(
+            _sig(e, "self"),
+            e.seq(_param(e, e.s("self")), _line(e, e.s("const recv = "), _rt(e, "h_get"), e.s("(self);"))),
+        )
+    )
     define.append(
         e.if_only(e.eq(e.v("kind"), e.s("ctor")), _line(e, e.s("const recv = globalThis."), _sig(e, "iface"), e.s(";")))
     )
@@ -198,10 +214,13 @@ def module(e):
                 e.let("x", e.rec(e.p("v", e.dstr("")))),
                 e.if_else(
                     _kind_is(e, e.v("ak"), "handle"),
-                    e.mb.set(e.fld(e.v("x"), "v"), e.cat(e.s("h_get(a"), e.v("n"), e.s(")"))),
+                    e.mb.set(e.fld(e.v("x"), "v"), e.cat(_rt(e, "h_get"), e.s("(a"), e.v("n"), e.s(")"))),
                     e.if_else(
                         _kind_is(e, e.v("ak"), "str"),
-                        e.mb.set(e.fld(e.v("x"), "v"), e.cat(e.s("str(a"), e.v("n"), e.s("p, a"), e.v("n"), e.s("l)"))),
+                        e.mb.set(
+                            e.fld(e.v("x"), "v"),
+                            e.cat(_rt(e, "str"), e.s("(a"), e.v("n"), e.s("p, a"), e.v("n"), e.s("l)")),
+                        ),
                         e.if_else(
                             _kind_is(e, e.v("ak"), "buf"),
                             e.mb.set(
@@ -247,10 +266,20 @@ def module(e):
     define.append(e.let("ret_out", _sig(e, "ret_out")))
     define.append(e.if_only(e.v("ret_out"), _param(e, e.s("out"))))
     define.append(e.let("argv", e.join(e.v("exprs"), ", ")))
+    define.append(e.let("rk", _sig(e, "ret_kind")))
     define.append(
         e.if_else(
             e.eq(e.v("kind"), e.s("op")),
-            _line(e, e.s("const r = recv."), e.v("member"), e.s("("), e.v("argv"), e.s(");")),
+            # A void operation's call is a statement of its own: nothing to bind.
+            _line(
+                e,
+                e.if_else(_kind_is(e, e.v("rk"), "void"), e.dstr(""), e.dstr("const r = ")),
+                e.s("recv."),
+                e.v("member"),
+                e.s("("),
+                e.v("argv"),
+                e.s(");"),
+            ),
             e.if_else(
                 e.eq(e.v("kind"), e.s("get")),
                 _line(e, e.s("const r = recv."), e.v("member"), e.s(";")),
@@ -275,12 +304,11 @@ def module(e):
             ),
         )
     )
-    define.append(e.let("rk", _sig(e, "ret_kind")))
     define.append(e.let("rx", e.rec(e.p("v", e.dstr("")))))
     define.append(
         e.if_else(
             _kind_is(e, e.v("rk"), "handle", "str"),
-            e.mb.set(e.fld(e.v("rx"), "v"), e.dstr("h_new(r)")),
+            e.mb.set(e.fld(e.v("rx"), "v"), e.cat(_rt(e, "h_new"), e.s("(r)"))),
             e.if_else(
                 _kind_is(e, e.v("rk"), "bool"),
                 e.mb.set(e.fld(e.v("rx"), "v"), e.dstr("(r ? 1 : 0)")),
@@ -325,17 +353,22 @@ def module(e):
         )
     )
     define.append(
-        e.call_m(
-            e.v("m"),
-            "func_text",
-            e.rec(e.p("name", e.v("fname")), e.p("params", e.v("params")), e.p("lines", e.v("lines"))),
+        e.ret(
+            e.call_m(
+                e.v("m"),
+                "func_text",
+                e.rec(
+                    e.p("name", e.cat(e.s("wi_"), e.fld(e.v("arg"), "name"))),
+                    e.p("params", e.v("params")),
+                    e.p("lines", e.v("lines")),
+                ),
+            )
         )
     )
-    define.append(e.ret(e.v("fname")))
     top.append(
         e.func_impl(
             e.v("define_b"),
-            e.rec(e.p("mod", e.fld(e.v("js"), "mod_t")), e.p("name", e.mb.types_string())),
+            e.rec(e.p("mod", e.fld(e.v("js"), "mod_t")), e.p("name", e.mb.types_string()), e.p("rt", _rt_t(e))),
             e.option_type_some(e.mb.types_string()),
             e.mb.opt_none_type(),
             e.stage(body(e, *define)),

@@ -3,6 +3,7 @@ destroy calls, expected 3: one block shared four ways (one clone dropped early),
 moved."""
 
 from ..wasm.wat import bind_types
+from .. import target_mb as tm
 from ..target_mb import fn_of
 
 EXPECTED_DESTROYS = 3
@@ -32,6 +33,7 @@ def module(e):
             )
         )
     setup.append(e.let("t_pi32", e.call(e.fld(e.v("wasm"), "ptr"), e.v("t_i32"))))
+    setup.append(e.let("ptr_cast", e.fld(e.v("wasm"), "ptr_cast")))
     # The destroy function is a dependency (shared's release function, itself a dependency, calls it), counting into
     # a zeroed block.
     setup.append(
@@ -58,7 +60,7 @@ def module(e):
         return e.lower(e.v(name))
 
     def cell():
-        return e.mb.field(e.mb.as_(e.call(fn_of(e, lo("count")), e.tup()), lo("t_pi32")), e.n(0))
+        return e.mb.field(tm.conv(e, lo("ptr_cast"), e.call(fn_of(e, lo("count")), e.tup()), lo("t_pi32")), e.n(0))
 
     setup.append(
         e.let(
@@ -86,6 +88,7 @@ def module(e):
         "t_u32",
         "t_pv",
         "t_pi32",
+        "ptr_cast",
     ]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
@@ -119,14 +122,14 @@ def module(e):
             ),
         )
     )
-    for f in ["type", "adopt", "clone"]:
+    for f in ["type", "own", "adopt", "clone"]:
         top.append(e.let("sp_" + f, e.fld(e.v("sp"), f)))
 
     def malloc(n):
         return e.call(e.fld(lo("heap"), "malloc"), e.n(n))
 
     def owned(v):
-        return e.mb.as_(v, lo("sp_type"))
+        return e.mb.as_(v, lo("sp_own"))
 
     def adopt(v):
         return e.call(lo("sp_adopt"), v)
@@ -154,7 +157,7 @@ def module(e):
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -165,6 +168,5 @@ def module(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top

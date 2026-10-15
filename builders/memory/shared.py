@@ -1,11 +1,11 @@
 """shared-wasm.atz / shared-llvm.atz: reference-counted pointers over destructor.atz, one module per target.
 
-`shared.type({under, destroy})` yields `{type, adopt, clone}`:
+`shared.type({under, destroy})` yields `{type, own, adopt, clone}`:
 - `under` is a constant pointer type whose block starts with a 4-byte count that this module owns; `destroy` is a
   constant callable `fn(under) -> void` (a `func_dep` or an extern: the release dependency calls it, so it cannot be
   a module-bound function value) run when the count reaches zero;
-- `adopt(p)` sets the count to 1 and yields `p`; `clone(p)` adds one and yields `p`; cast either `as type`
-  to get an owned value;
+- `adopt(p)` sets the count to 1 and yields `p`; `clone(p)` adds one and yields `p`; `as own` on either takes
+  the result as an owned value (destructor.atz's adopting type: nothing else coerces into `type`);
 - dropping an owned value runs `shared_<under>_release`, which subtracts one and, at zero, calls `destroy(p)` then
   frees the block through the target's allocator (wasm-alloc.atz or libc).
 The three functions are dependencies (`func_dep`): a module gets them when its code first uses them.
@@ -14,17 +14,18 @@ The three functions are dependencies (`func_dep`): a module gets them when its c
 from . import destructor
 from ..eco_mb import p
 from ..target_mb import (
-    fn_of,
     a,
     asp_iface,
     bim,
     body,
     const_eval_in,
     const_fn,
+    conv,
     cve_has,
     cve_type,
     cve_value,
     err_cve,
+    fn_of,
     ident_of,
     loc,
     lookup,
@@ -67,7 +68,7 @@ def _imports(e, kind, out):
 
 def _count_cell(e):
     """The count cell of the block `p` points at (the pointer types are host locals)."""
-    return e.mb.field(e.mb.as_(e.mb.as_(e.v("p"), _lo(e, "pv")), _lo(e, "pi32")), e.n(0))
+    return e.mb.field(conv(e, e.lower(e.v("ptr_cast")), e.v("p"), _lo(e, "pi32")), e.n(0))
 
 
 def _release_body(e):
@@ -77,7 +78,10 @@ def _release_body(e):
             e.eq(e.v("n"), e.n(0)),
             e.seq(
                 e.call(fn_of(e, _up(e, e.v("destroy"), BODY_HOST)), e.v("p")),
-                e.call(_up(e, e.fld(e.v("heap"), "free"), BODY_MOD), e.mb.as_(e.v("p"), _lo(e, "pv"))),
+                e.call(
+                    _up(e, e.fld(e.v("heap"), "free"), BODY_MOD),
+                    conv(e, e.lower(e.v("ptr_cast")), e.v("p"), _lo(e, "pv")),
+                ),
             ),
             e.mb.set(_count_cell(e), e.v("n")),
         ),
@@ -105,7 +109,7 @@ def _setup(e):
         out.append(e.let(name, e.lower(e.v(name))))
     out.append(
         e.let(
-            "owned",
+            "owned_r",
             e.call(
                 e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
                 e.rec(p("under", e.v("under")), p("destroy", fn_of(e, e.v("release")))),
@@ -113,7 +117,14 @@ def _setup(e):
         )
     )
     out.append(
-        e.ret(e.rec(p("type", e.v("owned")), p("adopt", fn_of(e, e.v("adopt"))), p("clone", fn_of(e, e.v("clone")))))
+        e.ret(
+            e.rec(
+                p("type", e.fld(e.v("owned_r"), "type")),
+                p("own", e.fld(e.v("owned_r"), "own")),
+                p("adopt", fn_of(e, e.v("adopt"))),
+                p("clone", fn_of(e, e.v("clone"))),
+            )
+        )
     )
     return e.mb.seq(out)
 
@@ -127,6 +138,7 @@ def module(e, kind):
     x.append(e.let("void", e.fld(e.v("lib"), "void")))
     x.append(e.let("pv", e.call(e.fld(e.v("lib"), "ptr"), e.v("void"))))
     x.append(e.let("pi32", e.call(e.fld(e.v("lib"), "ptr"), e.fld(e.v("lib"), "i32"))))
+    x.append(e.let("ptr_cast", e.fld(e.v("lib"), "ptr_cast")))
     parts = [
         e.let("argv", a(e, "argument")),
         e.if_only(e.not_(cve_has(e, e.v("argv"))), ret_m(e, err_cve(e, loc(e), "shared.type: argument has no value"))),
@@ -159,7 +171,7 @@ def module(e, kind):
     # or an extern), which is a callable type.
     parts.extend(const_type_arg(e, "shared.type", e.v("destroycv"), "destroy"))
     parts.append(e.let("name", e.cat(e.s("shared_"), ident_of(e, ty_desc(e, e.v("under"))))))
-    for tname in ["pv", "pi32"]:
+    for tname in ["pv", "pi32", "ptr_cast"]:
         parts.append(e.let(tname, e.lower(e.v(tname))))
     parts.append(e.let("release_t", _fn_type(e, [e.v("under")], e.lower(e.v("void")))))
     parts.append(e.let("id_t", _fn_type(e, [e.v("under")], e.v("under"))))

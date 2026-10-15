@@ -95,14 +95,14 @@ def module(e):
             ),
         )
     )
-    for f in ["type", "adopt", "clone"]:
+    for f in ["type", "own", "adopt", "clone"]:
         top.append(e.let("sp_" + f, e.fld(e.v("sp"), f)))
 
     def malloc(n):
         return e.call(e.lower(e.fld(e.v("c"), "malloc")), e.n(n))
 
     def owned(v):
-        return e.mb.as_(v, _lo(e, "sp_type"))
+        return e.mb.as_(v, _lo(e, "sp_own"))
 
     body = e.seq(
         e.seq(
@@ -121,7 +121,7 @@ def module(e):
         e.let(
             "main",
             e.call(
-                e.fld(e.v("llvm"), "func_fn"),
+                e.fld(e.v("llvm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("ll")),
                     e.p("name", e.s("main")),

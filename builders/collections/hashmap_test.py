@@ -51,11 +51,11 @@ def module(e):
         top.append(e.let(name, e.call_m(e.v("ll"), "cstr", e.s(text))))
     puts = e.lower(e.fld(e.v("c"), "puts"))
 
-    def func(name, params, fn_t, body):
+    def func(name, params, fn_t, body, kind="func_fn"):
         return e.let(
             name,
             e.call(
-                e.fld(e.v("llvm"), "func_fn"),
+                e.fld(e.v("llvm"), kind),
                 e.rec(
                     e.p("mod", e.v("ll")),
                     e.p("name", e.s(name)),
@@ -69,7 +69,7 @@ def module(e):
     top.append(e.let("imap", e.call(e.fld(e.v("map"), "type"), e.tup(e.v("t_i32"), e.v("t_i32")))))
     top.append(e.let("iset", e.call(e.fld(e.v("set"), "type"), e.v("t_i32"))))
     for tname in ["imap", "iset"]:
-        for f in ["type", "new"]:
+        for f in ["type", "own", "new"]:
             top.append(e.let(tname + "_" + f, e.fld(e.v(tname), f)))
 
     def check(cond):
@@ -100,7 +100,7 @@ def module(e):
 
     body = e.seq(
         e.seq(
-            e.let("mp", e.mb.as_(e.call(_lo(e, "imap_new"), e.tup()), _lo(e, "imap_type"))),
+            e.let("mp", e.mb.as_(e.call(_lo(e, "imap_new"), e.tup()), _lo(e, "imap_own"))),
             counted_loop("fill", COUNT, method("mp", "put", e.v("i"), e.mb.operator_mul(e.v("i"), e.n(3)))),
             check(e.eq(e.fld(e.v("mp"), "len"), e.n(COUNT))),
             check(truthy(method("mp", "has", e.n(150)))),
@@ -150,7 +150,7 @@ def module(e):
             method("mp", "clear", e.tup()),
             check(e.eq(e.fld(e.v("mp"), "len"), e.n(0))),
             check(e.not_(truthy(method("mp", "has", e.n(7))))),
-            e.let("st", e.mb.as_(e.call(_lo(e, "iset_new"), e.tup()), _lo(e, "iset_type"))),
+            e.let("st", e.mb.as_(e.call(_lo(e, "iset_new"), e.tup()), _lo(e, "iset_own"))),
             counted_loop("fills", 50, method("st", "add", e.v("i"))),
             check(e.eq(e.fld(e.v("st"), "len"), e.n(50))),
             check(truthy(method("st", "has", e.n(25)))),
@@ -163,6 +163,6 @@ def module(e):
         ),
         e.ret(e.n(0)),
     )
-    top.append(func("main", [], "main_fn_t", body))
+    top.append(func("main", [], "main_fn_t", body, "export_fn"))
     top.append(root_mode_finish(APP, e, e.v("llvm"), e.v("ll")))
     return top

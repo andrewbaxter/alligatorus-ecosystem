@@ -1,14 +1,33 @@
 """webidl-wasm.atz: WebIDL binding hooks for the wat target (wasm imports from the `webidl` module).
 
-Handles (and strings, which JS hands over as handles) are owned values: `handle` is destructor.atz's type over i32
-whose destroy function is the `webidl.release` import (webidl-js.atz frees the table slot). Hooks returning a handle
-yield one, so a handle is released when the binding holding it is dropped; a handle stored for the app's lifetime is
-`.forget()`-ed into its cell. Handles read from `out` cells are plain i32s until wrapped with `handle`.
+Handles are typed by interface: `handle(name)` yields `{raw, type, own}` for an interface name (`""` for any
+handle: unions, mixins, callbacks and strings JS hands over as handles). `raw` is the handle as a plain value, an
+i32 by representation that converts only to its ancestors in the spec's inheritance (`Element` passes where a
+`Node` is expected, never the reverse: a downcast is the explicit `h as i32 as handle("X").raw`) and to i32; `type`
+is destructor.atz's owned type over it, whose destroy function is the `webidl.release` import (webidl-js.atz frees
+the table slot), and `own` its adopting type. A hook's parameters take the raw handle of their interface (a
+borrowed use: an owned handle's binding converts through its reference); a hook returning a handle yields an owned
+one of the returned interface, released when the binding holding it is dropped; a handle stored for the app's
+lifetime is `.forget()`-ed into its cell. Handles read from `out` cells are plain i32s until adopted with `own`.
 """
 
+from ..core import values
 from ..memory import destructor
 from ..eco_mb import p
 from ..target_mb import (
+    cast_value,
+    type_can_cast_from,
+    cve_code,
+    retag_values,
+    bool_t,
+    outer,
+    lookup_v,
+    has_b,
+    handle_binds,
+    handle_binding,
+    type_aspect,
+    is_equal,
+    and_b,
     a,
     acc,
     asp_id,
@@ -95,34 +114,218 @@ def _webidl(e, fn):
     return e.lower(e.fld(e.v("webidl"), fn))
 
 
+def _raw_of(e, name):
+    """In a hook's host code: the raw handle type of the interface `name` (an i32 by representation)."""
+    return e.mb.as_(mk(e, "wi_raw", p("name", name), p("under", e.lower(e.v("t_i32")))), ty(e))
+
+
+def _handle_types(e, name):
+    """In a hook's host code: `{type, own}` of the interface `name` (a host expression), destructor.atz's owned type
+    over its raw handle type, destroyed by the release import."""
+    return e.call(
+        e.lower(e.fld(e.v("destructor"), "type")),
+        e.rec(p("under", _raw_of(e, name)), p("destroy", e.lower(e.v("release")))),
+    )
+
+
+def _handle_fn(e, x):
+    """`webidl.handle(name)`: a const function yielding the handle types of the interface `name`, `{raw, type,
+    own}`: the raw handle type (one per name: any two are the same type), destructor.atz's owned type over it
+    (destroyed by the release import) and its adopting type."""
+    const_fn(
+        e,
+        x,
+        "handle_b",
+        "webidl.handle",
+        body(
+            e,
+            e.let("argv", a(e, "argument")),
+            e.if_only(
+                e.not_(cve_has(e, e.v("argv"))), ret_m(e, err_cve(e, loc(e), "webidl.handle: argument has no value"))
+            ),
+            e.if_only(
+                e.not_(has_b(e, xx(e), cve_type(e, e.v("argv")), e.mb.eval_aspect_string_const())),
+                ret_m(e, err_cve(e, loc(e), "webidl.handle: the interface name must be a constant string")),
+            ),
+            e.let(
+                "name",
+                bim(
+                    e,
+                    e.mb.eval_aspect_string_const(),
+                    "get",
+                    lookup_v(e, xx(e), cve_type(e, e.v("argv")), e.mb.eval_aspect_string_const()),
+                    cve_value(e, e.v("argv")),
+                ),
+            ),
+            e.let("raw", _raw_of(e, e.v("name"))),
+            e.let("hr", _handle_types(e, e.v("name"))),
+            e.ret(
+                e.eresult_ok(
+                    cve_t(e),
+                    unwrap_cve_m(
+                        e,
+                        const_eval_in(
+                            e,
+                            xx(e),
+                            e.stage(
+                                e.rec(
+                                    p("raw", e.lower(e.v("raw"))),
+                                    p("type", e.lower(e.fld(e.v("hr"), "type"))),
+                                    p("own", e.lower(e.fld(e.v("hr"), "own"))),
+                                )
+                            ),
+                        ),
+                    ),
+                )
+            ),
+        ),
+    )
+
+
+def _raw_type(e, x):
+    """`wi_raw`: a handle of an interface as a plain value: an i32 by representation (`under`) that converts to i32
+    and to the raw handle of any ancestor interface (the spec's `parent` chain; "" is above all), and is made from
+    an i32 (the explicit adoption of a handle read from a cell, or a downcast). Two are the same type when their
+    names are."""
+    desc = "webidl handle"
+    def_iface(e, x, "wi_raw_m", p("name", str_(e)))
+    def_obj(e, x, "wi_raw", desc, e.rec(p("name", str_(e)), p("under", ty(e))))
+    x.append(e.impl_interface(e.v("wi_raw"), t(e, "wi_raw_m"), p("name", in_(e, "name"))))
+    self_type(
+        e,
+        x,
+        "wi_raw",
+        e.cat(e.s("webidl handle "), in_(e, "name")),
+        e.mb.if_of(
+            [
+                (e.eq(a(e, "key"), asp_id(e, "bind")), e.opt_some(e.mb.types_aspect(), outer(e))),
+                (e.eq(a(e, "key"), asp_id(e, "initial_bind")), e.opt_some(e.mb.types_aspect(), outer(e))),
+                (e.eq(a(e, "key"), lv(e, "wi_raw_m_id")), e.opt_some(e.mb.types_aspect(), outer(e))),
+            ],
+            type_aspect(e, xx(e), in_(e, "under"), a(e, "key")),
+        ),
+        # From itself, its under type (i32) and whatever i32 takes (a constant literal: the null handle `0`).
+        body(
+            e,
+            e.ret(
+                or_b(
+                    e,
+                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
+                    or_b(
+                        e,
+                        is_equal(e, xx(e), in_(e, "under"), a(e, "source_type")),
+                        type_can_cast_from(e, xx(e), loc(e), in_(e, "under"), a(e, "source_type")),
+                    ),
+                )
+            ),
+        ),
+        # A runtime value retagged (values.atz): a handle is a wasm i32 value (a constant becomes one first).
+        body(
+            e,
+            e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.let("uv", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), in_(e, "under"), a(e, "cv")))),
+            e.match_of(
+                e.call(
+                    e.mb.reinterpret(),
+                    e.tup(loc(e), cve_value(e, e.v("uv")), e.lower(e.fld(e.v("values"), "retag"))),
+                ),
+                "__t",
+                None,
+                p(
+                    "ok",
+                    ret_m(
+                        e,
+                        ok_cve(
+                            e,
+                            cv_of(
+                                e,
+                                cve_code(e, e.v("uv")),
+                                bim(e, e.lower(e.fld(e.v("values"), "retag")), "retag", e.v("__t"), outer(e)),
+                            ),
+                        ),
+                    ),
+                ),
+                p("errs", ret_m(e, err_cve(e, loc(e), desc + ": only runtime values can become one"))),
+            ),
+        ),
+        body(
+            e,
+            e.if_only(
+                is_equal(e, xx(e), in_(e, "under"), a(e, "dest_type")), ret_m(e, e.mb.as_(e.b(True), bool_t(e)))
+            ),
+            e.if_only(e.not_(has(e, xx(e), a(e, "dest_type"), "wi_raw_m")), ret_m(e, dfalse(e))),
+            e.ret(
+                e.call(
+                    _webidl(e, "ancestor"),
+                    e.rec(
+                        p("table", _webidl(e, "spec")),
+                        p("iface", in_(e, "name")),
+                        p("of", acc(e, xx(e), a(e, "dest_type"), "wi_raw_m", "name")),
+                    ),
+                )
+            ),
+        ),
+        body(e, e.ret(ok_cve(e, retag_values(e, a(e, "cv"), a(e, "dest_type"))))),
+        body(
+            e,
+            e.ret(
+                and_b(
+                    e,
+                    has(e, xx(e), a(e, "other"), "wi_raw_m"),
+                    e.eq(in_(e, "name"), acc(e, xx(e), a(e, "other"), "wi_raw_m", "name")),
+                )
+            ),
+        ),
+    )
+    handle_binding(e, x, "wi_raw_b", desc + " binding")
+    handle_binds(e, x, "wi_raw", "under", "wi_raw_b", desc)
+
+
 def module(e):
     x = []
     x.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
     x.append(e.let("webidl", e.import_local("webidl", "webidl.atz")))
+    x.append(e.let("values", e.import_local("values", values.FILE)))
     bind_types(e, x)
     for t_ in ["i16", "u16"]:
         x.append(e.let("t_" + t_, e.fld(e.v("wasm"), t_)))
     x.append(e.let("t_pi32", e.call(e.fld(e.v("wasm"), "ptr"), e.v("t_i32"))))
-    x.append(
+    # The release import's type, lifted (an import's type must be a constant), and the import.
+    setup0 = []
+    setup0.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
+    bind_types(e, setup0)
+    setup0.append(
         e.let(
             "release_t",
             e.call(
                 e.fld(e.v("wasm"), "fn"),
-                e.rec(
-                    p("params", e.list_new(e.mb.eval_type(), e.v("t_i32"))),
-                    p("ret", e.v("t_void")),
-                ),
+                e.rec(p("params", e.list_new(e.mb.eval_type(), e.v("t_i32"))), p("ret", e.v("t_void"))),
+            ),
+        )
+    )
+    setup0.append(e.ret(e.rec(p("release_t", e.v("release_t")))))
+    x.append(e.let("k0", e.lower(e.mb.seq(setup0))))
+    x.append(e.let("release_t", e.fld(e.v("k0"), "release_t")))
+    x.append(
+        e.let(
+            "release",
+            e.call(
+                e.fld(e.v("wasm"), "import_fn"),
+                e.rec(p("module", e.s(MODULE)), p("name", e.s("release")), p("ty", e.v("release_t"))),
             ),
         )
     )
     x.append(e.let("d", e.define()))
     x.append(e.option_type_let())
     def_iface(e, x, "wop_m", p("kind", int_t(e)))
-    def_obj(e, x, "wop_t", "webidl binding hook", e.rec(p("kind", int_t(e)), p("wrap", ty(e))))
+    def_obj(e, x, "wop_t", "webidl binding hook", e.rec(p("kind", int_t(e))))
     # A hook returning a handle: calls the import (rebuilt from its type and name), then wraps the i32 as an owned
-    # handle.
+    # handle of the returned interface (`webidl.handle`).
     def_iface(e, x, "wret_m")
     def_obj(e, x, "wret", "webidl owning hook", e.rec(p("ity", ty(e)), p("name", str_(e)), p("wrap", ty(e))))
+    _raw_type(e, x)
+    x.append(e.let("destructor", e.import_local("destructor", destructor.FILE)))
+    _handle_fn(e, x)
     self_type(
         e,
         x,
@@ -369,31 +572,50 @@ def module(e):
                         e.not_(e.call_m(e.v("sig"), "ok", e.tup())),
                         ret_m(e, err_cve(e, loc(e), e.cat(e.s("webidl: "), e.call_m(e.v("sig"), "err", e.tup())))),
                     ),
-                    e.let("kinds", e.list_new(str_(e))),
-                    e.if_only(e.call_m(e.v("sig"), "self", e.tup()), push(e, e.v("kinds"), e.dstr("handle"))),
+                    e.let("wkinds", wkinds),
+                    e.let("wrets", wrets),
+                    # The parameter types: handles as the raw handle type of their interface, the rest by kind.
+                    e.let("params", e.list_new(ty(e))),
+                    e.if_only(
+                        e.call_m(e.v("sig"), "self", e.tup()),
+                        push(e, e.v("params"), _raw_of(e, e.call_m(e.v("sig"), "iface", e.tup()))),
+                    ),
                     e.foreach(
                         e.call_m(e.v("sig"), "args", e.tup()),
                         "ap",
                         e.seq(
-                            e.if_only(e.call_m(e.v("ap"), "optional", e.tup()), push(e, e.v("kinds"), e.dstr("flag"))),
-                            e.if_only(e.call_m(e.v("ap"), "nullable", e.tup()), push(e, e.v("kinds"), e.dstr("flag"))),
+                            e.if_only(
+                                e.call_m(e.v("ap"), "optional", e.tup()),
+                                push(e, e.v("params"), e.call_m(e.v("wkinds"), "get", e.s("flag"))),
+                            ),
+                            e.if_only(
+                                e.call_m(e.v("ap"), "nullable", e.tup()),
+                                push(e, e.v("params"), e.call_m(e.v("wkinds"), "get", e.s("flag"))),
+                            ),
                             e.if_else(
                                 or_b(
                                     e,
                                     e.eq(e.call_m(e.v("ap"), "kind", e.tup()), e.s("str")),
                                     e.eq(e.call_m(e.v("ap"), "kind", e.tup()), e.s("buf")),
                                 ),
-                                e.seq(push(e, e.v("kinds"), e.dstr("ptr")), push(e, e.v("kinds"), e.dstr("len"))),
-                                push(e, e.v("kinds"), e.call_m(e.v("ap"), "kind", e.tup())),
+                                e.seq(
+                                    push(e, e.v("params"), e.call_m(e.v("wkinds"), "get", e.s("ptr"))),
+                                    push(e, e.v("params"), e.call_m(e.v("wkinds"), "get", e.s("len"))),
+                                ),
+                                e.if_else(
+                                    e.eq(e.call_m(e.v("ap"), "kind", e.tup()), e.s("handle")),
+                                    push(e, e.v("params"), _raw_of(e, e.call_m(e.v("ap"), "iface", e.tup()))),
+                                    push(
+                                        e,
+                                        e.v("params"),
+                                        e.call_m(e.v("wkinds"), "get", e.call_m(e.v("ap"), "kind", e.tup())),
+                                    ),
+                                ),
                             ),
                         ),
                     ),
                     e.let("ret_out", e.call_m(e.v("sig"), "ret_out", e.tup())),
-                    e.if_only(e.v("ret_out"), push(e, e.v("kinds"), e.dstr("out"))),
-                    e.let("wkinds", wkinds),
-                    e.let("wrets", wrets),
-                    e.let("params", e.list_new(ty(e))),
-                    e.foreach(e.v("kinds"), "k", push(e, e.v("params"), e.call_m(e.v("wkinds"), "get", e.v("k")))),
+                    e.if_only(e.v("ret_out"), push(e, e.v("params"), e.call_m(e.v("wkinds"), "get", e.s("out")))),
                     e.let(
                         "rkind", e.if_else(e.v("ret_out"), e.dstr("void"), e.call_m(e.v("sig"), "ret_kind", e.tup()))
                     ),
@@ -445,7 +667,7 @@ def module(e):
                                                     "wret",
                                                     p("ity", e.v("ity")),
                                                     p("name", e.v("name")),
-                                                    p("wrap", in_(e, "wrap")),
+                                                    p("wrap", e.fld(_handle_types(e, e.call_m(e.v("sig"), "ret_iface", e.tup())), "own")),
                                                 ),
                                             ),
                                             p("data", e.tup()),
@@ -465,6 +687,7 @@ def module(e):
     defs = []
     defs.append(p("wop_t_new", e.fld(e.v("wop_t"), "new")))
     defs.append(p("wret_new", e.fld(e.v("wret"), "new")))
+    defs.append(p("handle", e.fld(e.v("handle_b"), "func")))
     defs.append(p("t_i32", e.v("t_i32")))
     defs.append(p("release_t", e.v("release_t")))
     defs.append(
@@ -490,36 +713,17 @@ def module(e):
     top = []
     top.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
     top.append(e.let("k", e.lower(e.mb.seq(x))))
-    top.append(e.let("destructor", e.import_local("destructor", destructor.FILE)))
-    top.append(
-        e.let(
-            "release",
-            e.call(
-                e.fld(e.v("wasm"), "import_fn"),
-                e.rec(p("module", e.s(MODULE)), p("name", e.s("release")), p("ty", e.fld(e.v("k"), "release_t"))),
-            ),
-        )
-    )
-    top.append(
-        e.let(
-            "handle_t",
-            e.call(
-                e.fld(e.v("destructor"), "type"),
-                e.rec(p("under", e.fld(e.v("k"), "t_i32")), p("destroy", e.v("release"))),
-            ),
-        )
-    )
     exports = []
     exports.append(p("module", e.s(MODULE)))
-    # The hook kinds as const functions: each calls its kind object's function aspect with the caller's argument.
     top.append(e.let("gfn_d", e.define()))
+    # The hook kinds as const functions: each calls its kind object's function aspect with the caller's argument.
     for kind in KINDS:
         top.append(
             e.let(
                 kind + "_o",
                 e.call(
                     e.fld(e.v("k"), "wop_t_new"),
-                    e.rec(p("kind", e.int_of(_kind_of(kind))), p("wrap", e.v("handle_t"))),
+                    e.rec(p("kind", e.int_of(_kind_of(kind)))),
                 ),
             )
         )
@@ -548,7 +752,7 @@ def module(e):
             d="gfn_d",
         )
         exports.append(p(kind, e.fld(e.v(kind + "_b"), "func")))
-    exports.append(p("handle", e.v("handle_t")))
+    exports.append(p("handle", e.fld(e.v("k"), "handle")))
     for special in ["global", "callback"]:
         ity = e.call(
             e.fld(e.v("wasm"), "import_t"),
@@ -559,7 +763,11 @@ def module(e):
                 special + "_o",
                 e.call(
                     e.fld(e.v("k"), "wret_new"),
-                    e.rec(p("ity", ity), p("name", e.s(special)), p("wrap", e.v("handle_t"))),
+                    e.rec(
+                        p("ity", ity),
+                        p("name", e.s(special)),
+                        p("wrap", e.fld(e.call(e.fld(e.v("k"), "handle"), e.s("Window" if special == "global" else "")), "own")),
+                    ),
                 ),
             )
         )

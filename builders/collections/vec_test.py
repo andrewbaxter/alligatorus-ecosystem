@@ -39,7 +39,7 @@ def module(e):
     top.append(e.let("vec", e.import_local("vec", "vec-llvm.atz")))
     for vname, elem in [("ints", "t_i32"), ("bytes", "t_u8")]:
         top.append(e.let(vname, e.call(e.fld(e.v("vec"), "type"), e.v(elem))))
-        for f in ["type", "new"]:
+        for f in ["type", "own", "new"]:
             top.append(e.let(vname + "_" + f, e.fld(e.v(vname), f)))
     top.append(
         e.let(
@@ -76,10 +76,10 @@ def module(e):
 
     body = e.seq(
         e.seq(
-            e.let("s", e.mb.as_(e.call(_lo(e, "bytes_new"), e.tup()), _lo(e, "bytes_type"))),
+            e.let("s", e.mb.as_(e.call(_lo(e, "bytes_new"), e.tup()), _lo(e, "bytes_own"))),
             *[method("s", "push", e.n(b)) for b in MESSAGE + b"\0"],
             e.call(puts, e.fld(e.v("s"), "data")),
-            e.let("v", e.mb.as_(e.call(_lo(e, "ints_new"), e.tup()), _lo(e, "ints_type"))),
+            e.let("v", e.mb.as_(e.call(_lo(e, "ints_new"), e.tup()), _lo(e, "ints_own"))),
             counted_loop("fill", COUNT, method("v", "push", e.v("i"))),
             check(e.eq(e.fld(e.v("v"), "len"), e.n(COUNT))),
             check(e.mb.operator_ge(e.fld(e.v("v"), "cap"), e.n(COUNT))),
@@ -138,7 +138,7 @@ def module(e):
         e.let(
             "main",
             e.call(
-                e.fld(e.v("llvm"), "func_fn"),
+                e.fld(e.v("llvm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("ll")),
                     e.p("name", e.s("main")),

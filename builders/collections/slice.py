@@ -1,9 +1,11 @@
 """slice-wasm.atz / slice-llvm.atz: bounds-checked views over a run of elements, one module per target from this
 builder.
 
-`slice.type(elem)` yields `{type, idx}` for a constant element type `elem` (which must have values.atz's `size` aspect).
-A slice is the target's tuple `(ptr(elem), i32)` (the data pointer and the length) viewed as its own type, so it
-binds, is assigned, passed and returned exactly like that tuple; `(ptr, len) as type` makes one. On a slice value:
+`slice.type(elem)` yields `{type, idx, of}` for a constant element type `elem` (which must have values.atz's `size`
+aspect). A slice is the target's tuple `(ptr(elem), i32)` (the data pointer and the length) viewed as its own type,
+so it binds, is assigned, passed and returned exactly like that tuple; `(ptr, len) as of` makes one (`of` is the
+constructing type; the cast's result is the slice type), and nothing else does: a pair never coerces into a slice.
+On a slice value:
 `len` and `data` are its parts (places); `at(i)` is the element place; `sub((from, to))` is the sub-slice. Both trap
 (wasm `unreachable`, llvm `llvm.trap`) when the index or range is out of bounds, through the `slice_idx` and
 `slice_range` dependencies (`func_dep`), which a module gets when its code first uses them; `idx` is the
@@ -15,30 +17,45 @@ from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
     a,
+    acc,
+    and_b,
     asp_iface,
     bim,
     body,
+    cast_to_panic,
+    cast_value,
     const_eval_in,
     const_fn,
     const_type_arg,
+    conv,
     cve_has,
     cve_type,
     cve_value,
+    def_iface,
+    def_obj,
     err_cve,
     fn_of,
     graft,
     handle_methods,
     handle_type,
+    has,
     in_,
     int_t,
-    lookup,
+    is_equal,
     loc,
+    lookup,
+    mk,
+    no_cast_to,
+    ok_cve,
     ret_m,
     retag_values,
+    self_type,
     str_,
+    t,
     to_str,
     ty,
     ty_desc,
+    type_can_cast_from,
     unwrap_cve_m,
     xx,
 )
@@ -85,9 +102,12 @@ class _Target:
     def elem_ptr(self, e, base, idx, size, ptr_type):
         """The address of element `idx` of the array at `base`, as `ptr_type`; `i32` is a host local."""
         if self.kind == WASM:
-            addr = e.mb.operator_add(e.mb.as_(base, e.lower(e.v("i32"))), e.mb.operator_mul(idx, size))
-            return e.mb.as_(addr, ptr_type)
-        return e.mb.operator_add(e.mb.as_(base, ptr_type), idx)
+            addr = e.mb.operator_add(
+                conv(e, e.lower(e.v("ptr_to_int")), base, e.lower(e.v("i32"))),
+                e.mb.operator_mul(idx, size),
+            )
+            return conv(e, e.lower(e.v("int_to_ptr")), addr, ptr_type)
+        return e.mb.operator_add(conv(e, e.lower(e.v("ptr_cast")), base, ptr_type), idx)
 
 
 def _tuple_args(e, label, cv, count):
@@ -168,8 +188,7 @@ def _setup(e):
     out = []
     for name in BASE:
         out.append(e.let(name, e.lower(e.v(name))))
-    out.append(e.let("type", e.call(_up(e, e.fld(e.v("sl"), "new"), SETUP_MOD), e.rec(*[p(f, e.v(f)) for f in BASE]))))
-    out.append(e.ret(e.rec(p("type", e.v("type")), p("idx", e.v("idx")))))
+    out.append(e.ret(e.rec(p("type", e.lower(e.v("sl_t"))), p("idx", e.v("idx")), p("of", e.lower(e.v("of_t"))))))
     return e.mb.seq(out)
 
 
@@ -191,9 +210,46 @@ def _objs(e, x, tg):
         places,
         METHODS,
         under="pt",
-        construct=True,
+        from_under=False,
         desc_expr=e.cat(e.s("slice("), ty_desc(e, in_(e, "elem")), e.s(")")),
         identity="elem",
+    )
+    # `of`: the constructing type, the one way to make a slice from a (pointer, length) pair: casting the pair to it
+    # yields the slice (the cast's result has the slice type, not `of`).
+    def_iface(e, x, "slof_m", p("sl", ty(e)))
+    def_obj(e, x, "slof", "slice constructor", e.rec(p("sl", ty(e))))
+    x.append(e.impl_interface(e.v("slof"), t(e, "slof_m"), p("sl", in_(e, "sl"))))
+    self_type(
+        e,
+        x,
+        "slof",
+        e.cat(e.s("constructor of "), ty_desc(e, in_(e, "sl"))),
+        e.mb.if_of([], e.opt_none(e.mb.types_aspect())),
+        body(
+            e,
+            e.ret(
+                type_can_cast_from(e, xx(e), loc(e), acc(e, xx(e), in_(e, "sl"), "sl_m", "pt"), a(e, "source_type"))
+            ),
+        ),
+        body(
+            e,
+            e.if_only(e.not_(cve_has(e, a(e, "cv"))), ret_m(e, err_cve(e, loc(e), "slice.of: the pair is missing"))),
+            e.let("pt", acc(e, xx(e), in_(e, "sl"), "sl_m", "pt")),
+            e.let("tv", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), e.v("pt"), a(e, "cv")))),
+            e.ret(ok_cve(e, retag_values(e, e.v("tv"), in_(e, "sl")))),
+        ),
+        no_cast_to(e),
+        cast_to_panic(e),
+        body(
+            e,
+            e.ret(
+                and_b(
+                    e,
+                    has(e, xx(e), a(e, "other"), "slof_m"),
+                    is_equal(e, xx(e), in_(e, "sl"), acc(e, xx(e), a(e, "other"), "slof_m", "sl")),
+                )
+            ),
+        ),
     )
 
     def tv():
@@ -225,7 +281,7 @@ def _objs(e, x, tg):
                                 tg.elem_ptr(e, data(), e.v("from"), e.lower(e.v("elem_size")), e.lower(e.v("pelem"))),
                                 e.v("n"),
                             ),
-                            e.lower(e.v("slt")),
+                            e.lower(e.v("slof_t")),
                         ),
                     ),
                 ),
@@ -240,7 +296,11 @@ def _objs(e, x, tg):
         fields,
         METHODS,
         method_body,
-        prelude=[e.let("tv", retag_values(e, e.v("recv"), e.v("pt"))), e.let("slt", in_(e, "ht"))],
+        prelude=[
+            e.let("tv", retag_values(e, e.v("recv"), e.v("pt"))),
+            e.let("slof_t", e.mb.as_(mk(e, "slof", p("sl", in_(e, "ht"))), ty(e))),
+            *[e.let(name, e.lower(e.fld(e.v("lib"), name))) for name in ["ptr_cast", "ptr_to_int", "int_to_ptr"]],
+        ],
         kind_prelude={"sub": _tuple_args(e, "slice.sub", a(e, "argument"), 2)},
     )
 
@@ -280,6 +340,19 @@ def module(e, kind):
         e.let(
             "pt",
             e.call(e.lower(e.fld(e.v("lib"), "tuple")), e.list_new(e.mb.eval_type(), e.v("pelem"), e.v("i32"))),
+        )
+    )
+    # The slice type and its constructor's function value, made here (constants) for the setup to lower.
+    parts.append(
+        e.let(
+            "sl_t",
+            e.mb.as_(e.call(e.lower(e.fld(e.v("sl"), "new")), e.rec(*[p(f, e.v(f)) for f in BASE])), e.mb.eval_type()),
+        )
+    )
+    parts.append(
+        e.let(
+            "of_t",
+            e.mb.as_(e.call(e.lower(e.fld(e.v("slof"), "new")), e.rec(p("sl", e.v("sl_t")))), e.mb.eval_type()),
         )
     )
     parts.append(e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e)))))))

@@ -2,6 +2,7 @@
 status). The wasm app first writes `before` to stdout (fd_write is unbuffered, so it survives the trap); the llvm app
 prints nothing, since buffered stdout is lost in the trap."""
 
+from .. import target_mb as tm
 from ..root_mode import APP, root_mode_finish
 from ..wasm.wat import bind_types
 
@@ -33,10 +34,10 @@ def _llvm(e):
         top.append(e.let(n, e.fld(e.v("k"), n)))
     top.append(e.let("vec", e.import_local("vec", "vec-llvm.atz")))
     top.append(e.let("ints", e.call(e.fld(e.v("vec"), "type"), e.v("t_i32"))))
-    for f in ["type", "new"]:
+    for f in ["type", "own", "new"]:
         top.append(e.let("ints_" + f, e.fld(e.v("ints"), f)))
     body = e.seq(
-        e.let("v", e.mb.as_(e.call(e.lower(e.v("ints_new")), e.tup()), e.lower(e.v("ints_type")))),
+        e.let("v", e.mb.as_(e.call(e.lower(e.v("ints_new")), e.tup()), e.lower(e.v("ints_own")))),
         e.let("x", e.call(e.fld(e.v("v"), "at"), e.n(0))),
         e.ret(e.v("x")),
     )
@@ -44,7 +45,7 @@ def _llvm(e):
         e.let(
             "main",
             e.call(
-                e.fld(e.v("llvm"), "func_fn"),
+                e.fld(e.v("llvm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("ll")),
                     e.p("name", e.s("main")),
@@ -75,7 +76,10 @@ def _wasm(e):
             ),
         )
     )
-    exported = ["m", "proc_exit_fn_t", "fd_write_fn_t", "start_fn_t", "t_i32", "t_u32", "t_u8"]
+    for name in ["ptr_cast", "ptr_to_int"]:
+        setup.append(e.let(name, e.fld(e.v("wasm"), name)))
+    exported = ["m", "proc_exit_fn_t", "fd_write_fn_t", "start_fn_t", "t_i32", "t_u32", "t_u8", "t_pv"]
+    exported += ["ptr_cast", "ptr_to_int"]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
@@ -97,22 +101,19 @@ def _wasm(e):
         )
     for vname, elem in [("ints", "t_i32"), ("bytes", "t_u8")]:
         top.append(e.let(vname, e.call(e.fld(e.v("vec"), "type"), e.v(elem))))
-        for f in ["type", "new"]:
+        for f in ["type", "own", "new"]:
             top.append(e.let(vname + "_" + f, e.fld(e.v(vname), f)))
-    top.append(
-        e.let(
-            "iov",
-            e.call(
-                e.fld(e.v("wasm"), "data_fn"),
-                e.rec(
-                    e.p("mod", e.v("m")),
-                    e.p("name", e.s("iov")),
-                    e.p("elem", e.v("t_u32")),
-                    e.p("values", e.tup(e.n(0), e.n(0), e.n(0))),
+    # The iovec (address, length) and the written-count cell fd_write fills, as u32 data blocks.
+    for name, values in [("iov", e.tup(e.n(0), e.n(0))), ("nwritten", e.tup(e.n(0)))]:
+        top.append(
+            e.let(
+                name,
+                e.call(
+                    e.fld(e.v("wasm"), "data_fn"),
+                    e.rec(e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("elem", e.v("t_u32")), e.p("values", values)),
                 ),
-            ),
+            )
         )
-    )
 
     def lo(name):
         return e.lower(e.v(name))
@@ -121,17 +122,15 @@ def _wasm(e):
         return e.call(e.fld(e.v(v), name), args[0] if len(args) == 1 else e.tup(*args))
 
     body = e.seq(
-        e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_type"))),
+        e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_own"))),
         *[method("s", "push", e.n(b)) for b in MESSAGE],
-        e.mb.set(e.mb.field(lo("iov"), e.n(0)), e.mb.as_(e.fld(e.v("s"), "data"), lo("t_u32"))),
+        e.mb.set(e.mb.field(lo("iov"), e.n(0)), tm.conv(e, lo("ptr_to_int"), e.fld(e.v("s"), "data"), lo("t_u32"))),
         e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(e.fld(e.fld(e.v("s"), "len"), "wrap"), lo("t_u32"))),
         e.call(
             lo("fd_write"),
-            e.tup(
-                e.n(1), e.mb.as_(lo("iov"), lo("t_u32")), e.n(1), e.mb.as_(e.mb.field(lo("iov"), e.n(2)), lo("t_u32"))
-            ),
+            e.tup(e.n(1), tm.conv(e, lo("ptr_cast"), lo("iov"), lo("t_pv")), e.n(1), lo("nwritten")),
         ),
-        e.let("v", e.mb.as_(e.call(lo("ints_new"), e.tup()), lo("ints_type"))),
+        e.let("v", e.mb.as_(e.call(lo("ints_new"), e.tup()), lo("ints_own"))),
         e.let("x", method("v", "at", e.n(0))),
         e.call(lo("proc_exit"), e.call(e.fld(e.v("x"), "wrap"), lo("t_u32"))),
     )
@@ -139,7 +138,7 @@ def _wasm(e):
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -150,7 +149,6 @@ def _wasm(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top
 

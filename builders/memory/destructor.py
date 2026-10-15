@@ -1,18 +1,30 @@
 """destructor.atz: owned values whose destroy function runs when the binding holding them is dropped.
 
-`destructor.type({under, destroy})` makes a type over `under` (a runtime type of any target); `destroy` is the
-function value to call with the `under` value. Calling the made type converts an
-`under` value into an owned value. Binding an owned value tracks a moved flag on the binding: loading the binding
+`destructor.type({under, destroy})` yields `{type, own}` for a runtime type `under` of any target: `type` is the
+owned type over it and `destroy` the function value to call with the `under` value. Taking ownership is explicit and
+named: `v as own` converts an `under` value into an owned value (`own` is the adopting type; the cast's result is the
+owned type), and nothing else coerces into the owned type, so a raw value never becomes owned by passing where an
+owned value is expected. Binding an owned value tracks a moved
+flag on the binding: loading the binding
 yields a reference that acts as `under` everywhere, except that `.move()` yields the owned value again and marks the
 binding moved, `.forget()` yields the plain `under` value and marks the binding moved (ownership leaves the tracked
 bindings, as for a value parked in a global), and assigning an owned value to it destroys the previous one first.
 When the binding is dropped unmoved, `destroy(value)` is emitted. A binding moved in some branches but not others is a
 compile error.
+
+`destructor.borrow(T)` (for an owned type `T`) is the borrow type a container hands out for an element it owns (a
+vec's `at(i)`, a table's `get(k)`): the element's place viewed as `under` without ownership. Assigning an owned value
+through it destroys the current element first; it cannot be bound (ownership stays with the container: `pop()` or
+`remove()` take it out), and dropping a borrow does nothing. `destructor.adopt(T)` is `T`'s adopting type `own`
+again, for a container that stores elements as `under` and hands ownership back (`v as own`); `owned_m` is the
+owned types' interface (`under`, `destroy`), for finding the under type of one.
 """
 
 from ..core import values
+from .. import target_mb as tm
 from ..eco_mb import p
 from ..target_mb import (
+    const_type_arg,
     a,
     acc,
     and_b,
@@ -22,6 +34,8 @@ from ..target_mb import (
     bim0,
     body,
     bool_t,
+    can_cast_from_self,
+    cast_from_self,
     cast_to_panic,
     cast_value,
     code_none,
@@ -41,6 +55,7 @@ from ..target_mb import (
     errs_t,
     fn_def,
     fn_impl,
+    fn_of,
     fn_throws,
     graft,
     has,
@@ -48,6 +63,7 @@ from ..target_mb import (
     hf_rec,
     in_,
     is_equal,
+    is_runtime,
     is_target_code,
     loc,
     lookup,
@@ -55,6 +71,7 @@ from ..target_mb import (
     lv,
     mk,
     must_v,
+    no_cast_to,
     ok_cve,
     or_b,
     outer,
@@ -68,6 +85,7 @@ from ..target_mb import (
     ty_desc,
     type_aspect,
     type_can_cast_from,
+    unique_t,
     unwrap_cve_m,
     unwrap_m,
     xx,
@@ -239,16 +257,41 @@ def _host_fns(e, x):
         body(
             e,
             e.let("under", _under_of(e, a(e, "owned"))),
+            e.let("dv", e.mb.as_(acc(e, xx(e), a(e, "owned"), "owned_m", "destroy"), e.mb.eval_value())),
+            e.let("dcv0", cv_of(e, code_none(e, loc(e)), e.v("dv"))),
+            # The destroy function value, or (a dependency's callable type, stored as a type value once lifted) the
+            # function value of that type: the unit cast to it.
+            e.let("dtk", lookup(e, xx(e), cve_type(e, e.v("dcv0")), asp_iface(e, "type"))),
             e.let(
                 "destroy",
-                cv_of(
-                    e,
-                    code_none(e, loc(e)),
-                    e.mb.as_(acc(e, xx(e), a(e, "owned"), "owned_m", "destroy"), e.mb.eval_value()),
+                e.if_else(
+                    or_b(
+                        e, e.fld(e.v("dtk"), "is_some"), is_equal(e, xx(e), cve_type(e, e.v("dcv0")), e.mb.eval_type())
+                    ),
+                    cv_of(
+                        e,
+                        code_none(e, loc(e)),
+                        e.call(
+                            e.eval_builtin("value_empty"),
+                            e.if_else(
+                                e.fld(e.v("dtk"), "is_some"),
+                                bim(e, asp_iface(e, "type"), "type", e.fld(e.v("dtk"), "value"), e.v("dv")),
+                                e.call(e.mb.must_reinterpret(), e.tup(e.v("dv"), e.mb.eval_type())),
+                            ),
+                        ),
+                    ),
+                    e.v("dcv0"),
                 ),
             ),
             e.let("fk", lookup(e, xx(e), cve_type(e, e.v("destroy")), asp_iface(e, "function"))),
-            e.if_only(e.not_(e.fld(e.v("fk"), "is_some")), throw_err(e, loc(e), "destructor: destroy is not callable")),
+            e.if_only(
+                e.not_(e.fld(e.v("fk"), "is_some")),
+                throw_err(
+                    e,
+                    loc(e),
+                    e.cat(e.s("destructor: destroy is not callable: "), ty_desc(e, cve_type(e, e.v("destroy")))),
+                ),
+            ),
             e.let("v", _retag(e, a(e, "cv"), e.v("under"))),
             e.let(
                 "r",
@@ -325,27 +368,9 @@ def _owned(e, x):
             ],
             type_aspect(e, xx(e), in_(e, "under"), a(e, "key")),
         ),
-        # An `under` value casts to the owned type (taking ownership); an owned value is its own type.
-        body(
-            e,
-            e.ret(
-                or_b(
-                    e,
-                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
-                    type_can_cast_from(e, xx(e), loc(e), in_(e, "under"), a(e, "source_type")),
-                )
-            ),
-        ),
-        body(
-            e,
-            e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
-            e.if_only(
-                e.not_(cve_has(e, a(e, "cv"))),
-                ret_m(e, err_cve(e, loc(e), "owned: cast source has no value")),
-            ),
-            e.let("v", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), in_(e, "under"), a(e, "cv")))),
-            e.ret(ok_cve(e, _retag_m(e, e.v("v"), outer(e), cve_t(e)))),
-        ),
+        # Only an owned value is the owned type: ownership is taken by `own`, never by a cast or coercion.
+        can_cast_from_self(e),
+        cast_from_self(e),
         e.mb.as_(e.b(True), bool_t(e)),
         body(
             e,
@@ -626,15 +651,22 @@ def _oref(e, x):
         ),
         e.mb.as_(e.b(False), bool_t(e)),
         cast_to_panic(e),
+        # A reference to an owned value casts to the under type itself (a use of the value that takes nothing)
+        # and to whatever the under type casts to.
         e.if_else(
             in_(e, "moved"),
             e.mb.as_(e.b(True), bool_t(e)),
-            bim(e, e.mb.eval_type(), "can_cast_to", _ref_under(e), _rec_xl(e, p("dest_type", a(e, "dest_type")))),
+            or_b(
+                e,
+                is_equal(e, xx(e), _ref_under(e), a(e, "dest_type")),
+                bim(e, e.mb.eval_type(), "can_cast_to", _ref_under(e), _rec_xl(e, p("dest_type", a(e, "dest_type")))),
+            ),
         ),
         body(
             e,
             e.if_only(in_(e, "moved"), ret_m(e, err_cve(e, loc(e), "use of a moved owned value"))),
             e.let("v", _retag_m(e, a(e, "cv"), _ref_under(e), cve_t(e))),
+            e.if_only(is_equal(e, xx(e), _ref_under(e), a(e, "dest_type")), ret_m(e, ok_cve(e, e.v("v")))),
             e.ret(
                 bim(
                     e,
@@ -887,9 +919,276 @@ def _move_like(e, x, obj, desc, result, no):
     )
 
 
+def _oadopt(e, x):
+    """`own`: the adopting type over an owned type. Casting an `under` value to `own` yields it as the owned value
+    (the cast's result has the owned type, not `own`): the one way ownership is taken, and one that must be
+    named."""
+    def_iface(e, x, "oadopt_m", p("owned", ty(e)))
+    def_obj(e, x, "oadopt", "owned adopt", e.rec(p("owned", ty(e))))
+    x.append(e.impl_interface(e.v("oadopt"), t(e, "oadopt_m"), p("owned", in_(e, "owned"))))
+    self_type(
+        e,
+        x,
+        "oadopt",
+        e.cat(e.s("own "), ty_desc(e, in_(e, "owned"))),
+        e.mb.if_of([], e.opt_none(e.mb.types_aspect())),
+        body(e, e.ret(type_can_cast_from(e, xx(e), loc(e), _under_of(e, in_(e, "owned")), a(e, "source_type")))),
+        body(
+            e,
+            e.if_only(
+                e.not_(cve_has(e, a(e, "cv"))),
+                ret_m(e, err_cve(e, loc(e), "own: the value to own is missing")),
+            ),
+            e.let("v", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), _under_of(e, in_(e, "owned")), a(e, "cv")))),
+            e.ret(ok_cve(e, _retag_m(e, e.v("v"), in_(e, "owned"), cve_t(e)))),
+        ),
+        no_cast_to(e),
+        cast_to_panic(e),
+        body(
+            e,
+            e.ret(
+                and_b(
+                    e,
+                    has(e, xx(e), a(e, "other"), "oadopt_m"),
+                    is_equal(e, xx(e), in_(e, "owned"), acc(e, xx(e), a(e, "other"), "oadopt_m", "owned")),
+                )
+            ),
+        ),
+    )
+
+
+def _oborrow(e, x):
+    """`oborrow`: a borrow of an owned value held in a container (a vec element, a table value): the owned value's
+    place viewed without ownership. Fields and calls are the under type's; assigning through it destroys the current
+    value and stores the assigned owned value (which must be an owned temporary or a `move()`); it cannot be bound
+    (ownership stays with the container: take the value out through the container's own method), and dropping a
+    borrow does nothing. It has the runtime representation of the under type."""
+    x.append(e.impl_interface(e.v("oborrow"), t(e, "oborrow_m"), p("owned", in_(e, "owned"))))
+    self_type(
+        e,
+        x,
+        "oborrow",
+        e.cat(e.s("borrow of "), ty_desc(e, in_(e, "owned"))),
+        _dispatch(
+            e,
+            [
+                asp_id(e, "field"),
+                asp_id(e, "set"),
+                e.mb.eval_aspect_drop_dynamic_id(),
+                asp_id(e, "bind"),
+                lv(e, "oborrow_m_id"),
+            ],
+            type_aspect(e, xx(e), _under_of(e, in_(e, "owned")), a(e, "key")),
+        ),
+        # Only the owned type's places become borrows (a container's accessors retag them).
+        body(
+            e,
+            e.ret(
+                or_b(
+                    e,
+                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
+                    is_equal(e, xx(e), in_(e, "owned"), a(e, "source_type")),
+                )
+            ),
+        ),
+        body(e, e.ret(ok_cve(e, _retag_m(e, a(e, "cv"), outer(e), cve_t(e))))),
+        # A borrow is usable as its under type (as a reference to an owned value is).
+        or_b(
+            e,
+            is_equal(e, xx(e), _under_of(e, in_(e, "owned")), a(e, "dest_type")),
+            bim(
+                e,
+                e.mb.eval_type(),
+                "can_cast_to",
+                _under_of(e, in_(e, "owned")),
+                _rec_xl(e, p("dest_type", a(e, "dest_type"))),
+            ),
+        ),
+        body(
+            e,
+            e.let("v", _retag_m(e, a(e, "cv"), _under_of(e, in_(e, "owned")), cve_t(e))),
+            e.if_only(
+                is_equal(e, xx(e), _under_of(e, in_(e, "owned")), a(e, "dest_type")), ret_m(e, ok_cve(e, e.v("v")))
+            ),
+            e.ret(
+                bim(
+                    e,
+                    e.mb.eval_type(),
+                    "cast_to",
+                    _under_of(e, in_(e, "owned")),
+                    _rec_xl(e, p("cv", e.v("v")), p("dest_type", a(e, "dest_type"))),
+                )
+            ),
+        ),
+        and_b(
+            e,
+            has(e, xx(e), a(e, "other"), "oborrow_m"),
+            is_equal(e, xx(e), in_(e, "owned"), acc(e, xx(e), a(e, "other"), "oborrow_m", "owned")),
+        ),
+    )
+    x.append(
+        e.impl_interface(
+            e.v("oborrow"),
+            asp_iface(e, "field"),
+            p(
+                "field",
+                body(
+                    e,
+                    e.let("uf", lookup(e, xx(e), _under_of(e, in_(e, "owned")), asp_iface(e, "field"))),
+                    e.if_only(
+                        e.not_(e.fld(e.v("uf"), "is_some")), ret_m(e, err_cve(e, loc(e), "owned value has no fields"))
+                    ),
+                    e.let("v", _retag_m(e, a(e, "self"), _under_of(e, in_(e, "owned")), cve_t(e))),
+                    e.ret(
+                        bim(
+                            e,
+                            asp_iface(e, "field"),
+                            "field",
+                            e.fld(e.v("uf"), "value"),
+                            _rec_xl(e, p("self", e.v("v")), p("key", a(e, "key"))),
+                        )
+                    ),
+                ),
+            ),
+            p(
+                "type_opt",
+                body(
+                    e,
+                    e.let("uf", lookup(e, xx(e), _under_of(e, in_(e, "owned")), asp_iface(e, "field"))),
+                    e.if_only(e.not_(e.fld(e.v("uf"), "is_some")), ret_m(e, e.option_type_lowered_none())),
+                    e.ret(
+                        bim(
+                            e,
+                            asp_iface(e, "field"),
+                            "type_opt",
+                            e.fld(e.v("uf"), "value"),
+                            e.rec(p("xx", xx(e)), p("key", a(e, "key"))),
+                        )
+                    ),
+                ),
+            ),
+            p(
+                "keys",
+                body(
+                    e,
+                    e.let("uf", lookup(e, e.v("arg"), _under_x(e, e.v("arg"), in_(e, "owned")), asp_iface(e, "field"))),
+                    e.if_only(e.not_(e.fld(e.v("uf"), "is_some")), ret_m(e, e.list_new(e.mb.types_constkey()))),
+                    e.ret(bim(e, asp_iface(e, "field"), "keys", e.fld(e.v("uf"), "value"), e.v("arg"))),
+                ),
+            ),
+        )
+    )
+    # Assigning through a borrow: evaluate the owned value, destroy the current one, store.
+    x.append(
+        e.impl_interface(
+            e.v("oborrow"),
+            e.mb.eval_aspect_set(),
+            p(
+                "set",
+                body(
+                    e,
+                    e.if_only(
+                        e.not_(cve_has(e, a(e, "value"))),
+                        ret_m(e, err_cve(e, loc(e), "assigned expression has no value")),
+                    ),
+                    e.if_only(
+                        e.not_(is_equal(e, xx(e), in_(e, "owned"), cve_type(e, a(e, "value")))),
+                        ret_m(
+                            e,
+                            err_cve(
+                                e,
+                                loc(e),
+                                e.cat(e.s("only an "), ty_desc(e, in_(e, "owned")), e.s(" value can be assigned here")),
+                            ),
+                        ),
+                    ),
+                    e.let("ub", lookup(e, xx(e), _under_of(e, in_(e, "owned")), e.mb.eval_aspect_bind())),
+                    e.if_only(
+                        e.not_(e.fld(e.v("ub"), "is_some")),
+                        ret_m(e, err_cve(e, loc(e), "owned value cannot be stored")),
+                    ),
+                    e.let("us", lookup(e, xx(e), _under_of(e, in_(e, "owned")), e.mb.eval_aspect_set())),
+                    e.if_only(
+                        e.not_(e.fld(e.v("us"), "is_some")),
+                        ret_m(e, err_cve(e, loc(e), "owned value is not assignable")),
+                    ),
+                    e.let("nv", _retag_m(e, a(e, "value"), _under_of(e, in_(e, "owned")), cve_t(e))),
+                    e.let(
+                        "br",
+                        unwrap_m(
+                            e,
+                            bim(
+                                e,
+                                e.mb.eval_aspect_bind(),
+                                "bind",
+                                e.fld(e.v("ub"), "value"),
+                                _rec_xl(e, p("cv", e.v("nv"))),
+                            ),
+                            cve_t(e),
+                        ),
+                    ),
+                    e.let("tmp", _binding_use(e, e.fld(e.v("br"), "binding"), _consumed(e), code_none(e, loc(e)))),
+                    # The place is computed once: its code runs after the new value's, and its value (a place) is
+                    # read by the destroy and written by the store.
+                    e.let("sp", cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "self")))),
+                    e.let("c2", _destroy_m(e, in_(e, "owned"), e.v("sp"), cve_t(e))),
+                    e.let("sv", _retag_m(e, e.v("sp"), _under_of(e, in_(e, "owned")), cve_t(e))),
+                    e.let(
+                        "r",
+                        unwrap_cve_m(
+                            e,
+                            bim(
+                                e,
+                                e.mb.eval_aspect_set(),
+                                "set",
+                                e.fld(e.v("us"), "value"),
+                                _rec_xl(e, p("self", e.v("sv")), p("value", e.v("tmp"))),
+                            ),
+                        ),
+                    ),
+                    e.let("c12", _cat_m(e, e.fld(e.v("br"), "code"), cve_code(e, a(e, "self")), cve_t(e))),
+                    e.let("c123", _cat_m(e, e.v("c12"), e.v("c2"), cve_t(e))),
+                    e.ret(ok_cve(e, cv_no(e, _cat_m(e, e.v("c123"), cve_code(e, e.v("r")), cve_t(e))))),
+                ),
+            ),
+        )
+    )
+    x.append(
+        e.impl_interface(
+            e.v("oborrow"),
+            e.mb.eval_aspect_bind(),
+            p(
+                "bind",
+                e.eresult_err(
+                    e.mb.types_bind_result(),
+                    loc(e),
+                    e.s("a borrowed owned value cannot be bound; take it out of its container"),
+                ),
+            ),
+        )
+    )
+    x.append(
+        e.impl_interface(
+            e.v("oborrow"), e.mb.eval_aspect_drop_dynamic(), p("drop", e.eresult_ok(code_t(e), code_none(e, loc(e))))
+        )
+    )
+
+
+def _derive_fns(e, x):
+    """`destructor.borrow(T)` and `destructor.adopt(T)`: host functions (callable anywhere, like llvm's `ptr`) taking
+    an owned type and yielding its borrow type and its adopting type `own` (the one `destructor.type` returned
+    beside it; any two are the same type when their owned types are), for a container that stores elements as
+    `under` and hands them out as borrows or back as owned values. A caller finds `under` through the exported
+    `owned_m` interface."""
+    fn_def(e, x, TARGET, "c_borrow", ty(e), ty(e))
+    fn_impl(e, x, "c_borrow", body(e, e.ret(mk(e, "oborrow", p("owned", e.v("arg"))))))
+    fn_def(e, x, TARGET, "c_adopt", ty(e), ty(e))
+    fn_impl(e, x, "c_adopt", body(e, e.ret(mk(e, "oadopt", p("owned", e.v("arg"))))))
+
+
 def _octor(e, x):
     """`destructor.type`: a const function taking `{under, destroy}` as its call argument (so `destroy` may be any
-    target function value) and yielding the owned type."""
+    target function value) and yielding `{type, own, wrap}`."""
     const_fn(
         e,
         x,
@@ -927,11 +1226,16 @@ def _octor(e, x):
                 e.not_(cve_has(e, e.v("destroy"))),
                 ret_m(e, err_cve(e, loc(e), "destructor.type: destroy has no value")),
             ),
-            # The owned type is made where the caller runs (its destroy function may be a value of the
-            # caller's runtime), so the construction is staged with the inputs grafted in.
             e.let("owned_new", e.lower(e.fld(e.v("owned"), "new"))),
+            e.let("oadopt_new", e.lower(e.fld(e.v("oadopt"), "new"))),
             e.let("dt", cve_type(e, e.v("destroy"))),
             e.let("has_form", has_b(e, xx(e), e.v("dt"), asp_iface(e, "consume_dynamic"))),
+            e.let("owned_new", e.lower(e.fld(e.v("owned"), "new"))),
+            e.let("oadopt_new", e.lower(e.fld(e.v("oadopt"), "new"))),
+            e.let("dt", cve_type(e, e.v("destroy"))),
+            e.let("has_form", has_b(e, xx(e), e.v("dt"), asp_iface(e, "consume_dynamic"))),
+            # The owned type and its adopting type are made where the caller runs (the inputs may be bindings
+            # there, grafted in).
             e.ret(
                 e.eresult_ok(
                     cve_t(e),
@@ -941,40 +1245,65 @@ def _octor(e, x):
                             e,
                             xx(e),
                             e.stage(
-                                e.mb.as_(
-                                    e.call(
-                                        e.lower(e.v("owned_new")),
-                                        e.rec(
-                                            p("under", graft(e, e.v("undercv"))),
-                                            # The destroy function in the caller's runtime: the empty value of its
-                                            # type when the type has no runtime form, else its type over the target's
-                                            # host object.
-                                            p(
-                                                "destroy",
-                                                e.if_else(
-                                                    e.lower(e.v("has_form")),
-                                                    e.call(
-                                                        e.eval_builtin("value_object_const"),
-                                                        e.rec(
-                                                            p("type", e.lower(e.v("dt"))),
-                                                            p(
-                                                                "data",
+                                e.mb.labeled(
+                                    "__r",
+                                    e.seq(
+                                        e.let(
+                                            "__ot",
+                                            e.mb.as_(
+                                                e.call(
+                                                    e.lower(e.v("owned_new")),
+                                                    e.rec(
+                                                        p("under", graft(e, e.v("undercv"))),
+                                                        # The destroy function in the caller's runtime: the empty
+                                                        # value of its type when the type has no runtime form, else
+                                                        # its type over the target's host object.
+                                                        p(
+                                                            "destroy",
+                                                            e.if_else(
+                                                                e.lower(e.v("has_form")),
                                                                 e.call(
-                                                                    e.mb.must_reinterpret(),
-                                                                    e.tup(
-                                                                        graft(e, e.v("destroy")),
-                                                                        e.mb.builtin("types", "object"),
+                                                                    e.eval_builtin("value_object_const"),
+                                                                    e.rec(
+                                                                        p("type", e.lower(e.v("dt"))),
+                                                                        p(
+                                                                            "data",
+                                                                            e.call(
+                                                                                e.mb.must_reinterpret(),
+                                                                                e.tup(
+                                                                                    graft(e, e.v("destroy")),
+                                                                                    e.mb.builtin("types", "object"),
+                                                                                ),
+                                                                            ),
+                                                                        ),
                                                                     ),
+                                                                ),
+                                                                e.call(
+                                                                    e.eval_builtin("value_empty"), e.lower(e.v("dt"))
                                                                 ),
                                                             ),
                                                         ),
                                                     ),
-                                                    e.call(e.eval_builtin("value_empty"), e.lower(e.v("dt"))),
+                                                ),
+                                                e.mb.eval_type(),
+                                            ),
+                                        ),
+                                        e.mb.return_to(
+                                            "__r",
+                                            e.rec(
+                                                p("type", e.v("__ot")),
+                                                p(
+                                                    "own",
+                                                    e.mb.as_(
+                                                        e.call(
+                                                            e.lower(e.v("oadopt_new")), e.rec(p("owned", e.v("__ot")))
+                                                        ),
+                                                        e.mb.eval_type(),
+                                                    ),
                                                 ),
                                             ),
                                         ),
                                     ),
-                                    e.mb.eval_type(),
                                 )
                             ),
                         ),
@@ -1026,11 +1355,25 @@ def module(e):
     _owned(e, x)
     _obinding_impl(e, x)
     _oref(e, x)
+    _oadopt(e, x)
     _octor(e, x)
+    def_iface(e, x, "oborrow_m", p("owned", ty(e)))
+    def_obj(e, x, "oborrow", "owned borrow", e.rec(p("owned", ty(e))))
+    _oborrow(e, x)
+    _derive_fns(e, x)
     x.append(e.finish(e.v("d")))
-    x.append(e.ret(e.rec(p("type", e.fld(e.v("octor_b"), "func")))))
+    x.append(
+        e.ret(
+            e.rec(
+                p("type", e.fld(e.v("octor_b"), "func")),
+                p("borrow", e.v("c_borrow")),
+                p("adopt", e.v("c_adopt")),
+                p("owned_m", t(e, "owned_m")),
+            )
+        )
+    )
 
     top = []
     top.append(e.let("k", e.lower(e.mb.seq(x))))
-    top.append(e.ret(e.rec(p("type", e.fld(e.v("k"), "type")))))
+    top.append(e.ret(e.rec(*[p(n, e.fld(e.v("k"), n)) for n in ["type", "borrow", "adopt", "owned_m"]])))
     return top

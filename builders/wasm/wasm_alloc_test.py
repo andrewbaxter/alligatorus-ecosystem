@@ -1,6 +1,7 @@
 """wasm-alloc-test.atz: a WASI app exercising wasm-alloc.atz; its exit status is the number of failed checks."""
 
 from .wat import bind_types
+from .. import target_mb as tm
 
 BIG = 200000
 
@@ -23,7 +24,9 @@ def module(e):
             ),
         )
     )
-    exported = ["m", "proc_exit_fn_t", "start_fn_t", "t_i32", "t_u32", "t_pv", "t_pi32"]
+    for name in ["ptr_cast", "ptr_to_int"]:
+        setup.append(e.let(name, e.fld(e.v("wasm"), name)))
+    exported = ["m", "proc_exit_fn_t", "start_fn_t", "t_i32", "t_u32", "t_pv", "t_pi32", "ptr_cast", "ptr_to_int"]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
@@ -56,10 +59,13 @@ def module(e):
         return e.call(lo("malloc"), e.n(n))
 
     def i32(v):
-        return e.mb.as_(v, lo("t_i32"))
+        """A constant as i32, or a pointer's address."""
+        if tm.is_const_expr(v):
+            return e.mb.as_(v, lo("t_i32"))
+        return tm.conv(e, lo("ptr_to_int"), v, lo("t_i32"))
 
     def cell(p, i):
-        return e.mb.field(e.mb.as_(p, lo("t_pi32")), e.n(i))
+        return e.mb.field(tm.conv(e, lo("ptr_cast"), p, lo("t_pi32")), e.n(i))
 
     def check(cond):
         return e.if_only(e.not_(cond), e.mb.set(e.v("fails"), e.mb.operator_add(e.v("fails"), e.n(1))))
@@ -116,7 +122,7 @@ def module(e):
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -127,6 +133,5 @@ def module(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top

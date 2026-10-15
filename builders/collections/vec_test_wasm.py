@@ -1,6 +1,7 @@
 """vec-test-wasm.atz: a WASI app exercising vec-wasm.atz. It prints `ok` through a byte vec and exits with the
 number of failed checks on an i32 vec (push 100, sum, slice checks as in vec-test.atz, pop, length, capacity)."""
 
+from .. import target_mb as tm
 from ..wasm.wat import bind_types
 
 COUNT = 100
@@ -23,7 +24,10 @@ def module(e):
             ),
         )
     )
+    for name in ["ptr_cast", "ptr_to_int"]:
+        setup.append(e.let(name, e.fld(e.v("wasm"), name)))
     exported = ["m", "proc_exit_fn_t", "fd_write_fn_t", "start_fn_t", "t_i32", "t_u32", "t_u8", "t_pv"]
+    exported += ["ptr_cast", "ptr_to_int"]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
@@ -45,22 +49,19 @@ def module(e):
         )
     for vname, elem in [("ints", "t_i32"), ("bytes", "t_u8")]:
         top.append(e.let(vname, e.call(e.fld(e.v("vec"), "type"), e.v(elem))))
-        for f in ["type", "new"]:
+        for f in ["type", "own", "new"]:
             top.append(e.let(vname + "_" + f, e.fld(e.v(vname), f)))
-    top.append(
-        e.let(
-            "iov",
-            e.call(
-                e.fld(e.v("wasm"), "data_fn"),
-                e.rec(
-                    e.p("mod", e.v("m")),
-                    e.p("name", e.s("iov")),
-                    e.p("elem", e.v("t_u32")),
-                    e.p("values", e.tup(e.n(0), e.n(0), e.n(0))),
+    # The iovec (address, length) and the written-count cell fd_write fills, as u32 data blocks.
+    for name, values in [("iov", e.tup(e.n(0), e.n(0))), ("nwritten", e.tup(e.n(0)))]:
+        top.append(
+            e.let(
+                name,
+                e.call(
+                    e.fld(e.v("wasm"), "data_fn"),
+                    e.rec(e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("elem", e.v("t_u32")), e.p("values", values)),
                 ),
-            ),
+            )
         )
-    )
 
     def lo(name):
         return e.lower(e.v(name))
@@ -91,7 +92,7 @@ def module(e):
     body = e.seq(
         e.let("fails", e.mb.as_(e.n(0), lo("t_i32"))),
         e.seq(
-            e.let("v", e.mb.as_(e.call(lo("ints_new"), e.tup()), lo("ints_type"))),
+            e.let("v", e.mb.as_(e.call(lo("ints_new"), e.tup()), lo("ints_own"))),
             counted_loop("fill", COUNT, method("v", "push", e.v("i"))),
             check(e.eq(e.fld(e.v("v"), "len"), e.n(COUNT))),
             check(e.mb.operator_ge(e.fld(e.v("v"), "cap"), e.n(COUNT))),
@@ -143,17 +144,19 @@ def module(e):
                     e.n(-1),
                 )
             ),
-            e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_type"))),
+            e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_own"))),
             *[method("s", "push", e.n(b)) for b in MESSAGE],
-            e.mb.set(e.mb.field(lo("iov"), e.n(0)), e.mb.as_(e.fld(e.v("s"), "data"), lo("t_u32"))),
+            e.mb.set(
+                e.mb.field(lo("iov"), e.n(0)), tm.conv(e, lo("ptr_to_int"), e.fld(e.v("s"), "data"), lo("t_u32"))
+            ),
             e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(e.fld(e.fld(e.v("s"), "len"), "wrap"), lo("t_u32"))),
             e.call(
                 lo("fd_write"),
                 e.tup(
                     e.n(1),
-                    e.mb.as_(lo("iov"), lo("t_u32")),
+                    tm.conv(e, lo("ptr_cast"), lo("iov"), lo("t_pv")),
                     e.n(1),
-                    e.mb.as_(e.mb.field(lo("iov"), e.n(2)), lo("t_u32")),
+                    lo("nwritten"),
                 ),
             ),
         ),
@@ -163,7 +166,7 @@ def module(e):
         e.let(
             "start",
             e.call(
-                e.fld(e.v("wasm"), "func_fn"),
+                e.fld(e.v("wasm"), "export_fn"),
                 e.rec(
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("_start")),
@@ -174,6 +177,5 @@ def module(e):
             ),
         )
     )
-    top.append(e.call_m(e.v("m"), "export", e.s("_start")))
     top.append(e.ret(e.call(e.fld(e.v("wasm"), "build"), e.call_m0(e.v("m"), "render"))))
     return top
