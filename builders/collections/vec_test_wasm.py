@@ -146,7 +146,7 @@ def module(e):
             e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_type"))),
             *[method("s", "push", e.n(b)) for b in MESSAGE],
             e.mb.set(e.mb.field(lo("iov"), e.n(0)), e.mb.as_(e.fld(e.v("s"), "data"), lo("t_u32"))),
-            e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.mb.as_(e.fld(e.v("s"), "len"), lo("t_u32"))),
+            e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(e.fld(e.fld(e.v("s"), "len"), "wrap"), lo("t_u32"))),
             e.call(
                 lo("fd_write"),
                 e.tup(
@@ -157,7 +157,7 @@ def module(e):
                 ),
             ),
         ),
-        e.call(lo("proc_exit"), e.mb.as_(e.v("fails"), lo("t_u32"))),
+        e.call(lo("proc_exit"), e.call(e.fld(e.v("fails"), "wrap"), lo("t_u32"))),
     )
     top.append(
         e.let(

@@ -77,7 +77,8 @@ def _f64p(e, addr):
 
 
 def _i32(e, v):
-    return e.mb.as_(v, e.lower(e.v("t_i32")))
+    """An f64 value truncated to i32."""
+    return e.call(e.fld(v, "trunc"), e.lower(e.v("t_i32")))
 
 
 def _f64(e, v):
@@ -255,7 +256,7 @@ def module(e):
     redraw_body = e.stage(
         e.seq(
             _host(e, "canvas_clear"),
-            e.let("i", _i32(e, e.n(0))),
+            e.let("i", e.mb.as_(e.n(0), e.lower(e.v("t_i32")))),
             e.let("px", _f64(e, e.n(0))),
             e.let("py", _f64(e, e.n(0))),
             e.let("buf", _cell(e, CELL_BUF)),

@@ -78,6 +78,7 @@ from ..target_mb import (
     rt_lift_impl,
     rt_use_impl,
     self_type,
+    src_bits,
     src_type,
     str_,
     structural_exits,
@@ -201,6 +202,127 @@ def _initial_bind_impl(e, x, obj):
     )
 
 
+def _conv_methods(e, x):
+    """Lossy numeric conversions as methods on int and float values (`as` only converts losslessly): `wrap(T)` wraps an
+    integer into the integer type `T` (two's complement: narrowing, extension by the source's signedness, or a
+    reinterpretation at the same width); `trunc(T)` truncates a float toward zero into the integer type `T` (trapping
+    when out of range); `to_float(T)` rounds an integer or a float to the float type `T`."""
+    tm.method_type(e, x, "wconv", "wasm conversion")
+    to = e.v("to")
+    v = e.v("v")
+    st = e.v("st")
+
+    def when(cond, result):
+        return e.if_only(cond, ret_m(e, result))
+
+    def conv_via(op_, signed):
+        return hf_rec(
+            e, "h_conv", e.p("mod", _xmod(e)), e.p("op", _conv_name(e, to, op_, st, signed)), e.p("a", v), e.p("to", to)
+        )
+
+    x.append(
+        e.impl_interface(
+            e.v("wconv"),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    *tm.const_type_arg(e, "wasm conversion", a(e, "argument"), "to"),
+                    e.let(
+                        "v",
+                        unwrap_cve_m(
+                            e,
+                            try_er(
+                                e,
+                                _ssa(
+                                    e,
+                                    xx(e),
+                                    loc(e),
+                                    _xmod(e),
+                                    cv_of(e, cve_code(e, a(e, "self")), cve_value(e, in_(e, "self"))),
+                                ),
+                                cve_t(e),
+                            ),
+                        ),
+                    ),
+                    e.let("st", cve_type(e, v)),
+                    when(
+                        and_b(
+                            e,
+                            e.eq(in_(e, "op"), e.s("wrap")),
+                            and_b(e, has(e, xx(e), st, "wint"), has(e, xx(e), to, "wint")),
+                        ),
+                        e.if_else(
+                            e.eq(_wide(e, xx(e), st), _wide(e, xx(e), to)),
+                            e.if_else(
+                                e.mb.operator_lt(acc(e, xx(e), to, "wint", "bits"), cv_bits(e, st, "wint")),
+                                _narrow(e, v, to),
+                                _retag(e, v, to),
+                            ),
+                            e.if_else(
+                                _wide(e, xx(e), st),
+                                _narrow(e, conv_via("wrap", None), to),
+                                _conv(e, _conv_name(e, to, "extend", st, acc(e, xx(e), st, "wint", "signed")), v, to),
+                            ),
+                        ),
+                    ),
+                    when(
+                        and_b(
+                            e,
+                            e.eq(in_(e, "op"), e.s("trunc")),
+                            and_b(e, has(e, xx(e), st, "wfloat"), has(e, xx(e), to, "wint")),
+                        ),
+                        _narrow(e, conv_via("trunc", acc(e, xx(e), to, "wint", "signed")), to),
+                    ),
+                    when(
+                        and_b(
+                            e,
+                            e.eq(in_(e, "op"), e.s("to_float")),
+                            and_b(e, has(e, xx(e), st, "wint"), has(e, xx(e), to, "wfloat")),
+                        ),
+                        _conv(e, _conv_name(e, to, "convert", st, acc(e, xx(e), st, "wint", "signed")), v, to),
+                    ),
+                    e.if_only(
+                        and_b(
+                            e,
+                            e.eq(in_(e, "op"), e.s("to_float")),
+                            and_b(e, has(e, xx(e), st, "wfloat"), has(e, xx(e), to, "wfloat")),
+                        ),
+                        e.seq(
+                            e.let("sb", cv_bits(e, st, "wfloat")),
+                            e.let("tb", acc(e, xx(e), to, "wfloat", "bits")),
+                            when(e.eq(e.v("sb"), e.v("tb")), _retag(e, v, to)),
+                            when(
+                                e.mb.operator_gt(e.v("sb"), e.v("tb")),
+                                _conv(e, _conv_name(e, to, "demote", st, None), v, to),
+                            ),
+                            ret_m(e, _conv(e, _conv_name(e, to, "promote", st, None), v, to)),
+                        ),
+                    ),
+                    e.ret(
+                        err_cve(
+                            e,
+                            loc(e),
+                            e.cat(
+                                e.s("wasm: no conversion "),
+                                in_(e, "op"),
+                                e.s(" from "),
+                                ty_desc(e, st),
+                                e.s(" to "),
+                                ty_desc(e, to),
+                            ),
+                        )
+                    ),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+    tm.method_fields(e, x, "wt_int", "wconv", ["wrap", "to_float"])
+    tm.method_fields(e, x, "wt_float", "wconv", ["trunc", "to_float"])
+
+
 def _value_aspects(e, x, obj, size_expr, hash_stage):
     """Implements values.atz's `size_i`, `eq_i` and (when `hash_stage` is given) `hash_i` for a type object: eq
     stages the type's own `==`; hash stages a 32-bit hash of the value `cv`."""
@@ -225,7 +347,7 @@ def _int_hash_body(e):
         e.if_else(
             e.eq(in_(e, "bits"), num(e, 64)),
             e.ret(_sip_hash(e, lambda x: x, e.p("size", e.int_of(16)))),
-            e.ret(_sip_hash(e, lambda x: e.mb.as_(x, e.lower(e.v("sh_i64"))), e.p("size", e.int_of(16)))),
+            e.ret(_sip_hash(e, lambda x: e.call(e.fld(x, "wrap"), e.lower(e.v("sh_i64"))), e.p("size", e.int_of(16)))),
         ),
     )
 
@@ -239,7 +361,7 @@ def _ptr_hash_body(e):
         e.ret(
             _sip_hash(
                 e,
-                lambda x: e.mb.as_(e.mb.as_(x, e.lower(e.v("sh_i32"))), e.lower(e.v("sh_i64"))),
+                lambda x: e.call(e.fld(e.mb.as_(x, e.lower(e.v("sh_i32"))), "wrap"), e.lower(e.v("sh_i64"))),
                 e.p("size", e.int_of(16)),
             )
         ),
@@ -312,7 +434,10 @@ def _siphash_body(e):
             *_sip_round(e),
             *_sip_round(e),
             e.mb.return_to(
-                "fn", e.mb.as_(xor(xor(e.v("v0"), e.v("v1")), xor(e.v("v2"), e.v("v3"))), e.lower(e.v("sh_i32")))
+                "fn",
+                e.call(
+                    e.fld(xor(xor(e.v("v0"), e.v("v1")), xor(e.v("v2"), e.v("v3"))), "wrap"), e.lower(e.v("sh_i32"))
+                ),
             ),
         ),
     )
@@ -5057,6 +5182,7 @@ def module(e):
             op_id(e, "bit_not"),
             asp_id(e, "bind"),
             asp_id(e, "set"),
+            asp_id(e, "field"),
         ),
         body(
             e,
@@ -5069,12 +5195,16 @@ def module(e):
                         is_const(e, xx(e), src_type(e)),
                         or_b(
                             e,
-                            has(e, xx(e), src_type(e), "wint"),
-                            or_b(
+                            and_b(
                                 e,
-                                has(e, xx(e), src_type(e), "wfloat"),
-                                and_b(e, has(e, xx(e), src_type(e), "wptr"), e.eq(in_(e, "bits"), num(e, 32))),
+                                has(e, xx(e), src_type(e), "wint"),
+                                and_b(
+                                    e,
+                                    e.mb.operator_ge(acc(e, xx(e), src_type(e), "wint", "min"), in_(e, "min")),
+                                    e.mb.operator_le(acc(e, xx(e), src_type(e), "wint", "max"), in_(e, "max")),
+                                ),
                             ),
+                            and_b(e, has(e, xx(e), src_type(e), "wptr"), e.eq(in_(e, "bits"), num(e, 32))),
                         ),
                     ),
                 )
@@ -5082,17 +5212,17 @@ def module(e):
         ),
         body(
             e,
-            e.let("st0", cve_type(e, a(e, "cv"))),
-            e.if_only(is_equal(e, xx(e), outer(e), e.v("st0")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.let("st", cve_type(e, a(e, "cv"))),
+            e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
             e.if_only(
-                has(e, xx(e), e.v("st0"), "wptr"),
+                has(e, xx(e), e.v("st"), "wptr"),
                 e.seq(
                     e.let(
                         "pty",
                         e.if_else(
-                            has(e, xx(e), e.v("st0"), "wgtype_m"),
-                            acc(e, xx(e), e.v("st0"), "wgtype_m", "base"),
-                            e.v("st0"),
+                            has(e, xx(e), e.v("st"), "wgtype_m"),
+                            acc(e, xx(e), e.v("st"), "wgtype_m", "base"),
+                            e.v("st"),
                         ),
                     ),
                     e.let(
@@ -5106,7 +5236,7 @@ def module(e):
                 ),
             ),
             e.if_only(
-                is_const(e, xx(e), e.v("st0")),
+                is_const(e, xx(e), e.v("st")),
                 e.seq(
                     e.let(
                         "d",
@@ -5129,64 +5259,27 @@ def module(e):
                     ),
                 ),
             ),
-            e.let("v", unwrap_cve_m(e, try_er(e, _ssa(e, xx(e), loc(e), _xmod(e), a(e, "cv")), cve_t(e)))),
-            e.let("st", cve_type(e, e.v("v"))),
             e.if_only(
-                has(e, xx(e), e.v("st"), "wint"),
-                ret_m(
-                    e,
-                    e.if_else(
-                        e.eq(_wide(e, xx(e), e.v("st")), _wide(e, xx(e), outer(e))),
-                        e.if_else(
-                            e.mb.operator_lt(in_(e, "bits"), cv_bits(e, e.v("st"), "wint")),
-                            _narrow(e, e.v("v"), outer(e)),
-                            _retag(e, e.v("v"), outer(e)),
-                        ),
-                        e.if_else(
-                            _wide(e, xx(e), e.v("st")),
-                            _narrow(
-                                e,
-                                hf_rec(
-                                    e,
-                                    "h_conv",
-                                    e.p("mod", _xmod(e)),
-                                    e.p("op", _conv_name(e, outer(e), "wrap", e.v("st"), None)),
-                                    e.p("a", e.v("v")),
-                                    e.p("to", outer(e)),
-                                ),
-                                outer(e),
-                            ),
-                            _conv(
-                                e,
-                                _conv_name(
-                                    e, outer(e), "extend", e.v("st"), acc(e, xx(e), e.v("st"), "wint", "signed")
-                                ),
-                                e.v("v"),
-                                outer(e),
-                            ),
-                        ),
-                    ),
-                ),
+                e.eq(_wide(e, xx(e), e.v("st")), _wide(e, xx(e), outer(e))), ret_m(e, _retag(e, a(e, "cv"), outer(e)))
             ),
-            e.if_only(
-                has(e, xx(e), e.v("st"), "wfloat"),
-                ret_m(
+            e.ret(
+                _conv(
                     e,
-                    _narrow(
+                    _conv_name(
                         e,
-                        hf_rec(
-                            e,
-                            "h_conv",
-                            e.p("mod", _xmod(e)),
-                            e.p("op", _conv_name(e, outer(e), "trunc", e.v("st"), in_(e, "signed"))),
-                            e.p("a", e.v("v")),
-                            e.p("to", outer(e)),
-                        ),
                         outer(e),
+                        "extend",
+                        e.v("st"),
+                        e.if_else(
+                            e.eq(cv_bits(e, e.v("st"), "wint"), num(e, 1)),
+                            dfalse(e),
+                            acc(e, xx(e), e.v("st"), "wint", "signed"),
+                        ),
                     ),
-                ),
+                    a(e, "cv"),
+                    outer(e),
+                )
             ),
-            e.ret(err_cve(e, loc(e), "cannot convert to integer")),
         ),
         no_cast_to(e),
         cast_to_panic(e),
@@ -5334,6 +5427,7 @@ def module(e):
             op_id(e, "neg"),
             asp_id(e, "bind"),
             asp_id(e, "set"),
+            asp_id(e, "field"),
         ),
         body(
             e,
@@ -5344,17 +5438,47 @@ def module(e):
                     or_b(
                         e,
                         is_const(e, xx(e), src_type(e)),
-                        or_b(e, has(e, xx(e), src_type(e), "wfloat"), has(e, xx(e), src_type(e), "wint")),
+                        or_b(
+                            e,
+                            and_b(
+                                e,
+                                has(e, xx(e), src_type(e), "wfloat"),
+                                e.mb.operator_lt(src_bits(e, "wfloat"), in_(e, "bits")),
+                            ),
+                            and_b(
+                                e,
+                                has(e, xx(e), src_type(e), "wint"),
+                                and_b(
+                                    e,
+                                    e.mb.operator_ge(
+                                        acc(e, xx(e), src_type(e), "wint", "min"),
+                                        e.if_else(
+                                            e.eq(in_(e, "bits"), num(e, 64)),
+                                            e.mb.as_(num(e, -9007199254740992.0), e.types_double()),
+                                            e.mb.as_(num(e, -16777216.0), e.types_double()),
+                                        ),
+                                    ),
+                                    e.mb.operator_le(
+                                        acc(e, xx(e), src_type(e), "wint", "max"),
+                                        e.if_else(
+                                            e.eq(in_(e, "bits"), num(e, 64)),
+                                            e.mb.as_(num(e, 9007199254740992.0), e.types_double()),
+                                            e.mb.as_(num(e, 16777216.0), e.types_double()),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
                     ),
                 )
             ),
         ),
         body(
             e,
-            e.let("st0", cve_type(e, a(e, "cv"))),
-            e.if_only(is_equal(e, xx(e), outer(e), e.v("st0")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.let("st", cve_type(e, a(e, "cv"))),
+            e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
             e.if_only(
-                is_const(e, xx(e), e.v("st0")),
+                is_const(e, xx(e), e.v("st")),
                 e.seq(
                     e.let(
                         "d",
@@ -5374,8 +5498,6 @@ def module(e):
                     ret_m(e, ok_cve(e, cv_of(e, cve_code(e, a(e, "cv")), _wval_konst(e, outer(e), e.v("s"))))),
                 ),
             ),
-            e.let("v", unwrap_cve_m(e, try_er(e, _ssa(e, xx(e), loc(e), _xmod(e), a(e, "cv")), cve_t(e)))),
-            e.let("st", cve_type(e, e.v("v"))),
             e.if_only(
                 has(e, xx(e), e.v("st"), "wint"),
                 ret_m(
@@ -5383,30 +5505,12 @@ def module(e):
                     _conv(
                         e,
                         _conv_name(e, outer(e), "convert", e.v("st"), acc(e, xx(e), e.v("st"), "wint", "signed")),
-                        e.v("v"),
+                        a(e, "cv"),
                         outer(e),
                     ),
                 ),
             ),
-            e.if_only(
-                has(e, xx(e), e.v("st"), "wfloat"),
-                e.seq(
-                    e.let("sb", cv_bits(e, e.v("st"), "wfloat")),
-                    ret_m(
-                        e,
-                        e.if_else(
-                            e.eq(e.v("sb"), in_(e, "bits")),
-                            _retag(e, e.v("v"), outer(e)),
-                            e.if_else(
-                                e.mb.operator_gt(e.v("sb"), in_(e, "bits")),
-                                _conv(e, _conv_name(e, outer(e), "demote", e.v("st"), None), e.v("v"), outer(e)),
-                                _conv(e, _conv_name(e, outer(e), "promote", e.v("st"), None), e.v("v"), outer(e)),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-            e.ret(err_cve(e, loc(e), "cannot convert to float")),
+            e.ret(_conv(e, _conv_name(e, outer(e), "promote", e.v("st"), None), a(e, "cv"), outer(e))),
         ),
         no_cast_to(e),
         cast_to_panic(e),
@@ -5421,6 +5525,7 @@ def module(e):
             ),
         ),
     )
+    _conv_methods(e, x)
     x.append(
         e.impl_interface(
             e.v("wt_float"),

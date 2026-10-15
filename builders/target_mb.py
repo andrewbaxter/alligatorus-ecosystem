@@ -913,3 +913,122 @@ def ident_of(e, s):
             ),
         ),
     )
+
+
+def const_type_arg(e, label, cv, bind):
+    """Binds `bind` to the constant type the code-value `cv` holds, else errors out of the const function."""
+    return [
+        e.let(bind + "_tk", lookup(e, xx(e), cve_type(e, cv), asp_iface(e, "type"))),
+        e.if_only(
+            or_b(e, is_runtime(e, cv), e.not_(e.fld(e.v(bind + "_tk"), "is_some"))),
+            ret_m(e, err_cve(e, loc(e), label + ": " + bind + " must be a constant type")),
+        ),
+        e.let(bind, bim(e, asp_iface(e, "type"), "type", e.fld(e.v(bind + "_tk"), "value"), cve_value(e, cv))),
+    ]
+
+
+def method_fields(e, x, obj, meth_obj, methods):
+    """`field` on `obj` values: each name in `methods` yields a bound method, a value of the callable type `meth_obj`
+    (fields `op`, the name, and `self`, the receiver) whose call runs the operation."""
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            asp_iface(e, "field"),
+            p(
+                "field",
+                body(
+                    e,
+                    e.let("sk", lookup(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const())),
+                    e.if_only(
+                        e.not_(e.fld(e.v("sk"), "is_some")),
+                        ret_m(e, err_cve(e, loc(e), "the field name must be a constant string")),
+                    ),
+                    e.let(
+                        "key",
+                        bim(
+                            e,
+                            e.mb.eval_aspect_string_const(),
+                            "get",
+                            e.fld(e.v("sk"), "value"),
+                            cve_value(e, a(e, "key")),
+                        ),
+                    ),
+                    *[
+                        e.if_only(
+                            e.eq(e.v("key"), e.s(m)),
+                            ret_m(
+                                e,
+                                ok_cve(
+                                    e,
+                                    cv_of(
+                                        e,
+                                        cve_code(e, a(e, "self")),
+                                        e.call(
+                                            e.eval_builtin("value_object_const"),
+                                            e.rec(
+                                                p(
+                                                    "type",
+                                                    mk(
+                                                        e,
+                                                        meth_obj,
+                                                        p("op", e.s(m)),
+                                                        p(
+                                                            "self",
+                                                            cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "self"))),
+                                                        ),
+                                                    ),
+                                                ),
+                                                p("data", e.tup()),
+                                            ),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        )
+                        for m in methods
+                    ],
+                    e.ret(err_cve(e, loc(e), e.cat(e.s("no field "), e.v("key")))),
+                ),
+            ),
+            p("type_opt", e.option_type_lowered_none()),
+            p("keys", e.list_new(e.mb.types_constkey(), *[e.mb.as_(e.s(k), e.mb.types_constkey()) for k in methods])),
+        )
+    )
+
+
+def method_type(e, x, obj, desc):
+    """A bound method's type: `{op, self}`, callable (its `function` aspect is implemented by the caller)."""
+    def_obj(e, x, obj, desc, e.rec(p("op", str_(e)), p("self", cve_t(e))))
+    no = e.mb.as_(e.b(False), bool_t(e))
+    self_type(
+        e,
+        x,
+        obj,
+        e.cat(e.s(desc + " "), in_(e, "op")),
+        e.aspect_dispatch(asp_id(e, "function")),
+        no,
+        cast_to_panic(e),
+        no,
+        cast_to_panic(e),
+        no,
+    )
+
+
+def is_const_expr(expr):
+    """Whether the staged expression `expr` is a constant: a literal, a lowered value, or arithmetic over those."""
+    ((kind, v),) = expr["variant"].items()
+    if kind in ("literal", "lower"):
+        return True
+    if kind == "operator_binary":
+        return is_const_expr(v["base"]) and is_const_expr(v["reference"])
+    if kind == "operator_unary":
+        return is_const_expr(v["base"])
+    return False
+
+
+def int_as(e, n, type_):
+    """The integer expression `n` as the integer type `type_`: a constant casts (range-checked by the target), a
+    runtime value wraps (`wrap`)."""
+    if is_const_expr(n):
+        return e.mb.as_(n, type_)
+    return e.call(e.fld(n, "wrap"), type_)

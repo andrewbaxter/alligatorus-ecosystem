@@ -4,7 +4,7 @@ import math
 
 from ..pipewire import pipewire
 from ..root_mode import root_mode_finish
-from ..target_mb import fn_of
+from ..target_mb import fn_of, int_as
 
 TWO_PI = 2.0 * math.pi
 AMP = 0.2
@@ -268,21 +268,32 @@ def module(e, mode):
                             e.let("req", e.fld(e.v("buf"), "requested")),
                             e.let(
                                 "n0",
-                                e.if_else(e.eq(e.v("req"), e.n(0)), e.v("maxframes"), _conv(e, "t_u32", e.v("req"))),
+                                e.if_else(
+                                    e.eq(e.v("req"), e.n(0)),
+                                    e.v("maxframes"),
+                                    int_as(e, e.v("req"), e.lower(_ty(e, _refs_top(e), "t_u32"))),
+                                ),
                             ),
                             e.let(
                                 "n",
                                 e.if_else(e.mb.operator_gt(e.v("n0"), e.v("maxframes")), e.v("maxframes"), e.v("n0")),
                             ),
                             e.foreach(
-                                e.call(fn_of(e, _lo(e, "range_u32")), e.v("n")),
+                                e.call(
+                                    fn_of(e, _lo(e, "range_u32")),
+                                    e.call(e.fld(e.v("n"), "wrap"), e.lower(_ty(e, _refs_top(e), "t_u32"))),
+                                ),
                                 "i",
                                 e.seq(
                                     e.let(
                                         "sv",
                                         e.mb.operator_mul(_call_fn(e, "sin", _lo(e, "g_phase")), _lo(e, "g_gate")),
                                     ),
-                                    _set(e, e.mb.field(e.v("out"), e.v("i")), _conv(e, "t_f32", e.v("sv"))),
+                                    _set(
+                                        e,
+                                        e.mb.field(e.v("out"), e.v("i")),
+                                        e.call(e.fld(e.v("sv"), "to_float"), e.lower(_ty(e, _refs_top(e), "t_f32"))),
+                                    ),
                                     _set(e, _lo(e, "g_phase"), e.mb.operator_add(_lo(e, "g_phase"), _lo(e, "g_inc"))),
                                     e.if_only(
                                         e.mb.operator_gt(_lo(e, "g_phase"), e.n(TWO_PI)),

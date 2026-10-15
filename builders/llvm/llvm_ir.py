@@ -84,6 +84,7 @@ from ..target_mb import (
     rt_lift_impl,
     rt_use_impl,
     self_type,
+    src_bits,
     src_type,
     str_,
     str_cve,
@@ -422,6 +423,125 @@ def _initial_bind_impl(e, x, obj):
     )
 
 
+def _conv_methods(e, x):
+    """Lossy numeric conversions as methods on int and float values (`as` only converts losslessly): `wrap(T)` wraps an
+    integer into the integer type `T` (two's complement: truncation, extension by the source's signedness, or a
+    reinterpretation at the same width); `trunc(T)` truncates a float toward zero into the integer type `T`;
+    `to_float(T)` rounds an integer or a float to the float type `T`."""
+    target_mb.method_type(e, x, "lconv", "llvm conversion")
+    to = e.v("to")
+    v = e.v("v")
+    st = e.v("st")
+
+    def when(cond, result):
+        return e.if_only(cond, ret_m(e, result))
+
+    x.append(
+        e.impl_interface(
+            e.v("lconv"),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    *target_mb.const_type_arg(e, "llvm conversion", a(e, "argument"), "to"),
+                    e.let(
+                        "v",
+                        unwrap_cve_m(
+                            e,
+                            try_er(
+                                e,
+                                _ssa(
+                                    e,
+                                    xx(e),
+                                    loc(e),
+                                    _xmod(e),
+                                    cv_of(e, cve_code(e, a(e, "self")), cve_value(e, in_(e, "self"))),
+                                ),
+                                cve_t(e),
+                            ),
+                        ),
+                    ),
+                    e.let("st", cve_type(e, v)),
+                    e.if_only(
+                        and_b(
+                            e,
+                            e.eq(in_(e, "op"), e.s("wrap")),
+                            and_b(e, has(e, xx(e), st, "lint"), has(e, xx(e), to, "lint")),
+                        ),
+                        e.seq(
+                            e.let("sb", cv_bits(e, st, "lint")),
+                            e.let("tb", acc(e, xx(e), to, "lint", "bits")),
+                            when(e.eq(e.v("sb"), e.v("tb")), _retag(e, v, to)),
+                            when(e.mb.operator_gt(e.v("sb"), e.v("tb")), _conv(e, e.s("trunc"), v, to)),
+                            ret_m(
+                                e,
+                                _conv(
+                                    e,
+                                    e.if_else(acc(e, xx(e), st, "lint", "signed"), e.dstr("sext"), e.dstr("zext")),
+                                    v,
+                                    to,
+                                ),
+                            ),
+                        ),
+                    ),
+                    when(
+                        and_b(
+                            e,
+                            e.eq(in_(e, "op"), e.s("trunc")),
+                            and_b(e, has(e, xx(e), st, "lfloat"), has(e, xx(e), to, "lint")),
+                        ),
+                        _conv(
+                            e, e.if_else(acc(e, xx(e), to, "lint", "signed"), e.dstr("fptosi"), e.dstr("fptoui")), v, to
+                        ),
+                    ),
+                    when(
+                        and_b(
+                            e,
+                            e.eq(in_(e, "op"), e.s("to_float")),
+                            and_b(e, has(e, xx(e), st, "lint"), has(e, xx(e), to, "lfloat")),
+                        ),
+                        _conv(
+                            e, e.if_else(acc(e, xx(e), st, "lint", "signed"), e.dstr("sitofp"), e.dstr("uitofp")), v, to
+                        ),
+                    ),
+                    e.if_only(
+                        and_b(
+                            e,
+                            e.eq(in_(e, "op"), e.s("to_float")),
+                            and_b(e, has(e, xx(e), st, "lfloat"), has(e, xx(e), to, "lfloat")),
+                        ),
+                        e.seq(
+                            e.let("sb", cv_bits(e, st, "lfloat")),
+                            e.let("tb", acc(e, xx(e), to, "lfloat", "bits")),
+                            when(e.eq(e.v("sb"), e.v("tb")), _retag(e, v, to)),
+                            when(e.mb.operator_gt(e.v("sb"), e.v("tb")), _conv(e, e.s("fptrunc"), v, to)),
+                            ret_m(e, _conv(e, e.s("fpext"), v, to)),
+                        ),
+                    ),
+                    e.ret(
+                        err_cve(
+                            e,
+                            loc(e),
+                            e.cat(
+                                e.s("llvm: no conversion "),
+                                in_(e, "op"),
+                                e.s(" from "),
+                                ty_desc(e, st),
+                                e.s(" to "),
+                                ty_desc(e, to),
+                            ),
+                        )
+                    ),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+    target_mb.method_fields(e, x, "lt_int", "lconv", ["wrap", "to_float"])
+    target_mb.method_fields(e, x, "lt_float", "lconv", ["trunc", "to_float"])
+
+
 def _value_aspects(e, x, obj, size_expr, hash_stage):
     """Implements values.atz's `size_i`, `eq_i` and (when `hash_stage` is given) `hash_i` for a type object: eq
     stages the type's own `==`; hash stages a 32-bit hash of the value `cv`."""
@@ -453,7 +573,7 @@ def _int_hash_body(e):
             e.ret(
                 _sip_hash(
                     e,
-                    lambda x: e.mb.as_(x, e.lower(e.v("sh_i64"))),
+                    lambda x: e.call(e.fld(x, "wrap"), e.lower(e.v("sh_i64"))),
                     e.p("ty", mk(e, "lt_arr", e.p("elem", e.v("sh_i64")), e.p("count", e.int_of(2)))),
                 )
             ),
@@ -470,7 +590,7 @@ def _ptr_hash_body(e):
         e.ret(
             _sip_hash(
                 e,
-                lambda x: e.mb.as_(x, e.lower(e.v("sh_i64"))),
+                lambda x: e.call(e.fld(x, "wrap"), e.lower(e.v("sh_i64"))),
                 e.p("ty", mk(e, "lt_arr", e.p("elem", e.v("sh_i64")), e.p("count", e.int_of(2)))),
             )
         ),
@@ -543,7 +663,10 @@ def _siphash_body(e):
             *_sip_round(e),
             *_sip_round(e),
             e.mb.return_to(
-                "fn", e.mb.as_(xor(xor(e.v("v0"), e.v("v1")), xor(e.v("v2"), e.v("v3"))), e.lower(e.v("sh_i32")))
+                "fn",
+                e.call(
+                    e.fld(xor(xor(e.v("v0"), e.v("v1")), xor(e.v("v2"), e.v("v3"))), "wrap"), e.lower(e.v("sh_i32"))
+                ),
             ),
         ),
     )
@@ -4697,6 +4820,7 @@ def module(e):
             op_id(e, "bit_not"),
             asp_id(e, "bind"),
             asp_id(e, "set"),
+            asp_id(e, "field"),
         ),
         body(
             e,
@@ -4709,8 +4833,16 @@ def module(e):
                         is_const(e, xx(e), src_type(e)),
                         or_b(
                             e,
-                            has(e, xx(e), src_type(e), "lint"),
-                            or_b(e, has(e, xx(e), src_type(e), "lfloat"), has(e, xx(e), src_type(e), "lptr")),
+                            and_b(
+                                e,
+                                has(e, xx(e), src_type(e), "lint"),
+                                and_b(
+                                    e,
+                                    e.mb.operator_ge(acc(e, xx(e), src_type(e), "lint", "min"), in_(e, "min")),
+                                    e.mb.operator_le(acc(e, xx(e), src_type(e), "lint", "max"), in_(e, "max")),
+                                ),
+                            ),
+                            and_b(e, has(e, xx(e), src_type(e), "lptr"), e.eq(in_(e, "bits"), num(e, 64))),
                         ),
                     ),
                 )
@@ -4718,10 +4850,11 @@ def module(e):
         ),
         body(
             e,
-            e.let("st0", cve_type(e, a(e, "cv"))),
-            e.if_only(is_equal(e, xx(e), outer(e), e.v("st0")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.let("st", cve_type(e, a(e, "cv"))),
+            e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.if_only(has(e, xx(e), e.v("st"), "lptr"), ret_m(e, _conv(e, e.s("ptrtoint"), a(e, "cv"), outer(e)))),
             e.if_only(
-                is_const(e, xx(e), e.v("st0")),
+                is_const(e, xx(e), e.v("st")),
                 e.seq(
                     e.let(
                         "d",
@@ -4742,36 +4875,16 @@ def module(e):
                     ret_m(e, ok_cve(e, cv_of(e, cve_code(e, a(e, "cv")), _lval_new(e, outer(e), to_str(e, e.v("l")))))),
                 ),
             ),
-            e.let("v", unwrap_cve_m(e, try_er(e, _ssa(e, xx(e), loc(e), _xmod(e), a(e, "cv")), cve_t(e)))),
-            e.let("st", cve_type(e, e.v("v"))),
-            e.if_only(
-                has(e, xx(e), e.v("st"), "lint"),
-                e.seq(
-                    e.let("sb", cv_bits(e, e.v("st"), "lint")),
-                    ret_m(
-                        e,
-                        e.if_else(
-                            e.eq(e.v("sb"), in_(e, "bits")),
-                            _retag(e, e.v("v"), outer(e)),
-                            e.if_else(
-                                e.mb.operator_gt(e.v("sb"), in_(e, "bits")),
-                                _conv(e, e.s("trunc"), e.v("v"), outer(e)),
-                                _conv(
-                                    e,
-                                    e.if_else(
-                                        acc(e, xx(e), e.v("st"), "lint", "signed"), e.dstr("sext"), e.dstr("zext")
-                                    ),
-                                    e.v("v"),
-                                    outer(e),
-                                ),
-                            ),
-                        ),
-                    ),
+            e.let("sb", cv_bits(e, e.v("st"), "lint")),
+            e.let(
+                "op",
+                e.if_else(
+                    e.eq(e.v("sb"), num(e, 1)),
+                    e.dstr("zext"),
+                    e.if_else(acc(e, xx(e), e.v("st"), "lint", "signed"), e.dstr("sext"), e.dstr("zext")),
                 ),
             ),
-            _when_st(e, "lfloat", _conv(e, _signed_op(e, "fptosi", "fptoui"), e.v("v"), outer(e))),
-            _when_st(e, "lptr", _conv(e, e.s("ptrtoint"), e.v("v"), outer(e))),
-            e.ret(err_cve(e, loc(e), "cannot convert to integer")),
+            e.ret(_conv(e, e.v("op"), a(e, "cv"), outer(e))),
         ),
         no_cast_to(e),
         cast_to_panic(e),
@@ -4916,6 +5029,7 @@ def module(e):
             op_id(e, "neg"),
             asp_id(e, "bind"),
             asp_id(e, "set"),
+            asp_id(e, "field"),
         ),
         body(
             e,
@@ -4926,17 +5040,47 @@ def module(e):
                     or_b(
                         e,
                         is_const(e, xx(e), src_type(e)),
-                        or_b(e, has(e, xx(e), src_type(e), "lfloat"), has(e, xx(e), src_type(e), "lint")),
+                        or_b(
+                            e,
+                            and_b(
+                                e,
+                                has(e, xx(e), src_type(e), "lfloat"),
+                                e.mb.operator_lt(src_bits(e, "lfloat"), in_(e, "bits")),
+                            ),
+                            and_b(
+                                e,
+                                has(e, xx(e), src_type(e), "lint"),
+                                and_b(
+                                    e,
+                                    e.mb.operator_ge(
+                                        acc(e, xx(e), src_type(e), "lint", "min"),
+                                        e.if_else(
+                                            e.eq(in_(e, "bits"), num(e, 64)),
+                                            e.mb.as_(num(e, -9007199254740992.0), e.types_double()),
+                                            e.mb.as_(num(e, -16777216.0), e.types_double()),
+                                        ),
+                                    ),
+                                    e.mb.operator_le(
+                                        acc(e, xx(e), src_type(e), "lint", "max"),
+                                        e.if_else(
+                                            e.eq(in_(e, "bits"), num(e, 64)),
+                                            e.mb.as_(num(e, 9007199254740992.0), e.types_double()),
+                                            e.mb.as_(num(e, 16777216.0), e.types_double()),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
                     ),
                 )
             ),
         ),
         body(
             e,
-            e.let("st0", cve_type(e, a(e, "cv"))),
-            e.if_only(is_equal(e, xx(e), outer(e), e.v("st0")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.let("st", cve_type(e, a(e, "cv"))),
+            e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
             e.if_only(
-                is_const(e, xx(e), e.v("st0")),
+                is_const(e, xx(e), e.v("st")),
                 e.seq(
                     e.let(
                         "d",
@@ -4956,37 +5100,19 @@ def module(e):
                     ret_m(e, ok_cve(e, cv_of(e, cve_code(e, a(e, "cv")), _lval_new(e, outer(e), e.v("s"))))),
                 ),
             ),
-            e.let("v", unwrap_cve_m(e, try_er(e, _ssa(e, xx(e), loc(e), _xmod(e), a(e, "cv")), cve_t(e)))),
-            e.let("st", cve_type(e, e.v("v"))),
-            _when_st(
-                e,
-                "lint",
-                _conv(
-                    e,
-                    e.if_else(acc(e, xx(e), e.v("st"), "lint", "signed"), e.dstr("sitofp"), e.dstr("uitofp")),
-                    e.v("v"),
-                    outer(e),
-                ),
-            ),
             e.if_only(
-                has(e, xx(e), e.v("st"), "lfloat"),
-                e.seq(
-                    e.let("sb", cv_bits(e, e.v("st"), "lfloat")),
-                    ret_m(
+                has(e, xx(e), e.v("st"), "lint"),
+                ret_m(
+                    e,
+                    _conv(
                         e,
-                        e.if_else(
-                            e.eq(e.v("sb"), in_(e, "bits")),
-                            _retag(e, e.v("v"), outer(e)),
-                            e.if_else(
-                                e.mb.operator_gt(e.v("sb"), in_(e, "bits")),
-                                _conv(e, e.s("fptrunc"), e.v("v"), outer(e)),
-                                _conv(e, e.s("fpext"), e.v("v"), outer(e)),
-                            ),
-                        ),
+                        e.if_else(acc(e, xx(e), e.v("st"), "lint", "signed"), e.dstr("sitofp"), e.dstr("uitofp")),
+                        a(e, "cv"),
+                        outer(e),
                     ),
                 ),
             ),
-            e.ret(err_cve(e, loc(e), "cannot convert to float")),
+            e.ret(_conv(e, e.s("fpext"), a(e, "cv"), outer(e))),
         ),
         no_cast_to(e),
         cast_to_panic(e),
@@ -5001,6 +5127,7 @@ def module(e):
             ),
         ),
     )
+    _conv_methods(e, x)
     x.append(
         e.impl_interface(
             e.v("lt_float"),
@@ -5083,21 +5210,21 @@ def module(e):
                     or_b(
                         e,
                         has(e, xx(e), src_type(e), "lptr"),
-                        or_b(e, has(e, xx(e), src_type(e), "lfn"), has(e, xx(e), src_type(e), "lint")),
+                        or_b(
+                            e,
+                            has(e, xx(e), src_type(e), "lfn"),
+                            and_b(e, has(e, xx(e), src_type(e), "lint"), e.eq(src_bits(e, "lint"), num(e, 64))),
+                        ),
                     ),
                 )
             ),
         ),
         body(
             e,
-            e.let("st0", cve_type(e, a(e, "cv"))),
-            e.if_only(is_equal(e, xx(e), outer(e), e.v("st0")), ret_m(e, ok_cve(e, a(e, "cv")))),
-            e.let("v", unwrap_cve_m(e, try_er(e, _ssa(e, xx(e), loc(e), _xmod(e), a(e, "cv")), cve_t(e)))),
-            e.let("st", cve_type(e, e.v("v"))),
-            _when_st(e, "lint", _conv(e, e.s("inttoptr"), e.v("v"), outer(e))),
-            _when_st(e, "lptr", _retag(e, e.v("v"), outer(e))),
-            _when_st(e, "lfn", _retag(e, e.v("v"), outer(e))),
-            e.ret(err_cve(e, loc(e), "cannot convert to pointer")),
+            e.let("st", cve_type(e, a(e, "cv"))),
+            e.if_only(is_equal(e, xx(e), outer(e), e.v("st")), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.if_only(has(e, xx(e), e.v("st"), "lint"), ret_m(e, _conv(e, e.s("inttoptr"), a(e, "cv"), outer(e)))),
+            e.ret(_retag(e, a(e, "cv"), outer(e))),
         ),
         no_cast_to(e),
         cast_to_panic(e),

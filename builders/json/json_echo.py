@@ -289,7 +289,10 @@ def _wasm(e):
         e.mb.operator_gt(cell(CELL_OUT_LEN), e.n(0)),
         e.seq(
             e.mb.set(e.mb.field(block("out_iov", "t_pu32"), e.n(0)), addr("outbuf")),
-            e.mb.set(e.mb.field(block("out_iov", "t_pu32"), e.n(1)), conv("t_u32", cell(CELL_OUT_LEN))),
+            e.mb.set(
+                e.mb.field(block("out_iov", "t_pu32"), e.n(1)),
+                e.call(e.fld(cell(CELL_OUT_LEN), "wrap"), _lo(e, "t_u32")),
+            ),
             e.call(_lo(e, "fd_write"), e.tup(e.n(1), block("out_iov", "t_pv"), e.n(1), block("nwritten", "t_pv"))),
             e.mb.set(cell(CELL_OUT_LEN), e.n(0)),
         ),
@@ -297,7 +300,7 @@ def _wasm(e):
     # stdout_write(ctx, b): buffers a byte of stdout.
     write_body = e.seq(
         e.if_only(e.mb.operator_ge(cell(CELL_OUT_LEN), e.n(BUF)), e.call(fn_of(e, _lo(e, "stdout_flush")), e.tup())),
-        e.mb.set(byte_at("outbuf", cell(CELL_OUT_LEN)), conv("t_u8", e.v("b"))),
+        e.mb.set(byte_at("outbuf", cell(CELL_OUT_LEN)), e.call(e.fld(e.v("b"), "wrap"), _lo(e, "t_u8"))),
         e.mb.set(cell(CELL_OUT_LEN), e.mb.operator_add(cell(CELL_OUT_LEN), e.n(1))),
     )
     setup.append(_dep(e, "wasm", "stdin_read", ["ctx"], "read_t", read_body))

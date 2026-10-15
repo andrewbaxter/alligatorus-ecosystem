@@ -19,7 +19,6 @@ from ..memory import destructor
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
-    fn_of,
     a,
     acc,
     and_b,
@@ -40,11 +39,13 @@ from ..target_mb import (
     def_iface,
     def_obj,
     err_cve,
+    fn_of,
     graft,
     has,
     has_b,
     ident_of,
     in_,
+    int_as,
     int_t,
     is_equal,
     loc,
@@ -141,7 +142,7 @@ class _Target:
     def size(self, e, n, depth):
         if self.kind == WASM:
             return n
-        return e.mb.as_(n, _up(e, e.fld(e.v("lib"), "u64"), depth))
+        return int_as(e, n, _up(e, e.fld(e.v("lib"), "u64"), depth))
 
     def malloc(self, e, n, depth):
         return e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth))

@@ -122,7 +122,7 @@ def module(e, kind):
             ),
         )
     )
-    body = e.seq(*_seed_and_hash(e, hash_fn), e.call(_lo(e, "proc_exit"), e.mb.as_(e.v("status"), _lo(e, "t_u32"))))
+    body = e.seq(*_seed_and_hash(e, hash_fn), e.call(_lo(e, "proc_exit"), e.call(e.fld(e.v("status"), "wrap"), _lo(e, "t_u32"))))
     top.append(
         e.let(
             "start",

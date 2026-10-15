@@ -118,7 +118,7 @@ def _wasm(e):
     body = e.seq(
         e.let("fails", e.mb.as_(e.n(0), lo("t_i32"))),
         e.seq(*_checks(e, lo, check, pair, lo("swap"))),
-        e.call(lo("proc_exit"), e.mb.as_(e.v("fails"), lo("t_u32"))),
+        e.call(lo("proc_exit"), e.call(e.fld(e.v("fails"), "wrap"), lo("t_u32"))),
     )
     top.append(func("_start", [], "start_fn_t", body))
     top.append(e.call_m(e.v("m"), "export", e.s("_start")))

@@ -41,14 +41,10 @@ sink appending to a byte vec: `{write}`, taking the vec's pointer. Both are depe
 `json_vec_writer_write`).
 """
 
-from ..collections.vec import const_type_arg
 from ..core import values
 from ..eco_mb import p
 from ..memory import destructor
 from ..target_mb import (
-    cast_from_empty,
-    can_cast_from_unit,
-    fn_of,
     a,
     acc,
     and_b,
@@ -58,12 +54,15 @@ from ..target_mb import (
     body,
     bool_t,
     call_result,
+    can_cast_from_unit,
+    cast_from_empty,
     cast_to_panic,
     cast_value,
     code_none,
     code_seq,
     const_eval_in,
     const_fn,
+    const_type_arg,
     cv_of,
     cve_code,
     cve_has,
@@ -73,11 +72,14 @@ from ..target_mb import (
     def_iface,
     def_obj,
     err_cve,
+    fn_of,
     graft,
     has,
     has_b,
     ident_of,
     in_,
+    int_as,
+    is_const,
     is_equal,
     loc,
     lookup,
@@ -207,7 +209,7 @@ class _Target:
         """`n` as the allocator's size argument."""
         if self.kind == WASM:
             return n
-        return e.mb.as_(n, _up(e, e.fld(e.v("lib"), "u64"), depth))
+        return int_as(e, n, _up(e, e.fld(e.v("lib"), "u64"), depth))
 
     def malloc(self, e, n, depth):
         return e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth))
@@ -411,12 +413,14 @@ def _handle_type(e, x, obj, iface, desc, fields, places, methods, under="pv"):
     return meth
 
 
-def _method_impl(e, x, meth, iface, fields, methods, method_body, prelude=()):
+def _method_impl(e, x, meth, iface, fields, methods, method_body, prelude=(), host=()):
     """The call of a handle method: `method_body(kind)` is the staged operation over the handle's fields (host
-    locals of the field names) and `self_v`, the handle value; `prelude` are host statements run first."""
+    locals of the field names) and `self_v`, the handle value, or for the kinds in `host` a host expression yielding
+    the staged code value itself; `prelude` are host statements run first."""
 
     def dispatch(kind):
-        return e.if_only(e.eq(in_(e, "kind"), e.s(kind)), e.seq(*call_result(e, _staged(e, method_body(kind)))))
+        result = method_body(kind) if kind in host else _staged(e, method_body(kind))
+        return e.if_only(e.eq(in_(e, "kind"), e.s(kind)), e.seq(*call_result(e, result)))
 
     x.append(
         e.impl_interface(
@@ -701,7 +705,15 @@ def _buffer_types(e, x):
 
     def buf_body(kind):
         if kind == "push":
-            return e.call(e.fld(vec(), "push"), e.mb.as_(graft(e, a(e, "argument")), e.lower(e.v("u8"))))
+            # The byte is an i32 (json.atz computes bytes as ints): a constant casts (range-checked), a runtime value
+            # wraps.
+            arg = graft(e, a(e, "argument"))
+            u8 = e.lower(e.v("u8"))
+            return e.if_else(
+                is_const(e, xx(e), cve_type(e, a(e, "argument"))),
+                _staged(e, e.call(e.fld(vec(), "push"), e.mb.as_(arg, u8))),
+                _staged(e, e.call(e.fld(vec(), "push"), e.call(e.fld(arg, "wrap"), u8))),
+            )
         if kind == "clear":
             return e.call(e.fld(vec(), "clear"), e.tup())
         if kind == "pop":
@@ -714,7 +726,7 @@ def _buffer_types(e, x):
             return e.call(e.fld(vec(), "slice"), e.tup())
         raise AssertionError(kind)
 
-    _method_impl(e, x, meth, "jbuf_m", fields, BUF_METHODS, buf_body)
+    _method_impl(e, x, meth, "jbuf_m", fields, BUF_METHODS, buf_body, host=("push",))
 
     fields = [p(f, ty(e)) for f in VIEW_FIELDS]
     meth = _handle_type(e, x, "jview", "jview_m", "json byte view", fields, {}, VIEW_METHODS, under="pt2")
@@ -1208,7 +1220,7 @@ def _readers(e, x, tg):
         ["v", "b"],
         e.call(
             e.fld(e.mb.as_(e.v("v"), _up(e, e.v("bytes_raw"), d)), "push"),
-            e.mb.as_(e.v("b"), _up(e, e.v("u8"), d)),
+            e.call(e.fld(e.v("b"), "wrap"), _up(e, e.v("u8"), d)),
         ),
     )
     x.append(

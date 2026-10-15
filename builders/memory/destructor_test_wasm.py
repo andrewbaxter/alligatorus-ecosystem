@@ -112,7 +112,7 @@ def module(e):
             e.mb.set(e.v("a"), owned(malloc(16))),
             e.mb.set(e.mb.field(e.mb.as_(e.v("c"), lo("t_pi32")), e.n(0)), e.n(5)),
         ),
-        e.call(lo("proc_exit"), e.mb.as_(cell(), lo("t_u32"))),
+        e.call(lo("proc_exit"), e.call(e.fld(cell(), "wrap"), lo("t_u32"))),
     )
     top.append(e.let("t_pi32", e.call(e.fld(e.v("wasm"), "ptr"), e.v("t_i32"))))
     top.append(

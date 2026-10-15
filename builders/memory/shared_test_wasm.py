@@ -146,7 +146,7 @@ def module(e):
         ),
         e.if_else(
             e.eq(cell(), e.mb.field(e.call(fn_of(e, lo("expected")), e.tup()), e.n(0))),
-            e.call(lo("proc_exit"), e.mb.as_(cell(), lo("t_u32"))),
+            e.call(lo("proc_exit"), e.call(e.fld(cell(), "wrap"), lo("t_u32"))),
             e.call(lo("proc_exit"), e.mb.as_(e.n(100), lo("t_u32"))),
         ),
     )

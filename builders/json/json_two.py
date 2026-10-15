@@ -8,7 +8,7 @@ sink, shared by both parsers and both writers.
 """
 
 from ..root_mode import APP, root_mode_finish
-from ..target_mb import fn_of
+from ..target_mb import fn_of, int_as
 from ..wasm.wat import bind_types
 
 WASM = "wasm"
@@ -22,6 +22,11 @@ EXPECTED = '{"a":[1,2,3],"b":"x"}\n[true,null,{"k":"v"},-5.5e1]\n'
 
 def _lo(e, name):
     return e.lower(e.v(name))
+
+
+def _byte(e, b):
+    """The i32 (or constant) `b` as a u8: a constant casts (range-checked), a runtime value wraps."""
+    return int_as(e, b, _lo(e, "t_u8"))
 
 
 def _fn_t(e, lib, params, ret):
@@ -232,7 +237,7 @@ def _wasm(e):
     def write_byte(b):
         """One byte to stdout through fd_write (unbuffered: this app prints little)."""
         return e.seq(
-            e.mb.set(e.mb.field(block("ch", "t_pu8"), e.n(0)), e.mb.as_(b, _lo(e, "t_u8"))),
+            e.mb.set(e.mb.field(block("ch", "t_pu8"), e.n(0)), _byte(e, b)),
             e.mb.set(e.mb.field(block("iov", "t_pu32"), e.n(0)), e.mb.as_(block("ch", "t_pv"), _lo(e, "t_u32"))),
             e.mb.set(e.mb.field(block("iov", "t_pu32"), e.n(1)), e.mb.as_(e.n(1), _lo(e, "t_u32"))),
             e.call(_lo(e, "fd_write"), e.tup(e.n(1), block("iov", "t_pv"), e.n(1), block("nwritten", "t_pv"))),

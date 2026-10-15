@@ -18,7 +18,6 @@ from ..memory import destructor
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
-    fn_of,
     a,
     acc,
     and_b,
@@ -32,6 +31,7 @@ from ..target_mb import (
     cast_to_panic,
     const_eval_in,
     const_fn,
+    const_type_arg,
     cv_of,
     cve_code,
     cve_has,
@@ -40,13 +40,14 @@ from ..target_mb import (
     def_iface,
     def_obj,
     err_cve,
+    fn_of,
     graft,
     has,
     has_b,
     ident_of,
     in_,
+    int_as,
     is_equal,
-    is_runtime,
     loc,
     lookup,
     lookup_v,
@@ -142,7 +143,7 @@ class _Target:
         """`n` (i32) as the allocator's size argument."""
         if self.kind == WASM:
             return n
-        return e.mb.as_(n, _up(e, e.fld(e.v("lib"), "u64"), depth))
+        return int_as(e, n, _up(e, e.fld(e.v("lib"), "u64"), depth))
 
     def malloc(self, e, n, depth):
         return e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth))
@@ -550,18 +551,6 @@ def _vt(e, x):
             p("exception_type", e.option_type_lowered_none()),
         )
     )
-
-
-def const_type_arg(e, label, cv, bind):
-    """Binds `bind` to the constant type the code-value `cv` holds, else errors out of the const function."""
-    return [
-        e.let(bind + "_tk", lookup(e, xx(e), cve_type(e, cv), asp_iface(e, "type"))),
-        e.if_only(
-            or_b(e, is_runtime(e, cv), e.not_(e.fld(e.v(bind + "_tk"), "is_some"))),
-            ret_m(e, err_cve(e, loc(e), label + ": " + bind + " must be a constant type")),
-        ),
-        e.let(bind, bim(e, asp_iface(e, "type"), "type", e.fld(e.v(bind + "_tk"), "value"), cve_value(e, cv))),
-    ]
 
 
 def size_of(e, label, type_expr, bind):
