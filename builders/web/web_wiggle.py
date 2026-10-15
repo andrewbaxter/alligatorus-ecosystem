@@ -48,13 +48,19 @@ def shaders(e, out):
             e.let(
                 "x",
                 e.mb.operator_sub(
-                    e.mb.as_(e.mb.operator_shl(e.mb.operator_and(id_, e.n(1)), e.n(2)), _g(e, "float")), e.n(1)
+                    e.call(
+                        e.fld(e.mb.operator_shl(e.mb.operator_and(id_, e.n(1)), e.n(2)), "to_float"), _g(e, "float")
+                    ),
+                    e.n(1),
                 ),
             ),
             e.let(
                 "y",
                 e.mb.operator_sub(
-                    e.mb.as_(e.mb.operator_shl(e.mb.operator_and(id_, e.n(2)), e.n(1)), _g(e, "float")), e.n(1)
+                    e.call(
+                        e.fld(e.mb.operator_shl(e.mb.operator_and(id_, e.n(2)), e.n(1)), "to_float"), _g(e, "float")
+                    ),
+                    e.n(1),
                 ),
             ),
             e.mb.set(e.lower(e.v("gl_Position")), e.mb.as_(e.tup(e.v("x"), e.v("y"), e.n(0), e.n(1)), _g(e, "vec4"))),

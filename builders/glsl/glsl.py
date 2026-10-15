@@ -1,4 +1,10 @@
-"""glsl-es-3.00.atz: GLSL ES 3.00 shader target."""
+"""glsl-es-3.00.atz: GLSL ES 3.00 shader target.
+
+Casts between scalar kinds are strict: `as` converts constants (and bound values to their base type) only. Lossy
+conversions are methods on scalar values: `wrap(T)` between `int` and `uint`, `trunc(T)` from `float` to an integer
+kind, `to_float(float)` from an integer kind. Vectors and matrices construct from components of their own kind (or
+constants) only.
+"""
 
 from .. import target_mb as tm
 from ..core import values
@@ -562,6 +568,21 @@ def _def_arith(e, x):
                     _append_code(e, e.v("out"), cve_code(e, e.v("ev"))),
                     push(e, e.v("exprs"), _gv_expr(e, e.v("ev"))),
                     e.let("ed", _desc_of(e, xx(e), e.v("et"))),
+                    e.if_only(
+                        e.not_(e.eq(e.fld(e.v("ed"), "kind"), e.fld(e.v("td"), "kind"))),
+                        throw_err(
+                            e,
+                            loc(e),
+                            e.cat(
+                                e.s("glsl: "),
+                                ty_desc(e, a(e, "ty")),
+                                e.s(" constructs from "),
+                                e.fld(e.v("td"), "kind"),
+                                e.s(" components, not "),
+                                ty_desc(e, e.v("et")),
+                            ),
+                        ),
+                    ),
                     e.if_only(e.fld(e.v("ed"), "mat"), e.mb.set(e.fld(e.v("st"), "mat"), e.int_of(1))),
                     e.mb.set(
                         e.fld(e.v("st"), "comps"),
@@ -734,6 +755,116 @@ def _construct_casts(e):
     ]
 
 
+def _conv_methods(e, x):
+    """The lossy conversions as methods on scalar values: `wrap(T)` between the integer kinds, `trunc(T)` from float
+    to an integer kind, `to_float(float)` from any numeric kind; each a GLSL constructor call."""
+    tm.method_type(e, x, "gconv", "glsl conversion")
+    to = e.v("to")
+
+    def kind_in(k, *kinds):
+        c = e.eq(k, e.s(kinds[0]))
+        for other in kinds[1:]:
+            c = or_b(e, c, e.eq(k, e.s(other)))
+        return c
+
+    x.append(
+        e.impl_interface(
+            e.v("gconv"),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    *tm.const_type_arg(e, "glsl conversion", a(e, "argument"), "to"),
+                    e.let("rc", cv_of(e, cve_code(e, a(e, "self")), cve_value(e, tm.recv_of(e)))),
+                    e.let("st0", cve_type(e, e.v("rc"))),
+                    e.let(
+                        "st",
+                        e.if_else(
+                            has(e, xx(e), e.v("st0"), "ggtype_m"),
+                            acc(e, xx(e), e.v("st0"), "ggtype_m", "base"),
+                            e.v("st0"),
+                        ),
+                    ),
+                    e.if_only(
+                        e.not_(has(e, xx(e), to, "gscalar")),
+                        ret_m(
+                            e,
+                            err_cve(
+                                e,
+                                loc(e),
+                                e.cat(
+                                    e.s("glsl: "), in_(e, "op"), e.s(" converts to a scalar type, not "), ty_desc(e, to)
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.let("sk", acc(e, xx(e), e.v("st"), "gscalar", "kind")),
+                    e.let("tk", acc(e, xx(e), to, "gscalar", "kind")),
+                    e.let(
+                        "ok",
+                        e.if_else(
+                            e.eq(in_(e, "op"), e.s("wrap")),
+                            and_b(e, kind_in(e.v("sk"), "int", "uint"), kind_in(e.v("tk"), "int", "uint")),
+                            e.if_else(
+                                e.eq(in_(e, "op"), e.s("trunc")),
+                                and_b(e, e.eq(e.v("sk"), e.s("float")), kind_in(e.v("tk"), "int", "uint")),
+                                and_b(e, kind_in(e.v("sk"), "int", "uint", "float"), e.eq(e.v("tk"), e.s("float"))),
+                            ),
+                        ),
+                    ),
+                    e.if_only(
+                        e.not_(e.v("ok")),
+                        ret_m(
+                            e,
+                            err_cve(
+                                e,
+                                loc(e),
+                                e.cat(
+                                    e.s("glsl: no conversion "),
+                                    in_(e, "op"),
+                                    e.s(" from "),
+                                    e.v("sk"),
+                                    e.s(" to "),
+                                    e.v("tk"),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.let("v", _operand_m(e, e.v("st"), e.v("rc"))),
+                    e.if_only(e.eq(e.v("sk"), e.v("tk")), ret_m(e, ok_cve(e, e.v("v")))),
+                    e.let("out", _insts_new(e)),
+                    _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
+                    e.ret(
+                        ok_cve(
+                            e,
+                            hf_rec(
+                                e,
+                                "h_stmt",
+                                e.p("mod", _xmod(e)),
+                                e.p("out", e.v("out")),
+                                e.p("ty", to),
+                                e.p("expr", e.cat(_ir_of(e, xx(e), to), e.s("("), _gv_expr(e, e.v("v")), e.s(")"))),
+                            ),
+                        )
+                    ),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+
+    def when(m):
+        k = in_(e, "kind")
+        if m == "wrap":
+            return kind_in(k, "int", "uint")
+        if m == "trunc":
+            return e.eq(k, e.s("float"))
+        return kind_in(k, "int", "uint", "float")
+
+    tm.method_fields(e, x, "gt_scalar", "gconv", ["wrap", "trunc", "to_float"], when=when)
+
+
 def _vec_ir(e, kind, n):
     return e.cat(
         e.if_else(
@@ -772,6 +903,7 @@ def _def_types(e, x):
     ids.append(op_id(e, "bit_not"))
     ids.append(asp_id(e, "bind"))
     ids.append(asp_id(e, "set"))
+    ids.append(asp_id(e, "field"))
     self_type(
         e,
         x,
@@ -784,14 +916,10 @@ def _def_types(e, x):
                 or_b(
                     e,
                     is_equal(e, xx(e), outer(e), src_type(e)),
-                    or_b(
-                        e,
-                        e.if_else(
-                            e.eq(in_(e, "kind"), e.s("bool")),
-                            has_b(e, xx(e), src_type(e), e.eval_builtin("aspect_bool_const")),
-                            is_const(e, xx(e), src_type(e)),
-                        ),
-                        _constructible(e, src_type(e)),
+                    e.if_else(
+                        e.eq(in_(e, "kind"), e.s("bool")),
+                        has_b(e, xx(e), src_type(e), e.eval_builtin("aspect_bool_const")),
+                        is_const(e, xx(e), src_type(e)),
                     ),
                 )
             ),
@@ -835,7 +963,23 @@ def _def_types(e, x):
                         ),
                     ),
                 ),
-                e.if_only(e.not_(is_const(e, xx(e), e.v("st"))), ret_m(e, _construct(e, a(e, "cv")))),
+                e.if_only(
+                    e.not_(is_const(e, xx(e), e.v("st"))),
+                    ret_m(
+                        e,
+                        err_cve(
+                            e,
+                            loc(e),
+                            e.cat(
+                                e.s("glsl: no cast from "),
+                                ty_desc(e, e.v("st")),
+                                e.s(" to "),
+                                in_(e, "kind"),
+                                e.s(": use wrap, trunc or to_float"),
+                            ),
+                        ),
+                    ),
+                ),
                 e.let(
                     "d",
                     e.call(
@@ -2900,6 +3044,7 @@ def module(e):
     _def_helpers(e, x)
     _def_arith(e, x)
     _def_types(e, x)
+    _conv_methods(e, x)
     _def_refs(e, x)
     _def_module(e, x)
     _def_target(e, x)
