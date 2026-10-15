@@ -114,11 +114,8 @@ class _Target:
             out.append(e.let("lib", e.import_local("llvm", "llvm-ir-22.atz")))
 
     def trap(self, e, depth):
-        """A trap statement in target code; the wasm intrinsic is instantiated in the body (only its type is
-        lowered)."""
-        if self.kind == WASM:
-            return e.call(e.call(_up(e, e.fld(e.v("lib"), "trap_fn"), depth), e.rec()), e.tup())
-        return e.call(_up(e, e.fld(e.v("lib"), "trap"), depth), e.tup())
+        """A trap statement in target code: the target's trap, a callable type, called through its function value."""
+        return e.call(fn_of(e, _up(e, e.fld(e.v("lib"), "trap"), depth)), e.tup())
 
     def elem_ptr(self, e, base, idx, size, ptr_type):
         """The address of element `idx` of the array at `base`, as `ptr_type`; `i32` is a host local."""

@@ -6401,17 +6401,17 @@ def module(e):
         x,
         "ltrap_t",
         e.s("trap"),
-        rt_dispatch(e, e.mb.types_string(), e.aspect_dispatch(lv(e, "ltrap_m_id"), asp_id(e, "function"))),
-        can_cast_from_self(e),
-        cast_from_self(e),
+        e.aspect_dispatch(lv(e, "ltrap_m_id"), asp_id(e, "function"), asp_id(e, "bind")),
+        target_mb.can_cast_from_unit(e),
+        target_mb.cast_from_empty(e),
         no_cast_to(e),
         cast_to_panic(e),
         body(e, e.ret(has(e, xx(e), a(e, "other"), "ltrap_m"))),
     )
-    rt_lift_impl(e, x, "ltrap_t")
-    rt_bind_impl(e, x, "ltrap_t", e.mb.types_string())
-    rt_use_impl(e, x, "ltrap_t")
     x.append(e.impl_interface(e.v("ltrap_t"), t(e, "ltrap_m")))
+    x.append(
+        e.impl_interface(e.v("ltrap_t"), e.mb.eval_aspect_bind(), e.p("bind", target_mb.bind_empty(e, "lebinding")))
+    )
     x.append(
         e.impl_interface(
             e.v("ltrap_t"),
@@ -7472,7 +7472,7 @@ def module(e):
     exported.append("loop")
     y.append(e.let("loop", _lty(e, "lloop_t", e.tup())))
     exported.append("trap")
-    y.append(e.let("trap_o", e.call(e.fld(e.v("k"), "ltrap_t_new"), e.tup())))
+    y.append(e.let("trap", _lty(e, "ltrap_t", e.tup())))
     y.append(
         e.let(
             "null_t",
@@ -7517,29 +7517,6 @@ def module(e):
             d="gfn_d",
         )
         y.append(e.let(kind, e.fld(e.v(kind + "_b"), "func")))
-    target_mb.const_fn(
-        e,
-        y,
-        "trap_b",
-        "llvm.trap",
-        bim(
-            e,
-            asp_iface(e, "function"),
-            "call",
-            e.lower(e.v("trap_o")),
-            e.rec(
-                e.p("xx", xx(e)),
-                e.p("loc", loc(e)),
-                e.p(
-                    "self",
-                    cv_of(e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), e.lower(e.v("trap_o")))),
-                ),
-                e.p("argument", a(e, "argument")),
-            ),
-        ),
-        d="gfn_d",
-    )
-    y.append(e.let("trap", e.fld(e.v("trap_b"), "func")))
     y.append(e.finish(e.v("gfn_d")))
     y.append(e.option_type_let())
     y.append(e.let("mod_o", e.def_object(e.v("d"), "llvm module")))

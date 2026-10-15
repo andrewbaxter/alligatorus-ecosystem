@@ -2662,9 +2662,9 @@ def _def_builtins(e, x):
         x,
         "gbuiltin_t",
         e.cat(e.s("glsl builtin "), in_(e, "name")),
-        rt_dispatch(e, lt(e, "gmod"), e.aspect_dispatch(lv(e, "gbuiltin_m_id"), asp_id(e, "function"))),
-        can_cast_from_self(e),
-        cast_from_self(e),
+        e.aspect_dispatch(lv(e, "gbuiltin_m_id"), asp_id(e, "function"), asp_id(e, "bind")),
+        tm.can_cast_from_unit(e),
+        tm.cast_from_empty(e),
         no_cast_to(e),
         cast_to_panic(e),
         body(
@@ -2678,10 +2678,9 @@ def _def_builtins(e, x):
             ),
         ),
     )
-    rt_lift_impl(e, x, "gbuiltin_t")
-    rt_bind_impl(e, x, "gbuiltin_t", lt(e, "gmod"))
-    rt_use_impl(e, x, "gbuiltin_t")
     x.append(e.impl_interface(e.v("gbuiltin_t"), t(e, "gbuiltin_m"), e.p("name", in_(e, "name"))))
+    tm.def_empty_binding(e, x, "gebinding", "glsl empty value binding")
+    x.append(e.impl_interface(e.v("gbuiltin_t"), e.mb.eval_aspect_bind(), e.p("bind", tm.bind_empty(e, "gebinding"))))
     x.append(
         e.impl_interface(
             e.v("gbuiltin_t"),
@@ -2992,10 +2991,6 @@ def module(e):
         y.append(
             e.let(kind + "_o", e.call(e.fld(e.v("k"), "ggfn_t_new"), e.rec(e.p("kind", e.int_of(_ggfn_kind(kind))))))
         )
-    for row in BUILTINS:
-        y.append(
-            e.let("bi_" + row[0] + "_o", e.call(e.fld(e.v("k"), "gbuiltin_t_new"), e.rec(e.p("name", e.s(row[0])))))
-        )
     y.append(e.let("d", e.define()))
     y.append(e.let("gfn_d", e.define()))
     for kind in GGFN_KINDS:
@@ -3012,30 +3007,9 @@ def module(e):
             d="gfn_d",
         )
         y.append(e.let(kind, e.fld(e.v(kind + "_b"), "func")))
-    # The builtin functions as const functions: each calls its builtin object's function aspect.
     builtins = []
     for row in BUILTINS:
-        o = "bi_" + row[0] + "_o"
-        tm.const_fn(
-            e,
-            y,
-            "bi_" + row[0] + "_b",
-            "glsl." + row[0],
-            bim(
-                e,
-                asp_iface(e, "function"),
-                "call",
-                e.lower(e.v(o)),
-                e.rec(
-                    e.p("xx", xx(e)),
-                    e.p("loc", loc(e)),
-                    e.p("self", cv_of(e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), e.lower(e.v(o))))),
-                    e.p("argument", a(e, "argument")),
-                ),
-            ),
-            d="gfn_d",
-        )
-        builtins.append(e.p(row[0], e.fld(e.v("bi_" + row[0] + "_b"), "func")))
+        builtins.append(e.p(row[0], _lty(e, "gbuiltin_t", e.rec(e.p("name", e.s(row[0]))))))
     y.append(e.let("gbuiltins", e.rec(*builtins)))
     y.append(e.finish(e.v("gfn_d")))
     y.append(e.option_type_let())

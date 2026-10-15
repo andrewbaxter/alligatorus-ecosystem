@@ -1,6 +1,6 @@
 """web-wiggle.atz: wasm + WebGL2 demo drawing a wiggling square via glsl shaders and a uniform block."""
 
-from ..target_mb import int_as
+from ..target_mb import fn_of, int_as
 from ..wasm.wat import bind_types
 
 BLOCK = "u"
@@ -12,11 +12,11 @@ def _g(e, name):
 
 
 def _fn(e, name, arg):
-    return e.call(e.lower(e.fld(e.v("glsl"), "builtins", name)), arg)
+    return e.call(fn_of(e, e.lower(e.fld(e.v("glsl"), "builtins", name))), arg)
 
 
 def _fn_tup(e, name, *args):
-    return e.call(e.lower(e.fld(e.v("glsl"), "builtins", name)), e.tup(*args))
+    return e.call(fn_of(e, e.lower(e.fld(e.v("glsl"), "builtins", name))), e.tup(*args))
 
 
 def block_fields(e):

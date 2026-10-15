@@ -1519,7 +1519,6 @@ WGFN_KINDS = [
     "memory_copy_fn",
     "memory_size_fn",
     "memory_fill_fn",
-    "trap_fn",
 ]
 
 
@@ -6526,7 +6525,6 @@ def module(e):
         ["wmem_copy", "wmem_copy_m"],
         ["wmem_size", "wmem_size_m"],
         ["wmem_fill", "wmem_fill_m"],
-        ["wtrap", "wtrap_m"],
     ]:
         self_type(
             e,
@@ -6544,6 +6542,22 @@ def module(e):
         rt_bind_impl(e, x, obj, lt(e, obj))
         rt_use_impl(e, x, obj)
         x.append(e.impl_interface(e.v(obj), t(e, marker)))
+
+    # The trap as a callable type: its function value (the unit cast to it) emits `unreachable`.
+    self_type(
+        e,
+        x,
+        "wtrap",
+        e.s("trap"),
+        e.aspect_dispatch(lv(e, "wtrap_m_id"), asp_id(e, "function"), asp_id(e, "bind")),
+        tm.can_cast_from_unit(e),
+        tm.cast_from_empty(e),
+        no_cast_to(e),
+        cast_to_panic(e),
+        body(e, e.ret(has(e, xx(e), a(e, "other"), "wtrap_m"))),
+    )
+    x.append(e.impl_interface(e.v("wtrap"), t(e, "wtrap_m")))
+    x.append(e.impl_interface(e.v("wtrap"), e.mb.eval_aspect_bind(), e.p("bind", tm.bind_empty(e, "webinding"))))
 
     def _i32_operand(cv):
         return e.seq(
@@ -6840,11 +6854,7 @@ def module(e):
                                                 or_b(
                                                     e,
                                                     _wgfn_is(e, "memory_size_fn"),
-                                                    or_b(
-                                                        e,
-                                                        _wgfn_is(e, "memory_fill_fn"),
-                                                        _wgfn_is(e, "trap_fn"),
-                                                    ),
+                                                    _wgfn_is(e, "memory_fill_fn"),
                                                 ),
                                             ),
                                         ),
@@ -7011,23 +7021,6 @@ def module(e):
                             e.call(
                                 e.eval_builtin("value_object_const"),
                                 e.rec(e.p("type", mk_arg(e, "wmem_size", e.tup())), e.p("data", e.tup())),
-                            ),
-                        ),
-                    ),
-                ),
-            ),
-            e.if_only(
-                _wgfn_is(e, "trap_fn"),
-                ret_m(
-                    e,
-                    ok_cve(
-                        e,
-                        cv_of(
-                            e,
-                            code_none(e, loc(e)),
-                            e.call(
-                                e.eval_builtin("value_object_const"),
-                                e.rec(e.p("type", mk_arg(e, "wtrap", e.tup())), e.p("data", e.tup())),
                             ),
                         ),
                     ),
@@ -7429,6 +7422,8 @@ def module(e):
     y.append(e.let("void", _lty(e, "wt_void", e.tup())))
     exported.append("unit")
     y.append(e.let("unit", _lty(e, "wunit", e.tup())))
+    exported.append("trap")
+    y.append(e.let("trap", _lty(e, "wtrap", e.tup())))
     y.append(
         e.let("cstr_t", _lty(e, "wt_global", e.rec(e.p("base", _lty(e, "wt_ptr", e.rec(e.p("pointee", e.v("u8"))))))))
     )
