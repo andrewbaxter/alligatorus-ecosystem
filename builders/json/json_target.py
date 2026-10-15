@@ -7,7 +7,7 @@ next byte of input or a negative int at its end; the value passed to it is whate
 `name` is a constant string naming the reader in the dependencies below:
 - a parser is a pointer to a 64-byte header: the reader's argument, the byte vecs (vec.atz) of the current token
   and of the container stack, and the state machine's registers;
-- `new(ctx)` yields a parser reading through `read(ctx)`; `type(new(ctx))` makes it an owned value
+- `new(ctx)` yields a parser reading through `read(ctx)`; `new(ctx) as type` makes it an owned value
   (destructor.atz) whose drop frees the vecs and the header; `raw` is the unowned handle type;
 - on a parser value, `next()` yields the next event: one value or structural token of the document, consumed
   through `read`, as a value of the event union `event.type`, read with `match`. The variants are `end` (the
@@ -15,7 +15,7 @@ next byte of input or a negative int at its end; the value passed to it is whate
   end of input, 4 data after the document, 5 bad escape; every later call yields it too), `null`, `bool` (an int,
   1 or 0), `number`, `string` and `key` (a byte slice, slice.atz, of the token's content, valid until the next
   call or the parser's drop; keys arrive before their values, strings decoded), `object_begin`, `object_end`,
-  `array_begin`, `array_end`. `event` also holds the constructors, one per variant, as callable types. There is
+  `array_begin`, `array_end`. `event` also holds the constructors, one per variant, as function values. There is
   no depth limit.
 The functions `json_parser_<name>_new`, `_free` and `_next` are dependencies (`func_dep`): a module gets them when
 its code first uses them, once per reader however many parsers it makes. Memory comes from wasm-alloc.atz (wasm) or
@@ -24,7 +24,7 @@ libc (llvm).
 `writer({name, write})` yields `{type, raw, new}` for a constant sink `write`, a target function
 `(ptr(void), i32) -> void` taking a byte of output, and a constant string `name` naming it:
 - a writer is a pointer to a 16-byte header: the sink's argument and the comma state;
-- `new(ctx)` yields a writer writing through `write(ctx, b)`; `type(new(ctx))` makes it owned; `raw` is the
+- `new(ctx)` yields a writer writing through `write(ctx, b)`; `new(ctx) as type` makes it owned; `raw` is the
   unowned handle type;
 - on a writer value: `null()`, `bool(v)`, `int(v)`, `number(s)` (the raw bytes of a number, a byte slice),
   `string(s)` and `key(s)` (utf-8 bytes, escaped as json needs; a key ends with its colon), `object_begin()`,
@@ -41,7 +41,6 @@ sink appending to a byte vec: `{write}`, taking the vec's pointer. Both are depe
 `json_vec_writer_write`).
 """
 
-from ..collections.vec import const_type_arg
 from ..core import values
 from ..eco_mb import p
 from ..memory import destructor
@@ -53,16 +52,15 @@ from ..target_mb import (
     asp_iface,
     bim,
     body,
-    bool_t,
-    call_result,
-    can_cast_from_self,
-    cast_from_self,
+    can_cast_from_unit,
+    cast_from_empty,
     cast_to_panic,
     cast_value,
     code_none,
-    code_seq,
+    codes,
     const_eval_in,
     const_fn,
+    const_type_arg,
     cv_of,
     cve_code,
     cve_has,
@@ -72,11 +70,16 @@ from ..target_mb import (
     def_iface,
     def_obj,
     err_cve,
+    fn_of,
     graft,
+    handle_methods,
+    handle_type,
     has,
     has_b,
     ident_of,
     in_,
+    int_as,
+    is_const,
     is_equal,
     loc,
     lookup,
@@ -88,18 +91,19 @@ from ..target_mb import (
     or_b,
     outer,
     ret_m,
+    retag_values,
     rt_bind_impl,
     rt_dispatch,
     rt_lift_impl,
     rt_use_impl,
     self_type,
+    self_v,
+    staged_in,
     str_,
     t,
     ty,
-    ty_desc,
     type_aspect,
     unwrap_cve_m,
-    unwrap_m,
     xx,
 )
 from . import json
@@ -125,7 +129,7 @@ INT_EVENTS = ["error", "bool"]
 # What the event type carries: the target's i32, the byte pointer type, the target's unit (the payload type of the
 # bare variants), the tuple type `(i32 tag, ptr(u8) data, i32 len, i32 value)` the event is a view of, and the
 # byte slice constructor (the payload of number, string and key is a slice).
-EVENT_BASE = ["i32", "pu8", "unit", "pt", "slice_of"]
+EVENT_BASE = ["i32", "pu8", "unit", "pt", "slice_t"]
 
 WRITER_PIECES = {
     "null": [],
@@ -207,31 +211,13 @@ class _Target:
         """`n` as the allocator's size argument."""
         if self.kind == WASM:
             return n
-        return e.call(_up(e, e.fld(e.v("lib"), "u64"), depth), n)
+        return int_as(e, n, _up(e, e.fld(e.v("lib"), "u64"), depth))
 
     def malloc(self, e, n, depth):
         return e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth))
 
     def free(self, e, ptr, depth):
         return e.call(_up(e, e.fld(e.v("heap"), "free"), depth), ptr)
-
-
-def _staged(e, expr):
-    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(expr)))
-
-
-def _codes(e, *codes):
-    return unwrap_m(e, code_seq(e, *codes), e.mb.types_cve())
-
-
-def _retag(e, cv, typ):
-    """The runtime value of `cv` (a variable reference) viewed as `typ` (values.atz), with the code of `cv`."""
-    retag = e.lower(e.fld(e.v("values"), "retag"))
-    return cv_of(
-        e,
-        cve_code(e, cv),
-        bim(e, retag, "retag", e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, cv), retag)), typ),
-    )
 
 
 def _variant(e, key, type_):
@@ -251,197 +237,6 @@ def _cell(e, h, index, depth):
     return e.mb.field(e.mb.as_(h, _up(e, e.v("pi32"), depth)), e.n(index))
 
 
-def _handle_type(e, x, obj, iface, desc, fields, places, methods, under="pv"):
-    """A handle type over a representation (the field `under`: a pointer, or a tuple): its field aspect gives the
-    places (`places` maps a name to the staged place over `self_as`, the handle as one of its types) and the methods;
-    it delegates the rest to the representation and retags from its values."""
-    def_iface(e, x, iface, *fields)
-    def_obj(e, x, obj, desc, e.rec(*fields))
-    x.append(e.impl_interface(e.v(obj), t(e, iface), *[p(k, in_(e, k)) for k, _ in fields]))
-    self_type(
-        e,
-        x,
-        obj,
-        e.s(desc),
-        e.mb.if_of(
-            [
-                (e.eq(a(e, "key"), asp_id(e, "field")), e.opt_some(e.mb.types_aspect(), outer(e))),
-                (e.eq(a(e, "key"), lv(e, iface + "_id")), e.opt_some(e.mb.types_aspect(), outer(e))),
-            ],
-            type_aspect(e, xx(e), in_(e, under), a(e, "key")),
-        ),
-        body(
-            e,
-            e.ret(
-                or_b(
-                    e,
-                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
-                    is_equal(e, xx(e), in_(e, under), a(e, "source_type")),
-                )
-            ),
-        ),
-        body(
-            e,
-            e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
-            e.match_of(
-                e.call(
-                    e.mb.reinterpret(),
-                    e.tup(loc(e), cve_value(e, a(e, "cv")), e.lower(e.fld(e.v("values"), "retag"))),
-                ),
-                "__t",
-                None,
-                p(
-                    "ok",
-                    ret_m(
-                        e,
-                        ok_cve(
-                            e,
-                            cv_of(
-                                e,
-                                cve_code(e, a(e, "cv")),
-                                bim(e, e.lower(e.fld(e.v("values"), "retag")), "retag", e.v("__t"), outer(e)),
-                            ),
-                        ),
-                    ),
-                ),
-                p("errs", ret_m(e, err_cve(e, loc(e), desc + ": only runtime values can become one"))),
-            ),
-        ),
-        e.mb.as_(e.b(False), bool_t(e)),
-        cast_to_panic(e),
-        body(e, e.ret(has(e, xx(e), a(e, "other"), iface))),
-    )
-    meth = obj + "_meth"
-    def_obj(e, x, meth, desc + " method", e.rec(p("kind", str_(e)), p("ht", ty(e)), p("self", e.mb.types_cve())))
-
-    def self_as(type_field):
-        return e.mb.as_(graft(e, a(e, "self")), e.lower(in_(e, type_field)))
-
-    x.append(
-        e.impl_interface(
-            e.v(obj),
-            asp_iface(e, "field"),
-            p(
-                "field",
-                body(
-                    e,
-                    e.if_only(
-                        e.not_(has_b(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const())),
-                        ret_m(e, err_cve(e, loc(e), desc + ": field must be a constant string")),
-                    ),
-                    e.let(
-                        "key",
-                        bim(
-                            e,
-                            e.mb.eval_aspect_string_const(),
-                            "get",
-                            lookup_v(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const()),
-                            cve_value(e, a(e, "key")),
-                        ),
-                    ),
-                    *[
-                        e.if_only(e.eq(e.v("key"), e.s(name)), ret_m(e, ok_cve(e, _staged(e, place(self_as)))))
-                        for name, place in places.items()
-                    ],
-                    *[
-                        e.if_only(
-                            e.eq(e.v("key"), e.s(m)),
-                            ret_m(
-                                e,
-                                ok_cve(
-                                    e,
-                                    cv_of(
-                                        e,
-                                        cve_code(e, a(e, "self")),
-                                        e.call(
-                                            e.eval_builtin("value_object_const"),
-                                            e.rec(
-                                                p(
-                                                    "type",
-                                                    mk(
-                                                        e,
-                                                        meth,
-                                                        p("kind", e.s(m)),
-                                                        p("ht", outer(e)),
-                                                        p(
-                                                            "self",
-                                                            cv_of(
-                                                                e,
-                                                                e.call(e.eval_builtin("code_none"), loc(e)),
-                                                                cve_value(e, a(e, "self")),
-                                                            ),
-                                                        ),
-                                                    ),
-                                                ),
-                                                p("data", e.tup()),
-                                            ),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                        )
-                        for m in methods
-                    ],
-                    e.ret(err_cve(e, loc(e), e.cat(e.s(desc + " has no field "), e.v("key")))),
-                ),
-            ),
-            p("type_opt", e.option_type_lowered_none()),
-            p(
-                "keys",
-                e.list_new(
-                    e.mb.types_constkey(),
-                    *[e.mb.as_(e.s(k), e.mb.types_constkey()) for k in list(places) + methods],
-                ),
-            ),
-        )
-    )
-    no = e.mb.as_(e.b(False), bool_t(e))
-    self_type(
-        e,
-        x,
-        meth,
-        e.cat(e.s(desc + "."), in_(e, "kind")),
-        e.aspect_dispatch(asp_id(e, "function")),
-        no,
-        cast_to_panic(e),
-        no,
-        cast_to_panic(e),
-        no,
-    )
-    return meth
-
-
-def _method_impl(e, x, meth, iface, fields, methods, method_body, prelude=()):
-    """The call of a handle method: `method_body(kind)` is the staged operation over the handle's fields (host
-    locals of the field names) and `self_v`, the handle value; `prelude` are host statements run first."""
-
-    def dispatch(kind):
-        return e.if_only(e.eq(in_(e, "kind"), e.s(kind)), e.seq(*call_result(e, _staged(e, method_body(kind)))))
-
-    x.append(
-        e.impl_interface(
-            e.v(meth),
-            asp_iface(e, "function"),
-            p(
-                "call",
-                body(
-                    e,
-                    *[e.let(f, acc(e, xx(e), in_(e, "ht"), iface, f)) for f, _ in fields],
-                    *prelude,
-                    *[dispatch(kind) for kind in methods],
-                    e.ret(err_cve(e, loc(e), e.cat(e.s("json: unknown method "), in_(e, "kind")))),
-                ),
-            ),
-            p("exception_type", e.option_type_lowered_none()),
-        )
-    )
-
-
-def _self_v(e, type_field="pv"):
-    """The handle value in a method body's staged code."""
-    return e.mb.as_(graft(e, in_(e, "self")), e.lower(e.v(type_field)))
-
-
 def _event_objs(e, x, tg):
     """The event union type `evt` over the tuple `pt`, and its constructors `evc` (one callable per variant)."""
     base_fields = [p(f, ty(e)) for f in EVENT_BASE]
@@ -459,8 +254,8 @@ def _event_objs(e, x, tg):
         "evc",
         e.cat(e.s("json.event."), in_(e, "kind")),
         rt_dispatch(e, e.mb.types_string(), e.aspect_dispatch(asp_id(e, "function"))),
-        can_cast_from_self(e),
-        cast_from_self(e),
+        can_cast_from_unit(e),
+        cast_from_empty(e),
         no,
         cast_to_panic(e),
         body(
@@ -482,12 +277,12 @@ def _event_objs(e, x, tg):
         """Ends a constructor call: the tuple `tuple_cv` viewed as the event type, after the callee's own code."""
         return e.seq(
             e.let("tv", tuple_cv),
-            e.let("ev", _retag(e, e.v("tv"), mk(e, "evt", *[p(f, in_(e, f)) for f in EVENT_BASE]))),
+            e.let("ev", retag_values(e, e.v("tv"), mk(e, "evt", *[p(f, in_(e, f)) for f in EVENT_BASE]))),
             ret_m(
                 e,
                 ok_cve(
                     e,
-                    cv_of(e, _codes(e, cve_code(e, a(e, "self")), cve_code(e, e.v("ev"))), cve_value(e, e.v("ev"))),
+                    cv_of(e, codes(e, cve_code(e, a(e, "self")), cve_code(e, e.v("ev"))), cve_value(e, e.v("ev"))),
                 ),
             ),
         )
@@ -502,7 +297,7 @@ def _event_objs(e, x, tg):
         if kind in SLICE_EVENTS:
             # The argument is a slice: a pair of a pointer and a length, read once through a binding.
             return result(
-                _staged(
+                staged_in(
                     e,
                     e.mb.labeled(
                         "ev",
@@ -520,16 +315,14 @@ def _event_objs(e, x, tg):
             return e.seq(
                 e.let("c", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), in_(e, "i32"), a(e, "argument")))),
                 result(
-                    _staged(
+                    staged_in(
                         e, as_pt(e.tup(tag(kind), tg.null(e, e.lower(in_(e, "pu8"))), e.n(0), graft(e, e.v("c"))))
                     )
                 ),
             )
         return e.seq(
-            e.let("z", _staged(e, as_pt(e.tup(tag(kind), tg.null(e, e.lower(in_(e, "pu8"))), e.n(0), e.n(0))))),
-            result(
-                cv_of(e, _codes(e, cve_code(e, a(e, "argument")), cve_code(e, e.v("z"))), cve_value(e, e.v("z")))
-            ),
+            e.let("z", staged_in(e, as_pt(e.tup(tag(kind), tg.null(e, e.lower(in_(e, "pu8"))), e.n(0), e.n(0))))),
+            result(cv_of(e, codes(e, cve_code(e, a(e, "argument")), cve_code(e, e.v("z"))), cve_value(e, e.v("z")))),
         )
 
     parts = []
@@ -578,7 +371,7 @@ def _event_objs(e, x, tg):
                 e.not_(is_equal(e, xx(e), in_(e, "pt"), cve_type(e, a(e, "cv")))),
                 ret_m(e, err_cve(e, loc(e), "json: only the event tuple can become an event")),
             ),
-            e.ret(ok_cve(e, _retag(e, a(e, "cv"), outer(e)))),
+            e.ret(ok_cve(e, retag_values(e, a(e, "cv"), outer(e)))),
         ),
         no,
         cast_to_panic(e),
@@ -587,23 +380,23 @@ def _event_objs(e, x, tg):
 
     def payload_type(kind):
         if kind in SLICE_EVENTS:
-            return in_(e, "slice_of")
+            return in_(e, "slice_t")
         if kind in INT_EVENTS:
             return in_(e, "i32")
         return in_(e, "unit")
 
     def tuple_of(base_cv):
-        return _retag(e, base_cv, in_(e, "pt"))
+        return retag_values(e, base_cv, in_(e, "pt"))
 
     def extract(kind):
         if kind in SLICE_EVENTS:
-            payload = e.call(
-                e.lower(in_(e, "slice_of")),
+            payload = e.mb.as_(
                 e.tup(e.mb.field(graft(e, e.v("tv")), e.n(1)), e.mb.field(graft(e, e.v("tv")), e.n(2))),
+                e.lower(in_(e, "slice_t")),
             )
-            return ret_m(e, e.eresult_ok(cve_t(e), _staged(e, payload)))
+            return ret_m(e, e.eresult_ok(cve_t(e), staged_in(e, payload)))
         if kind in INT_EVENTS:
-            return ret_m(e, e.eresult_ok(cve_t(e), _staged(e, e.mb.field(graft(e, e.v("tv")), e.n(3)))))
+            return ret_m(e, e.eresult_ok(cve_t(e), staged_in(e, e.mb.field(graft(e, e.v("tv")), e.n(3)))))
         return ret_m(
             e,
             e.eresult_ok(
@@ -639,7 +432,7 @@ def _event_objs(e, x, tg):
                     e.ret(
                         e.eresult_ok(
                             cve_t(e),
-                            _staged(e, e.eq(e.mb.field(graft(e, e.v("tv")), e.n(0)), e.lower(e.v("vi")))),
+                            staged_in(e, e.eq(e.mb.field(graft(e, e.v("tv")), e.n(0)), e.lower(e.v("vi")))),
                         )
                     ),
                 ),
@@ -649,7 +442,10 @@ def _event_objs(e, x, tg):
                 body(
                     e,
                     e.let("tv", tuple_of(a(e, "base"))),
-                    *[e.if_only(e.eq(a(e, "variant_index"), e.int_of(i)), extract(kind)) for i, kind in enumerate(EVENTS)],
+                    *[
+                        e.if_only(e.eq(a(e, "variant_index"), e.int_of(i)), extract(kind))
+                        for i, kind in enumerate(EVENTS)
+                    ],
                     e.ret(err_cve(e, loc(e), "json: no such event variant")),
                 ),
             ),
@@ -695,14 +491,22 @@ def _buffer_types(e, x):
     """`jbuf`, a byte vec's pointer with json.atz's buffer methods (bytes as ints), and `jview`, a (pointer, length)
     tuple with its view methods."""
     fields = [p(f, ty(e)) for f in BUF_FIELDS]
-    meth = _handle_type(e, x, "jbuf", "jbuf_m", "json byte buffer", fields, {}, BUF_METHODS)
+    meth = handle_type(e, x, "jbuf", "jbuf_m", "json byte buffer", fields, {}, BUF_METHODS)
 
     def vec():
-        return e.mb.as_(_self_v(e), e.lower(e.v("bytes_raw")))
+        return e.mb.as_(self_v(e), e.lower(e.v("bytes_raw")))
 
     def buf_body(kind):
         if kind == "push":
-            return e.call(e.fld(vec(), "push"), e.call(e.lower(e.v("u8")), graft(e, a(e, "argument"))))
+            # The byte is an i32 (json.atz computes bytes as ints): a constant casts (range-checked), a runtime value
+            # wraps.
+            arg = graft(e, a(e, "argument"))
+            u8 = e.lower(e.v("u8"))
+            return e.if_else(
+                is_const(e, xx(e), cve_type(e, a(e, "argument"))),
+                staged_in(e, e.call(e.fld(vec(), "push"), e.mb.as_(arg, u8))),
+                staged_in(e, e.call(e.fld(vec(), "push"), e.call(e.fld(arg, "wrap"), u8))),
+            )
         if kind == "clear":
             return e.call(e.fld(vec(), "clear"), e.tup())
         if kind == "pop":
@@ -710,15 +514,15 @@ def _buffer_types(e, x):
         if kind == "len":
             return e.fld(vec(), "len")
         if kind == "at":
-            return e.call(e.lower(e.v("i32")), e.call(e.fld(vec(), "at"), graft(e, a(e, "argument"))))
+            return e.mb.as_(e.call(e.fld(vec(), "at"), graft(e, a(e, "argument"))), e.lower(e.v("i32")))
         if kind == "slice":
             return e.call(e.fld(vec(), "slice"), e.tup())
         raise AssertionError(kind)
 
-    _method_impl(e, x, meth, "jbuf_m", fields, BUF_METHODS, buf_body)
+    handle_methods(e, x, meth, "jbuf_m", fields, BUF_METHODS, buf_body, host=("push",))
 
     fields = [p(f, ty(e)) for f in VIEW_FIELDS]
-    meth = _handle_type(e, x, "jview", "jview_m", "json byte view", fields, {}, VIEW_METHODS, under="pt2")
+    meth = handle_type(e, x, "jview", "jview_m", "json byte view", fields, {}, VIEW_METHODS, under="pt2")
 
     def tv():
         return graft(e, e.v("tv"))
@@ -727,14 +531,21 @@ def _buffer_types(e, x):
         if kind == "len":
             return e.mb.field(tv(), e.n(1))
         if kind == "at":
-            return e.call(
-                e.lower(e.v("i32")),
+            return e.mb.as_(
                 e.mb.field(e.mb.as_(e.mb.field(tv(), e.n(0)), e.lower(e.v("pu8"))), graft(e, a(e, "argument"))),
+                e.lower(e.v("i32")),
             )
         raise AssertionError(kind)
 
-    _method_impl(
-        e, x, meth, "jview_m", fields, VIEW_METHODS, view_body, prelude=[e.let("tv", _retag(e, in_(e, "self"), e.v("pt2")))]
+    handle_methods(
+        e,
+        x,
+        meth,
+        "jview_m",
+        fields,
+        VIEW_METHODS,
+        view_body,
+        prelude=[e.let("tv", retag_values(e, e.v("recv"), e.v("pt2")))],
     )
 
 
@@ -761,9 +572,8 @@ def _parser_free_body(e, tg):
     d = BODY_MOD
 
     def owned_vec(slot):
-        return e.call(
-            _up(e, e.v("bytes_type"), d),
-            e.mb.as_(_pcell(e, e.v("p"), slot, d), _up(e, e.v("bytes_raw"), d)),
+        return e.mb.as_(
+            e.mb.as_(_pcell(e, e.v("p"), slot, d), _up(e, e.v("bytes_raw"), d)), _up(e, e.v("bytes_type"), d)
         )
 
     return e.seq(
@@ -776,8 +586,8 @@ def _parser_next_body(e, tg):
     d = BODY_MOD
     ops = [
         p("int", _up(e, e.v("i32"), d)),
-        p("read", _up(e, e.v("read"), BODY_HOST)),
-        p("event", e.rec(*[p(kind, _up(e, e.v("ev_" + kind), BODY_HOST)) for kind in EVENTS])),
+        p("read", fn_of(e, _up(e, e.v("read"), BODY_HOST))),
+        p("event", e.rec(*[p(kind, fn_of(e, _up(e, e.v("ev_" + kind), BODY_HOST))) for kind in EVENTS])),
         p("p", e.mb.as_(e.v("p"), _up(e, e.v("places"), BODY_HOST))),
     ]
     return e.seq(e.ret(e.call(_up(e, e.fld(e.v("json"), "next"), d), e.rec(*ops))))
@@ -805,7 +615,7 @@ def _parser_setup(e):
             "owned",
             e.call(
                 e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
-                e.rec(p("under", e.v("raw")), p("destroy", e.v("free"))),
+                e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free")))),
             ),
         )
     )
@@ -814,8 +624,11 @@ def _parser_setup(e):
             e.rec(
                 p("type", e.v("owned")),
                 p("raw", e.v("raw")),
-                p("new", e.v("new")),
-                p("event", e.rec(p("type", e.v("event_t")), *[p(kind, e.v("ev_" + kind)) for kind in EVENTS])),
+                p("new", fn_of(e, e.v("new"))),
+                p(
+                    "event",
+                    e.rec(p("type", e.v("event_t")), *[p(kind, fn_of(e, e.v("ev_" + kind))) for kind in EVENTS]),
+                ),
             )
         )
     )
@@ -830,7 +643,9 @@ def _handle_places(e, slots, cells, vec_slots=()):
     for name, index in cells.items():
         places[name] = lambda self_as, index=index: e.mb.field(self_as("pi32"), e.n(index))
     for name, slot in vec_slots:
-        places[name] = lambda self_as, slot=slot: e.mb.as_(e.mb.field(self_as("ppv"), e.n(slot)), e.lower(in_(e, "buf")))
+        places[name] = lambda self_as, slot=slot: e.mb.as_(
+            e.mb.field(self_as("ppv"), e.n(slot)), e.lower(in_(e, "buf"))
+        )
     return places
 
 
@@ -839,12 +654,12 @@ def _parser_const_fn(e, x, tg):
     places = _handle_places(
         e, {"ctx": PTR_SLOT["ctx"]}, REGISTER_CELL, [("data", PTR_SLOT["data"]), ("stack", PTR_SLOT["stack"])]
     )
-    meth = _handle_type(e, x, "jpt", "jpt_m", "json parser", fields, places, ["next"])
+    meth = handle_type(e, x, "jpt", "jpt_m", "json parser", fields, places, ["next"])
 
     def method_body(kind):
-        return e.call(e.lower(e.v("next")), _self_v(e))
+        return e.call(fn_of(e, e.lower(e.v("next"))), self_v(e))
 
-    _method_impl(e, x, meth, "jpt_m", fields, ["next"], method_body)
+    handle_methods(e, x, meth, "jpt_m", fields, ["next"], method_body)
 
     parts = [
         e.let("argv", a(e, "argument")),
@@ -957,7 +772,7 @@ def _parser_const_fn(e, x, tg):
 def _writer_piece_body(e, tg, piece):
     d = BODY_MOD
     ops = [
-        p("write", _up(e, e.v("write"), BODY_HOST)),
+        p("write", fn_of(e, _up(e, e.v("write"), BODY_HOST))),
         p("w", e.mb.as_(e.v("w"), _up(e, e.v("places"), BODY_HOST))),
     ]
     params = WRITER_PIECES[piece]
@@ -1009,34 +824,34 @@ def _writer_setup(e):
             "owned",
             e.call(
                 e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
-                e.rec(p("under", e.v("raw")), p("destroy", e.v("free"))),
+                e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free")))),
             ),
         )
     )
-    out.append(e.ret(e.rec(p("type", e.v("owned")), p("raw", e.v("raw")), p("new", e.v("new")))))
+    out.append(e.ret(e.rec(p("type", e.v("owned")), p("raw", e.v("raw")), p("new", fn_of(e, e.v("new"))))))
     return e.mb.seq(out)
 
 
 def _writer_const_fn(e, x, tg):
     fields = [p(f, ty(e)) for f in WRITER_FIELDS]
     places = _handle_places(e, {"ctx": 0}, {"pending": PENDING_CELL})
-    meth = _handle_type(e, x, "jwt", "jwt_m", "json writer", fields, places, WRITER_METHODS)
+    meth = handle_type(e, x, "jwt", "jwt_m", "json writer", fields, places, WRITER_METHODS)
 
     def method_body(kind):
         if kind == "clear":
-            return e.mb.set(e.mb.field(_self_v(e, "pi32"), e.n(PENDING_CELL)), e.n(0))
+            return e.mb.set(e.mb.field(self_v(e, "pi32"), e.n(PENDING_CELL)), e.n(0))
         params = WRITER_PIECES[kind]
-        dep = e.lower(e.v(kind))
+        dep = fn_of(e, e.lower(e.v(kind)))
         if not params:
-            return e.call(dep, _self_v(e))
+            return e.call(dep, self_v(e))
         if params == ["v"]:
-            return e.call(dep, e.tup(_self_v(e), graft(e, a(e, "argument"))))
+            return e.call(dep, e.tup(self_v(e), graft(e, a(e, "argument"))))
         return e.seq(
             e.let("s", graft(e, a(e, "argument"))),
-            e.call(dep, e.tup(_self_v(e), e.fld(e.v("s"), "data"), e.fld(e.v("s"), "len"))),
+            e.call(dep, e.tup(self_v(e), e.fld(e.v("s"), "data"), e.fld(e.v("s"), "len"))),
         )
 
-    _method_impl(e, x, meth, "jwt_m", fields, WRITER_METHODS, method_body)
+    handle_methods(e, x, meth, "jwt_m", fields, WRITER_METHODS, method_body)
 
     parts = [
         e.let("argv", a(e, "argument")),
@@ -1162,16 +977,17 @@ def _readers(e, x, tg):
                 e.seq(
                     e.mb.set(
                         e.v("b"),
-                        e.call(
-                            _up(e, e.v("i32"), d),
+                        e.mb.as_(
                             e.mb.field(
                                 e.mb.as_(_pcell(e, e.v("r"), 0, d), _up(e, e.v("pu8"), d)),
                                 _cell(e, e.v("r"), SR_POS_CELL, d),
                             ),
+                            _up(e, e.v("i32"), d),
                         ),
                     ),
                     e.mb.set(
-                        _cell(e, e.v("r"), SR_POS_CELL, d), e.mb.operator_add(_cell(e, e.v("r"), SR_POS_CELL, d), e.n(1))
+                        _cell(e, e.v("r"), SR_POS_CELL, d),
+                        e.mb.operator_add(_cell(e, e.v("r"), SR_POS_CELL, d), e.n(1)),
                     ),
                 ),
             ),
@@ -1197,7 +1013,7 @@ def _readers(e, x, tg):
         ["v", "b"],
         e.call(
             e.fld(e.mb.as_(e.v("v"), _up(e, e.v("bytes_raw"), d)), "push"),
-            e.call(_up(e, e.v("u8"), d), e.v("b")),
+            e.call(e.fld(e.v("b"), "wrap"), _up(e, e.v("u8"), d)),
         ),
     )
     x.append(
@@ -1244,7 +1060,7 @@ def module(e, kind):
     x.append(e.let("bytes", e.call(e.fld(e.v("vec"), "type"), e.v("u8"))))
     for f in ["type", "raw", "new"]:
         x.append(e.let("bytes_" + f, e.fld(e.v("bytes"), f)))
-    x.append(e.let("slice_of", e.fld(e.call(e.fld(e.v("slice"), "type"), e.v("u8")), "of")))
+    x.append(e.let("slice_t", e.fld(e.call(e.fld(e.v("slice"), "type"), e.v("u8")), "type")))
     _event_objs(e, x, tg)
     _buffer_types(e, x)
     _parser_const_fn(e, x, tg)

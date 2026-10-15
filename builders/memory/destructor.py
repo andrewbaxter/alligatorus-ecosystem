@@ -22,13 +22,12 @@ from ..target_mb import (
     bim0,
     body,
     bool_t,
-    cast_from_self,
     cast_to_panic,
     cast_value,
-    const_fn,
     code_none,
     code_t,
     const_eval_in,
+    const_fn,
     cv_no,
     cv_of,
     cve_code,
@@ -57,6 +56,7 @@ from ..target_mb import (
     mk,
     must_v,
     ok_cve,
+    or_b,
     outer,
     reinterpret,
     ret_m,
@@ -67,6 +67,7 @@ from ..target_mb import (
     ty,
     ty_desc,
     type_aspect,
+    type_can_cast_from,
     unwrap_cve_m,
     unwrap_m,
     xx,
@@ -320,13 +321,31 @@ def _owned(e, x):
                 asp_id(e, "bind"),
                 asp_id(e, "initial_bind"),
                 e.mb.eval_aspect_drop_dynamic_id(),
-                asp_id(e, "function"),
                 lv(e, "owned_m_id"),
             ],
             type_aspect(e, xx(e), in_(e, "under"), a(e, "key")),
         ),
-        body(e, e.ret(is_equal(e, xx(e), outer(e), a(e, "source_type")))),
-        cast_from_self(e),
+        # An `under` value casts to the owned type (taking ownership); an owned value is its own type.
+        body(
+            e,
+            e.ret(
+                or_b(
+                    e,
+                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
+                    type_can_cast_from(e, xx(e), loc(e), in_(e, "under"), a(e, "source_type")),
+                )
+            ),
+        ),
+        body(
+            e,
+            e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.if_only(
+                e.not_(cve_has(e, a(e, "cv"))),
+                ret_m(e, err_cve(e, loc(e), "owned: cast source has no value")),
+            ),
+            e.let("v", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), in_(e, "under"), a(e, "cv")))),
+            e.ret(ok_cve(e, _retag_m(e, e.v("v"), outer(e), cve_t(e)))),
+        ),
         e.mb.as_(e.b(True), bool_t(e)),
         body(
             e,
@@ -353,26 +372,6 @@ def _owned(e, x):
                 )
             ),
         ),
-    )
-    # Calling the type converts an `under` value into an owned value.
-    x.append(
-        e.impl_interface(
-            e.v("owned"),
-            asp_iface(e, "function"),
-            p(
-                "call",
-                body(
-                    e,
-                    e.if_only(
-                        e.not_(cve_has(e, a(e, "argument"))),
-                        ret_m(e, err_cve(e, loc(e), "owned: argument has no value")),
-                    ),
-                    e.let("v", unwrap_cve_m(e, cast_value(e, xx(e), loc(e), in_(e, "under"), a(e, "argument")))),
-                    e.ret(ok_cve(e, _retag_m(e, e.v("v"), outer(e), cve_t(e)))),
-                ),
-            ),
-            p("exception_type", e.option_type_lowered_none()),
-        )
     )
     x.append(
         e.impl_interface(
@@ -932,6 +931,7 @@ def _octor(e, x):
             # caller's runtime), so the construction is staged with the inputs grafted in.
             e.let("owned_new", e.lower(e.fld(e.v("owned"), "new"))),
             e.let("dt", cve_type(e, e.v("destroy"))),
+            e.let("has_form", has_b(e, xx(e), e.v("dt"), asp_iface(e, "consume_dynamic"))),
             e.ret(
                 e.eresult_ok(
                     cve_t(e),
@@ -946,25 +946,30 @@ def _octor(e, x):
                                         e.lower(e.v("owned_new")),
                                         e.rec(
                                             p("under", graft(e, e.v("undercv"))),
-                                            # The lifted form of the runtime function value: its type over
-                                            # the target's host object.
+                                            # The destroy function in the caller's runtime: the empty value of its
+                                            # type when the type has no runtime form, else its type over the target's
+                                            # host object.
                                             p(
                                                 "destroy",
-                                                e.call(
-                                                    e.eval_builtin("value_object_const"),
-                                                    e.rec(
-                                                        p("type", e.lower(e.v("dt"))),
-                                                        p(
-                                                            "data",
-                                                            e.call(
-                                                                e.mb.must_reinterpret(),
-                                                                e.tup(
-                                                                    graft(e, e.v("destroy")),
-                                                                    e.mb.builtin("types", "object"),
+                                                e.if_else(
+                                                    e.lower(e.v("has_form")),
+                                                    e.call(
+                                                        e.eval_builtin("value_object_const"),
+                                                        e.rec(
+                                                            p("type", e.lower(e.v("dt"))),
+                                                            p(
+                                                                "data",
+                                                                e.call(
+                                                                    e.mb.must_reinterpret(),
+                                                                    e.tup(
+                                                                        graft(e, e.v("destroy")),
+                                                                        e.mb.builtin("types", "object"),
+                                                                    ),
                                                                 ),
                                                             ),
                                                         ),
                                                     ),
+                                                    e.call(e.eval_builtin("value_empty"), e.lower(e.v("dt"))),
                                                 ),
                                             ),
                                         ),

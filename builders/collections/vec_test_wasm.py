@@ -91,7 +91,7 @@ def module(e):
     body = e.seq(
         e.let("fails", e.mb.as_(e.n(0), lo("t_i32"))),
         e.seq(
-            e.let("v", e.call(lo("ints_type"), e.call(lo("ints_new"), e.tup()))),
+            e.let("v", e.mb.as_(e.call(lo("ints_new"), e.tup()), lo("ints_type"))),
             counted_loop("fill", COUNT, method("v", "push", e.v("i"))),
             check(e.eq(e.fld(e.v("v"), "len"), e.n(COUNT))),
             check(e.mb.operator_ge(e.fld(e.v("v"), "cap"), e.n(COUNT))),
@@ -143,10 +143,10 @@ def module(e):
                     e.n(-1),
                 )
             ),
-            e.let("s", e.call(lo("bytes_type"), e.call(lo("bytes_new"), e.tup()))),
+            e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_type"))),
             *[method("s", "push", e.n(b)) for b in MESSAGE],
             e.mb.set(e.mb.field(lo("iov"), e.n(0)), e.mb.as_(e.fld(e.v("s"), "data"), lo("t_u32"))),
-            e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(lo("t_u32"), e.fld(e.v("s"), "len"))),
+            e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(e.fld(e.fld(e.v("s"), "len"), "wrap"), lo("t_u32"))),
             e.call(
                 lo("fd_write"),
                 e.tup(
@@ -157,7 +157,7 @@ def module(e):
                 ),
             ),
         ),
-        e.call(lo("proc_exit"), e.call(lo("t_u32"), e.v("fails"))),
+        e.call(lo("proc_exit"), e.call(e.fld(e.v("fails"), "wrap"), lo("t_u32"))),
     )
     top.append(
         e.let(

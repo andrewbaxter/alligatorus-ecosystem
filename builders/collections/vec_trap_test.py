@@ -36,7 +36,7 @@ def _llvm(e):
     for f in ["type", "new"]:
         top.append(e.let("ints_" + f, e.fld(e.v("ints"), f)))
     body = e.seq(
-        e.let("v", e.call(e.lower(e.v("ints_type")), e.call(e.lower(e.v("ints_new")), e.tup()))),
+        e.let("v", e.mb.as_(e.call(e.lower(e.v("ints_new")), e.tup()), e.lower(e.v("ints_type")))),
         e.let("x", e.call(e.fld(e.v("v"), "at"), e.n(0))),
         e.ret(e.v("x")),
     )
@@ -121,19 +121,19 @@ def _wasm(e):
         return e.call(e.fld(e.v(v), name), args[0] if len(args) == 1 else e.tup(*args))
 
     body = e.seq(
-        e.let("s", e.call(lo("bytes_type"), e.call(lo("bytes_new"), e.tup()))),
+        e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_type"))),
         *[method("s", "push", e.n(b)) for b in MESSAGE],
         e.mb.set(e.mb.field(lo("iov"), e.n(0)), e.mb.as_(e.fld(e.v("s"), "data"), lo("t_u32"))),
-        e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(lo("t_u32"), e.fld(e.v("s"), "len"))),
+        e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(e.fld(e.fld(e.v("s"), "len"), "wrap"), lo("t_u32"))),
         e.call(
             lo("fd_write"),
             e.tup(
                 e.n(1), e.mb.as_(lo("iov"), lo("t_u32")), e.n(1), e.mb.as_(e.mb.field(lo("iov"), e.n(2)), lo("t_u32"))
             ),
         ),
-        e.let("v", e.call(lo("ints_type"), e.call(lo("ints_new"), e.tup()))),
+        e.let("v", e.mb.as_(e.call(lo("ints_new"), e.tup()), lo("ints_type"))),
         e.let("x", method("v", "at", e.n(0))),
-        e.call(lo("proc_exit"), e.call(lo("t_u32"), e.v("x"))),
+        e.call(lo("proc_exit"), e.call(e.fld(e.v("x"), "wrap"), lo("t_u32"))),
     )
     top.append(
         e.let(

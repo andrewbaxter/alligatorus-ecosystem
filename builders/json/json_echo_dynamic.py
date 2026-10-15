@@ -144,7 +144,7 @@ def module(e):
         )
     body = e.seq(
         e.call(e.lower(e.v("fd_write")), e.tup(e.n(1), e.lower(e.v("iov")), e.n(1), e.lower(e.v("nwritten")))),
-        e.call(e.lower(e.v("proc_exit")), e.call(e.lower(e.v("t_u32")), e.lower(e.fld(e.v("h"), "status")))),
+        e.call(e.lower(e.v("proc_exit")), e.mb.as_(e.lower(e.fld(e.v("h"), "status")), e.lower(e.v("t_u32")))),
     )
     top.append(
         e.let(

@@ -39,6 +39,7 @@ from ..target_mb import (
     code_t,
     cve_has,
     cve_t,
+    cve_type,
     cve_value,
     def_iface,
     def_obj,
@@ -59,6 +60,7 @@ from ..target_mb import (
     mk,
     must_v,
     ok_cve,
+    or_b,
     outer,
     reinterpret,
     ret_m,
@@ -71,6 +73,7 @@ from ..target_mb import (
     ty,
     ty_desc,
     type_aspect,
+    type_can_cast_from,
     unwrap_m,
     xx,
 )
@@ -555,13 +558,31 @@ def _lown(e, x):
                 asp_id(e, "bind"),
                 asp_id(e, "initial_bind"),
                 e.mb.eval_aspect_drop_dynamic_id(),
-                asp_id(e, "function"),
                 lv(e, "lown_m_id"),
             ],
             type_aspect(e, xx(e), in_(e, "under"), a(e, "key")),
         ),
-        body(e, e.ret(is_equal(e, xx(e), outer(e), a(e, "source_type")))),
-        cast_from_self(e),
+        # An `under` value casts to the owner type (taking ownership); an owner value is its own type.
+        body(
+            e,
+            e.ret(
+                or_b(
+                    e,
+                    is_equal(e, xx(e), outer(e), a(e, "source_type")),
+                    type_can_cast_from(e, xx(e), loc(e), in_(e, "under"), a(e, "source_type")),
+                )
+            ),
+        ),
+        body(
+            e,
+            e.if_only(is_equal(e, xx(e), outer(e), cve_type(e, a(e, "cv"))), ret_m(e, ok_cve(e, a(e, "cv")))),
+            e.if_only(
+                e.not_(cve_has(e, a(e, "cv"))),
+                ret_m(e, err_cve(e, loc(e), "lifetime owner: cast source has no value")),
+            ),
+            e.let("v", unwrap_m(e, cast_value(e, xx(e), loc(e), in_(e, "under"), a(e, "cv")), cve_t(e))),
+            e.ret(ok_cve(e, _retag_m(e, e.v("v"), outer(e), cve_t(e)))),
+        ),
         e.mb.as_(e.b(True), bool_t(e)),
         body(
             e,
@@ -592,29 +613,6 @@ def _lown(e, x):
                 )
             ),
         ),
-    )
-    # Calling the type converts an `under` value into an owner value.
-    x.append(
-        e.impl_interface(
-            e.v("lown"),
-            asp_iface(e, "function"),
-            p(
-                "call",
-                body(
-                    e,
-                    e.if_only(
-                        e.not_(cve_has(e, a(e, "argument"))),
-                        ret_m(e, err_cve(e, loc(e), "lifetime owner: argument has no value")),
-                    ),
-                    e.let(
-                        "v",
-                        unwrap_m(e, cast_value(e, xx(e), loc(e), in_(e, "under"), a(e, "argument")), cve_t(e)),
-                    ),
-                    e.ret(ok_cve(e, _retag_m(e, e.v("v"), outer(e), cve_t(e)))),
-                ),
-            ),
-            p("exception_type", e.option_type_lowered_none()),
-        )
     )
     x.append(
         e.impl_interface(

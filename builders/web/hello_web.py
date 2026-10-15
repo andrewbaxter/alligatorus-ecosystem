@@ -88,9 +88,9 @@ def module(e):
                                 e.call(e.lower(e.v("body")), e.tup(e.v("doc"), e.lower(e.v("cell")))),
                                 e.let(
                                     "b",
-                                    e.call(
-                                        e.lower(e.fld(e.v("webidl"), "handle")),
+                                    e.mb.as_(
                                         e.mb.field(e.lower(e.v("cell")), e.n(1)),
+                                        e.lower(e.fld(e.v("webidl"), "handle")),
                                     ),
                                 ),
                                 e.call(e.lower(e.v("append")), e.tup(e.v("b"), e.v("h1"))),

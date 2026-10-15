@@ -649,7 +649,7 @@ def module(e):
         x,
         "ugfn_t",
         e.cat(e.s("uniforms definition function "), to_str(e, in_(e, "kind"))),
-        rt_dispatch(e, str_(e), e.aspect_dispatch(lv(e, "ugfn_m_id"), asp_id(e, "function"))),
+        rt_dispatch(e, str_(e), e.aspect_dispatch(lv(e, "ugfn_m_id"))),
         can_cast_from_self(e),
         cast_from_self(e),
         no_cast_to(e),
@@ -669,107 +669,105 @@ def module(e):
     rt_bind_impl(e, x, "ugfn_t", str_(e))
     rt_use_impl(e, x, "ugfn_t")
     x.append(e.impl_interface(e.v("ugfn_t"), t(e, "ugfn_m"), e.p("kind", in_(e, "kind"))))
-    x.append(
-        e.impl_interface(
-            e.v("ugfn_t"),
-            asp_iface(e, "function"),
-            e.p(
-                "call",
-                body(
+    tm.method(
+        e,
+        x,
+        "ugfn_t",
+        "call",
+        e.rec(e.p("xx", e.types_expr_context()), e.p("loc", loc_t(e)), e.p("argument", cve_t(e))),
+        e.mb.call(e.mb.types_eresult(), cve_t(e)),
+        body(
+            e,
+            e.let("argv", a(e, "argument")),
+            e.if_only(
+                e.not_(cve_has(e, e.v("argv"))),
+                ret_m(e, err_cve(e, loc(e), "uniforms definition argument has no value")),
+            ),
+            e.let("rk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "record"))),
+            e.if_only(
+                e.not_(e.fld(e.v("rk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), "uniforms definition argument must be {mod, name, fields}")),
+            ),
+            e.let(
+                "fields",
+                bim(
                     e,
-                    e.let("argv", a(e, "argument")),
-                    e.if_only(
-                        e.not_(cve_has(e, e.v("argv"))),
-                        ret_m(e, err_cve(e, loc(e), "uniforms definition argument has no value")),
-                    ),
-                    e.let("rk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "record"))),
-                    e.if_only(
-                        e.not_(e.fld(e.v("rk"), "is_some")),
-                        ret_m(e, err_cve(e, loc(e), "uniforms definition argument must be {mod, name, fields}")),
-                    ),
-                    e.let(
-                        "fields",
-                        bim(
-                            e,
-                            asp_iface(e, "record"),
-                            "take_fields",
-                            e.fld(e.v("rk"), "value"),
-                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
-                        ),
-                    ),
-                    e.let("modcv", _field(e, "mod")),
-                    e.let("namecv", _staged(e, graft(e, _field(e, "name")))),
-                    e.if_only(
-                        is_runtime(e, e.v("namecv")),
-                        ret_m(e, err_cve(e, loc(e), "uniforms block name must be constant")),
-                    ),
-                    e.let("fieldscv", _field(e, "fields")),
-                    e.let("block_fn", e.lower(e.fld(e.v("glsl"), "uniform_block_fn"))),
-                    e.let("alloc_fn", e.lower(e.fld(e.v("wasm"), "alloc_fn"))),
-                    e.if_only(
-                        e.eq(in_(e, "kind"), num(e, _ugfn_kind("glsl_fn"))),
-                        ret_m(
-                            e,
-                            ok_cve(
-                                e,
-                                _staged(
-                                    e,
-                                    e.call(
-                                        e.lower(e.v("block_fn")),
-                                        e.rec(
-                                            e.p("mod", graft(e, e.v("modcv"))),
-                                            e.p("name", graft(e, e.v("namecv"))),
-                                            e.p("layout", e.s("std140")),
-                                            e.p("fields", graft(e, e.v("fieldscv"))),
-                                        ),
-                                    ),
-                                ),
-                            ),
-                        ),
-                    ),
-                    e.let(
-                        "layout",
-                        unwrap_m(
-                            e,
-                            try_er(
-                                e,
-                                hf_rec(e, "h_layout", e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("cv", e.v("fieldscv"))),
-                                e.rec(e.p("size", int_t(e)), e.p("fields", e.list_type(lt(e, "ufield")))),
-                            ),
-                            cve_t(e),
-                        ),
-                    ),
-                    e.let(
-                        "refcv",
+                    asp_iface(e, "record"),
+                    "take_fields",
+                    e.fld(e.v("rk"), "value"),
+                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
+                ),
+            ),
+            e.let("modcv", _field(e, "mod")),
+            e.let("namecv", _staged(e, graft(e, _field(e, "name")))),
+            e.if_only(
+                is_runtime(e, e.v("namecv")),
+                ret_m(e, err_cve(e, loc(e), "uniforms block name must be constant")),
+            ),
+            e.let("fieldscv", _field(e, "fields")),
+            e.let("block_fn", e.lower(e.fld(e.v("glsl"), "uniform_block_fn"))),
+            e.let("alloc_fn", e.lower(e.fld(e.v("wasm"), "alloc_fn"))),
+            e.if_only(
+                e.eq(in_(e, "kind"), num(e, _ugfn_kind("glsl_fn"))),
+                ret_m(
+                    e,
+                    ok_cve(
+                        e,
                         _staged(
                             e,
                             e.call(
-                                e.lower(e.v("alloc_fn")),
+                                e.lower(e.v("block_fn")),
                                 e.rec(
                                     e.p("mod", graft(e, e.v("modcv"))),
                                     e.p("name", graft(e, e.v("namecv"))),
-                                    e.p("size", e.lower(e.fld(e.v("layout"), "size"))),
+                                    e.p("layout", e.s("std140")),
+                                    e.p("fields", graft(e, e.v("fieldscv"))),
                                 ),
                             ),
                         ),
                     ),
-                    e.ret(
-                        tag_value(
-                            e,
-                            e.v("refcv"),
-                            mk(
-                                e,
-                                "ut_block",
-                                e.p("name", _const_str(e, e.v("namecv"))),
-                                e.p("size", e.fld(e.v("layout"), "size")),
-                                e.p("fields", e.fld(e.v("layout"), "fields")),
-                            ),
-                        )
+                ),
+            ),
+            e.let(
+                "layout",
+                unwrap_m(
+                    e,
+                    try_er(
+                        e,
+                        hf_rec(e, "h_layout", e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("cv", e.v("fieldscv"))),
+                        e.rec(e.p("size", int_t(e)), e.p("fields", e.list_type(lt(e, "ufield")))),
+                    ),
+                    cve_t(e),
+                ),
+            ),
+            e.let(
+                "refcv",
+                _staged(
+                    e,
+                    e.call(
+                        e.lower(e.v("alloc_fn")),
+                        e.rec(
+                            e.p("mod", graft(e, e.v("modcv"))),
+                            e.p("name", graft(e, e.v("namecv"))),
+                            e.p("size", e.lower(e.fld(e.v("layout"), "size"))),
+                        ),
                     ),
                 ),
             ),
-            e.p("exception_type", e.option_type_lowered_none()),
-        )
+            e.ret(
+                tag_value(
+                    e,
+                    e.v("refcv"),
+                    mk(
+                        e,
+                        "ut_block",
+                        e.p("name", _const_str(e, e.v("namecv"))),
+                        e.p("size", e.fld(e.v("layout"), "size")),
+                        e.p("fields", e.fld(e.v("layout"), "fields")),
+                    ),
+                )
+            ),
+        ),
     )
     x.append(e.finish(e.v("d")))
     defs = []
@@ -778,13 +776,23 @@ def module(e):
 
     top = []
     top.append(e.let("k", e.lower(e.mb.seq(x))))
+    top.append(e.let("d", e.define()))
     exports = []
     for kind in UGFN_KINDS:
-        exports.append(
-            e.p(
-                kind,
-                e.mb.as_(e.call(e.fld(e.v("k"), "ugfn_t_new"), e.rec(e.p("kind", e.int_of(_ugfn_kind(kind))))), ty(e)),
-            )
+        top.append(e.let(kind + "_o", e.call(e.fld(e.v("k"), "ugfn_t_new"), e.rec(e.p("kind", e.int_of(_ugfn_kind(kind)))))))
+        tm.const_fn(
+            e,
+            top,
+            kind + "_b",
+            TARGET + "." + kind,
+            e.call_m(
+                e.lower(e.v(kind + "_o")),
+                "call",
+                e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("argument", a(e, "argument"))),
+            ),
         )
+        top.append(e.let(kind, e.fld(e.v(kind + "_b"), "func")))
+        exports.append(e.p(kind, e.v(kind)))
+    top.append(e.finish(e.v("d")))
     top.append(e.ret(e.rec(*exports)))
     return top

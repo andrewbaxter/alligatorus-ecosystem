@@ -1,5 +1,6 @@
 """web-wiggle.atz: wasm + WebGL2 demo drawing a wiggling square via glsl shaders and a uniform block."""
 
+from ..target_mb import fn_of, int_as
 from ..wasm.wat import bind_types
 
 BLOCK = "u"
@@ -11,11 +12,11 @@ def _g(e, name):
 
 
 def _fn(e, name, arg):
-    return e.call(e.lower(e.fld(e.v("glsl"), "builtins", name)), arg)
+    return e.call(fn_of(e, e.lower(e.fld(e.v("glsl"), "builtins", name))), arg)
 
 
 def _fn_tup(e, name, *args):
-    return e.call(e.lower(e.fld(e.v("glsl"), "builtins", name)), e.tup(*args))
+    return e.call(fn_of(e, e.lower(e.fld(e.v("glsl"), "builtins", name))), e.tup(*args))
 
 
 def block_fields(e):
@@ -47,16 +48,22 @@ def shaders(e, out):
             e.let(
                 "x",
                 e.mb.operator_sub(
-                    e.call(_g(e, "float"), e.mb.operator_shl(e.mb.operator_and(id_, e.n(1)), e.n(2))), e.n(1)
+                    e.call(
+                        e.fld(e.mb.operator_shl(e.mb.operator_and(id_, e.n(1)), e.n(2)), "to_float"), _g(e, "float")
+                    ),
+                    e.n(1),
                 ),
             ),
             e.let(
                 "y",
                 e.mb.operator_sub(
-                    e.call(_g(e, "float"), e.mb.operator_shl(e.mb.operator_and(id_, e.n(2)), e.n(1))), e.n(1)
+                    e.call(
+                        e.fld(e.mb.operator_shl(e.mb.operator_and(id_, e.n(2)), e.n(1)), "to_float"), _g(e, "float")
+                    ),
+                    e.n(1),
                 ),
             ),
-            e.mb.set(e.lower(e.v("gl_Position")), e.call(_g(e, "vec4"), e.tup(e.v("x"), e.v("y"), e.n(0), e.n(1)))),
+            e.mb.set(e.lower(e.v("gl_Position")), e.mb.as_(e.tup(e.v("x"), e.v("y"), e.n(0), e.n(1)), _g(e, "vec4"))),
         )
     )
     u = e.lower(e.v("u"))
@@ -106,12 +113,14 @@ def shaders(e, out):
             e.let("cov", _fn_tup(e, "smoothstep", e.mb.operator_neg(e.v("aa")), e.v("aa"), e.v("dist"))),
             e.mb.set(
                 e.lower(e.v("color")),
-                e.call(
-                    _g(e, "vec4"),
+                e.mb.as_(
                     e.tup(
-                        _fn_tup(e, "mix", e.call(_g(e, "vec3"), e.n(0)), e.call(_g(e, "vec3"), e.n(0.5)), e.v("cov")),
+                        _fn_tup(
+                            e, "mix", e.mb.as_(e.n(0), _g(e, "vec3")), e.mb.as_(e.n(0.5), _g(e, "vec3")), e.v("cov")
+                        ),
                         e.n(1),
                     ),
+                    _g(e, "vec4"),
                 ),
             ),
         )
@@ -327,10 +336,13 @@ def module(e):
             e.let("cw", _call(e, "h_client_width", e.v("canvas"))),
             e.let(
                 "px",
-                e.call(e.lower(e.v("t_i32")), e.mb.operator_mul(e.call(e.lower(e.v("t_f64")), e.v("cw")), e.v("dpr"))),
+                e.call(
+                    e.fld(e.mb.operator_mul(e.mb.as_(e.v("cw"), e.lower(e.v("t_f64"))), e.v("dpr")), "trunc"),
+                    e.lower(e.v("t_i32")),
+                ),
             ),
-            _call(e, "h_width", e.v("canvas"), e.call(e.lower(e.v("t_u32")), px)),
-            _call(e, "h_height", e.v("canvas"), e.call(e.lower(e.v("t_u32")), px)),
+            _call(e, "h_width", e.v("canvas"), int_as(e, px, e.lower(e.v("t_u32")))),
+            _call(e, "h_height", e.v("canvas"), int_as(e, px, e.lower(e.v("t_u32")))),
             _call(e, "h_get_context", e.v("canvas"), webgl2[0], webgl2[1], e.n(0), e.n(0), e.lower(e.v("out"))),
             e.let("gl", out),
             e.mb.set(_cell(e, "cells", 1), e.v("gl")),
@@ -355,7 +367,10 @@ def module(e):
             _call(e, "h_viewport", e.v("gl"), e.n(0), e.n(0), px, px),
             e.mb.set(
                 e.fld(e.lower(e.v("ub")), "resolution"),
-                e.tup(e.call(e.lower(e.v("t_f32")), px), e.call(e.lower(e.v("t_f32")), px)),
+                e.tup(
+                    e.call(e.fld(px, "to_float"), e.lower(e.v("t_f32"))),
+                    e.call(e.fld(px, "to_float"), e.lower(e.v("t_f32"))),
+                ),
             ),
             e.let("cb", e.call(e.lower(e.fld(e.v("webidl"), "callback")), e.tup(frame[0], frame[1]))),
             _call(e, "h_raf", e.v("win"), e.v("cb")),
@@ -368,7 +383,7 @@ def module(e):
         e.seq(
             e.mb.set(
                 e.fld(e.lower(e.v("ub")), "time"),
-                e.call(e.lower(e.v("t_f32")), e.mb.operator_mul(e.v("t"), e.n(0.001))),
+                e.call(e.fld(e.mb.operator_mul(e.v("t"), e.n(0.001)), "to_float"), e.lower(e.v("t_f32"))),
             ),
             e.let("gl", _cell(e, "cells", 1)),
             _call(

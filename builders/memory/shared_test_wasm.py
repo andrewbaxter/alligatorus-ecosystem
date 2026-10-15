@@ -3,6 +3,7 @@ destroy calls, expected 3: one block shared four ways (one clone dropped early),
 moved."""
 
 from ..wasm.wat import bind_types
+from ..target_mb import fn_of
 
 EXPECTED_DESTROYS = 3
 
@@ -57,7 +58,7 @@ def module(e):
         return e.lower(e.v(name))
 
     def cell():
-        return e.mb.field(e.mb.as_(e.call(lo("count"), e.tup()), lo("t_pi32")), e.n(0))
+        return e.mb.field(e.mb.as_(e.call(fn_of(e, lo("count")), e.tup()), lo("t_pi32")), e.n(0))
 
     setup.append(
         e.let(
@@ -125,7 +126,7 @@ def module(e):
         return e.call(e.fld(lo("heap"), "malloc"), e.n(n))
 
     def owned(v):
-        return e.call(lo("sp_type"), v)
+        return e.mb.as_(v, lo("sp_type"))
 
     def adopt(v):
         return e.call(lo("sp_adopt"), v)
@@ -144,9 +145,9 @@ def module(e):
             e.let("g", e.call(e.fld(e.v("f"), "move"), e.tup())),
         ),
         e.if_else(
-            e.eq(cell(), e.mb.field(e.call(lo("expected"), e.tup()), e.n(0))),
-            e.call(lo("proc_exit"), e.call(lo("t_u32"), cell())),
-            e.call(lo("proc_exit"), e.call(lo("t_u32"), e.n(100))),
+            e.eq(cell(), e.mb.field(e.call(fn_of(e, lo("expected")), e.tup()), e.n(0))),
+            e.call(lo("proc_exit"), e.call(e.fld(cell(), "wrap"), lo("t_u32"))),
+            e.call(lo("proc_exit"), e.mb.as_(e.n(100), lo("t_u32"))),
         ),
     )
     top.append(

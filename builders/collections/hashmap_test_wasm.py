@@ -105,7 +105,7 @@ def module(e):
     body = e.seq(
         e.let("fails", e.mb.as_(e.n(0), lo("t_i32"))),
         e.seq(
-            e.let("mp", e.call(lo("imap_type"), e.call(lo("imap_new"), e.tup()))),
+            e.let("mp", e.mb.as_(e.call(lo("imap_new"), e.tup()), lo("imap_type"))),
             counted_loop("fill", COUNT, method("mp", "put", e.v("i"), e.mb.operator_mul(e.v("i"), e.n(3)))),
             check(e.eq(e.fld(e.v("mp"), "len"), e.n(COUNT))),
             check(truthy(method("mp", "has", e.n(150)))),
@@ -155,7 +155,7 @@ def module(e):
             method("mp", "clear", e.tup()),
             check(e.eq(e.fld(e.v("mp"), "len"), e.n(0))),
             check(e.not_(truthy(method("mp", "has", e.n(7))))),
-            e.let("st", e.call(lo("iset_type"), e.call(lo("iset_new"), e.tup()))),
+            e.let("st", e.mb.as_(e.call(lo("iset_new"), e.tup()), lo("iset_type"))),
             counted_loop("fills", 50, method("st", "add", e.v("i"))),
             check(e.eq(e.fld(e.v("st"), "len"), e.n(50))),
             check(truthy(method("st", "has", e.n(25)))),
@@ -166,7 +166,7 @@ def module(e):
             method("st", "add", e.n(25)),
             check(e.eq(e.fld(e.v("st"), "len"), e.n(50))),
         ),
-        e.call(lo("proc_exit"), e.call(lo("t_u32"), e.v("fails"))),
+        e.call(lo("proc_exit"), e.call(e.fld(e.v("fails"), "wrap"), lo("t_u32"))),
     )
     top.append(func("_start", [], "start_fn_t", body))
     top.append(e.call_m(e.v("m"), "export", e.s("_start")))

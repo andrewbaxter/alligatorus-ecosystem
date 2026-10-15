@@ -4,7 +4,7 @@
 - `under` is a constant pointer type whose block starts with a 4-byte count that this module owns; `destroy` is a
   constant callable `fn(under) -> void` (a `func_dep` or an extern: the release dependency calls it, so it cannot be
   a module-bound function value) run when the count reaches zero;
-- `adopt(p)` sets the count to 1 and yields `p`; `clone(p)` adds one and yields `p`; wrap either with `type(...)`
+- `adopt(p)` sets the count to 1 and yields `p`; `clone(p)` adds one and yields `p`; cast either `as type`
   to get an owned value;
 - dropping an owned value runs `shared_<under>_release`, which subtracts one and, at zero, calls `destroy(p)` then
   frees the block through the target's allocator (wasm-alloc.atz or libc).
@@ -14,6 +14,7 @@ The three functions are dependencies (`func_dep`): a module gets them when its c
 from . import destructor
 from ..eco_mb import p
 from ..target_mb import (
+    fn_of,
     a,
     asp_iface,
     bim,
@@ -75,7 +76,7 @@ def _release_body(e):
         e.if_else(
             e.eq(e.v("n"), e.n(0)),
             e.seq(
-                e.call(_up(e, e.v("destroy"), BODY_HOST), e.v("p")),
+                e.call(fn_of(e, _up(e, e.v("destroy"), BODY_HOST)), e.v("p")),
                 e.call(_up(e, e.fld(e.v("heap"), "free"), BODY_MOD), e.mb.as_(e.v("p"), _lo(e, "pv"))),
             ),
             e.mb.set(_count_cell(e), e.v("n")),
@@ -107,11 +108,13 @@ def _setup(e):
             "owned",
             e.call(
                 e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
-                e.rec(p("under", e.v("under")), p("destroy", e.v("release"))),
+                e.rec(p("under", e.v("under")), p("destroy", fn_of(e, e.v("release")))),
             ),
         )
     )
-    out.append(e.ret(e.rec(p("type", e.v("owned")), p("adopt", e.v("adopt")), p("clone", e.v("clone")))))
+    out.append(
+        e.ret(e.rec(p("type", e.v("owned")), p("adopt", fn_of(e, e.v("adopt"))), p("clone", fn_of(e, e.v("clone")))))
+    )
     return e.mb.seq(out)
 
 
