@@ -4690,8 +4690,29 @@ def module(e):
                     count_let(e, "pn"),
                     count_loop(e, "pn", e.v("entries")),
                     # The bindings as they stand after the body (a parameter's setter may have replaced its
-                    # binding: an owned parameter moved out is dropped as moved), by the parameters' names.
-                    e.let("cur", e.call(e.eval_builtin("scope_bindings"), e.v("sc"))),
+                    # binding: an owned parameter moved out is dropped as moved), read off the scope's levels by
+                    # the parameters' names.
+                    e.let("cur", e.map_new(e.mb.types_constkey(), e.mb.eval_binding())),
+                    e.foreach(
+                        e.fld(e.v("sc"), "levels"),
+                        "lv",
+                        e.match_of(
+                            e.v("lv"),
+                            "l",
+                            e.seq(),
+                            e.p(
+                                "entry",
+                                e.if_only(
+                                    e.fld(e.fld(e.v("l"), "name"), "is_some"),
+                                    e.call_m(
+                                        e.v("cur"),
+                                        "put",
+                                        e.tup(e.fld(e.fld(e.v("l"), "name"), "value"), e.fld(e.v("l"), "binding")),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
                     e.let("di", e.rec(e.p("v", e.int_of(0)))),
                     e.foreach(
                         e.v("entries"),
