@@ -7,6 +7,7 @@ their names for the module's text helpers."""
 
 from .. import target_mb
 from ..core import values
+from .. import target_mb as tm
 from ..target_mb import (
     a,
     acc,
@@ -626,13 +627,7 @@ def module(e):
             e.v("jval"),
             e.mb.eval_value(),
             e.p("type", in_(e, "ty")),
-            e.p(
-                "exporter",
-                e.eresult_ok(
-                    e.mb.builtin("eval", "artifact_exporter"),
-                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("jval"), "type"))),
-                ),
-            ),
+            e.p("artifact_exporter", tm.artifact_exporter_impl(e, "jval")),
         )
     )
     accessor(e, x, "jtarget", "mod", _jmod_t(e))

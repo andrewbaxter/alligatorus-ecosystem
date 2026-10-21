@@ -3281,13 +3281,7 @@ def _def_data(e, x):
             e.v("gval"),
             e.mb.eval_value(),
             e.p("type", in_(e, "ty")),
-            e.p(
-                "exporter",
-                e.eresult_ok(
-                    e.mb.builtin("eval", "artifact_exporter"),
-                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("gval"), "type"))),
-                ),
-            ),
+            e.p("artifact_exporter", tm.artifact_exporter_impl(e, "gval")),
         )
     )
     def_obj(

@@ -523,20 +523,22 @@ def p_(e, key):
     return e.fld(e.v("p"), key)
 
 
+def artifact_exporter_impl(e, obj):
+    xx_ = e.v("arg")
+    dyn_const = e.fld(lookup(e, xx_, lt(e, obj), asp_iface(e, "dynamic_const")), "value")
+    const_form = bim(e, asp_iface(e, "dynamic_const"), "const_form", dyn_const, xx_)
+    aspect = e.fld(lookup(e, xx_, const_form, asp_iface(e, "artifact")), "value")
+    return e.opt_some(e.eval_builtin("artifact_exporter"), bim0(e, asp_iface(e, "artifact"), "exporter", aspect))
+
+
 def self_type(e, x, obj, desc, dispatch, can_cast_from, cast_from, can_cast_to, cast_to, is_equal_):
     x.append(e.impl_interface(e.v(obj), asp_iface(e, "type"), p("type", body(e, e.ret(outer(e))))))
     x.append(
         e.impl_interface(
             e.v(obj),
             e.mb.eval_type(),
+            p("artifact_exporter", artifact_exporter_impl(e, obj)),
             p("desc", desc),
-            p(
-                "exporter",
-                e.opt_some(
-                    e.mb.builtin("eval", "artifact_exporter"),
-                    e.call(e.eval_builtin("source_object_exporter"), e.lower(t(e, obj))),
-                ),
-            ),
             p("aspect", dispatch),
             p("can_cast_from", can_cast_from),
             p("cast_from", cast_from),

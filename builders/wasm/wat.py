@@ -4071,13 +4071,7 @@ def module(e):
             e.v("wval"),
             e.mb.eval_value(),
             e.p("type", in_(e, "ty")),
-            e.p(
-                "exporter",
-                e.eresult_ok(
-                    e.mb.builtin("eval", "artifact_exporter"),
-                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("wval"), "type"))),
-                ),
-            ),
+            e.p("artifact_exporter", tm.artifact_exporter_impl(e, "wval")),
         )
     )
     accessor(e, x, "wtarget", "mod", _wmod_t(e))

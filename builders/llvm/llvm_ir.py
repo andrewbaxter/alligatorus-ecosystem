@@ -19,6 +19,7 @@ from collections import namedtuple
 
 from ..core import meta, values
 from .. import target_mb
+from .. import target_mb as tm
 from ..target_mb import (
     panic_errs,
     a,
@@ -3991,13 +3992,7 @@ def module(e):
             e.v("lval"),
             e.mb.eval_value(),
             e.p("type", in_(e, "ty")),
-            e.p(
-                "exporter",
-                e.eresult_ok(
-                    e.mb.builtin("eval", "artifact_exporter"),
-                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("lval"), "type"))),
-                ),
-            ),
+            e.p("artifact_exporter", tm.artifact_exporter_impl(e, "lval")),
         )
     )
     accessor(e, x, "lfield", "name", str_(e))
@@ -6261,13 +6256,7 @@ def module(e):
             e.v("lrange"),
             e.mb.eval_value(),
             e.p("type", in_(e, "t")),
-            e.p(
-                "exporter",
-                e.eresult_ok(
-                    e.mb.builtin("eval", "artifact_exporter"),
-                    e.call(e.eval_builtin("source_object_exporter"), e.lower(e.fld(e.v("lrange"), "type"))),
-                ),
-            ),
+            e.p("artifact_exporter", tm.artifact_exporter_impl(e, "lrange")),
         )
     )
     self_type(
