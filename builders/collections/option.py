@@ -193,7 +193,7 @@ def _objs(e, x):
                 e,
                 ok_cve(
                     e,
-                    cv_of(e, _codes(e, cve_code(e, a(e, "self")), cve_code(e, e.v("o"))), cve_value(e, e.v("o"))),
+                    cv_of(e, _codes(e, cve_code(e, a(e, "function")), cve_code(e, e.v("o"))), cve_value(e, e.v("o"))),
                 ),
             ),
         )

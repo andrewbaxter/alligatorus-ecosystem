@@ -366,14 +366,14 @@ def _ref_field(e, x, obj, under, under_x, extra=None):
                         e.not_(e.fld(e.v("uf"), "is_some")),
                         ret_m(e, err_cve(e, loc(e), "the value has no fields")),
                     ),
-                    e.let("v", _retag_m(e, a(e, "self"), under(), cve_t(e))),
+                    e.let("v", _retag_m(e, a(e, "value"), under(), cve_t(e))),
                     e.ret(
                         bim(
                             e,
                             asp_iface(e, "field"),
                             "field",
                             e.fld(e.v("uf"), "value"),
-                            _rec_xl(e, p("self", e.v("v")), p("key", a(e, "key"))),
+                            _rec_xl(e, p("value", e.v("v")), p("key", a(e, "key"))),
                         )
                     ),
                 ),
@@ -723,7 +723,7 @@ def _sealed(e, x):
                             e.call(
                                 e.eval_builtin("value_object_const"),
                                 e.rec(
-                                    p("type", mk(e, "sseal", p("ref", outer(e)), p("self", a(e, "self")))),
+                                    p("type", mk(e, "sseal", p("ref", outer(e)), p("self", a(e, "value")))),
                                     p("data", e.tup()),
                                 ),
                             ),
@@ -757,14 +757,14 @@ def _sealed(e, x):
                         e.not_(e.fld(e.v("us"), "is_some")), ret_m(e, err_cve(e, loc(e), "the value is not assignable"))
                     ),
                     e.let("nv", unwrap_m(e, cast_value(e, xx(e), loc(e), runder(), a(e, "value")), cve_t(e))),
-                    e.let("sv", _retag_m(e, a(e, "self"), runder(), cve_t(e))),
+                    e.let("sv", _retag_m(e, a(e, "target"), runder(), cve_t(e))),
                     e.ret(
                         bim(
                             e,
                             e.mb.eval_aspect_set(),
                             "set",
                             e.fld(e.v("us"), "value"),
-                            _rec_xl(e, p("self", e.v("sv")), p("value", e.v("nv"))),
+                            _rec_xl(e, p("target", e.v("sv")), p("value", e.v("nv"))),
                         )
                     ),
                 ),

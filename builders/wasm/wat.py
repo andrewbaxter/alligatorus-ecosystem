@@ -250,7 +250,7 @@ def _conv_methods(e, x):
                                     xx(e),
                                     loc(e),
                                     _xmod(e),
-                                    cv_of(e, cve_code(e, a(e, "self")), cve_value(e, recv_of(e))),
+                                    cv_of(e, cve_code(e, a(e, "function")), cve_value(e, recv_of(e))),
                                 ),
                                 cve_t(e),
                             ),
@@ -839,7 +839,7 @@ def _set_impl(e, x, obj):
                                 e.p("loc", loc(e)),
                                 e.p("mod", _xmod(e)),
                                 e.p("ty", outer(e)),
-                                e.p("self", a(e, "self")),
+                                e.p("self", a(e, "target")),
                                 e.p("value", a(e, "value")),
                             ),
                             cve_t(e),
@@ -1298,7 +1298,7 @@ def _tuple_type(e, x):
                     e.let("ki", e.rec(e.p("v", e.int_of(0)))),
                     e.foreach(
                         e.match_of(
-                            e.call_m(_wval_of(e, a(e, "self")), "source", e.tup()),
+                            e.call_m(_wval_of(e, a(e, "value")), "source", e.tup()),
                             "s",
                             e.list_new(lt(e, "wval")),
                             e.p("multi", e.v("s")),
@@ -1307,7 +1307,7 @@ def _tuple_type(e, x):
                         e.seq(
                             e.if_only(
                                 e.eq(e.fld(e.v("ki"), "v"), e.v("k")),
-                                ret_m(e, ok_cve(e, cv_of(e, cve_code(e, a(e, "self")), e.v("q")))),
+                                ret_m(e, ok_cve(e, cv_of(e, cve_code(e, a(e, "value")), e.v("q")))),
                             ),
                             e.incr(e.fld(e.v("ki"), "v")),
                         ),
@@ -3580,7 +3580,7 @@ def module(e):
                         e.rec(
                             e.p("xx", xx(e)),
                             e.p("loc", loc(e)),
-                            e.p("self", e.v("ref")),
+                            e.p("function", e.v("ref")),
                             e.p("argument", a(e, "argument")),
                         ),
                     ),
@@ -5678,7 +5678,7 @@ def module(e):
                     e.let(
                         "pv",
                         unwrap_cve_m(
-                            e, try_er(e, _operand(e, xx(e), loc(e), _xmod(e), outer(e), a(e, "self")), cve_t(e))
+                            e, try_er(e, _operand(e, xx(e), loc(e), _xmod(e), outer(e), a(e, "value")), cve_t(e))
                         ),
                     ),
                     e.let("i32", _int_ty(e, "i32")),
@@ -5923,8 +5923,8 @@ def module(e):
                 body(
                     e,
                     e.let("out", _insts_new(e)),
-                    _append_code(e, e.v("out"), cve_code(e, a(e, "self"))),
-                    e.let("fnv", _wval_of(e, a(e, "self"))),
+                    _append_code(e, e.v("out"), cve_code(e, a(e, "function"))),
+                    e.let("fnv", _wval_of(e, a(e, "function"))),
                     e.let("args", e.list_new(lt(e, "wval"))),
                     e.let("pmap", e.map_new(str_(e), ty(e))),
                     e.let("pn", e.rec(e.p("v", e.int_of(0)))),
@@ -6310,12 +6310,12 @@ def module(e):
                                 e.p("xx", xx(e)),
                                 e.p("loc", loc(e)),
                                 e.p(
-                                    "self",
+                                    "function",
                                     hf_rec(
                                         e,
                                         "h_gval",
                                         e.p("mod", _xmod(e)),
-                                        e.p("cv", a(e, "self")),
+                                        e.p("cv", a(e, "function")),
                                         e.p("base", in_(e, "base")),
                                     ),
                                 ),
@@ -6346,12 +6346,12 @@ def module(e):
                                 e.p("xx", xx(e)),
                                 e.p("loc", loc(e)),
                                 e.p(
-                                    "self",
+                                    "value",
                                     hf_rec(
                                         e,
                                         "h_gval",
                                         e.p("mod", _xmod(e)),
-                                        e.p("cv", a(e, "self")),
+                                        e.p("cv", a(e, "value")),
                                         e.p("base", in_(e, "base")),
                                     ),
                                 ),
@@ -6452,12 +6452,12 @@ def module(e):
                                     e.p("xx", xx(e)),
                                     e.p("loc", loc(e)),
                                     e.p(
-                                        "self",
+                                        "function",
                                         hf_rec(
                                             e,
                                             "h_gval",
                                             e.p("mod", _xmod(e)),
-                                            e.p("cv", a(e, "self")),
+                                            e.p("cv", a(e, "function")),
                                             e.p("base", in_(e, "base")),
                                         ),
                                     ),
@@ -7282,7 +7282,7 @@ def module(e):
                 body(
                     e,
                     e.let("out", _insts_new(e)),
-                    push(e, e.v("out"), _inst(e, "label", e.p("name", e.call_m(_mod(e), "label_of", a(e, "self"))))),
+                    push(e, e.v("out"), _inst(e, "label", e.p("name", e.call_m(_mod(e), "label_of", a(e, "key"))))),
                     _append_code(e, e.v("out"), a(e, "cleanup")),
                     push(e, e.v("out"), _br_inst(e, e.call_m(_mod(e), "label_of", a(e, "next")))),
                     e.ret(e.eresult_ok(code_t(e), _code_of(e, e.v("out")))),

@@ -147,7 +147,7 @@ def _place(e, self_cv, kind, byte_offset):
                     e.rec(
                         e.p("xx", xx(e)),
                         e.p("loc", loc(e)),
-                        e.p("self", e.v("__pv")),
+                        e.p("value", e.v("__pv")),
                         e.p("key", _int_cve(e, e.mb.operator_div(byte_offset, e.int_of(4)))),
                     ),
                 ),
@@ -424,7 +424,7 @@ def module(e):
                         ret_m(e, err_cve(e, loc(e), "uniforms: field must be a constant string")),
                     ),
                     e.let("key", _const_str(e, a(e, "key"))),
-                    e.if_only(e.eq(e.v("key"), e.s("ptr")), ret_m(e, tag_value(e, a(e, "self"), e.lower_v("t_gpv")))),
+                    e.if_only(e.eq(e.v("key"), e.s("ptr")), ret_m(e, tag_value(e, a(e, "value"), e.lower_v("t_gpv")))),
                     e.if_only(e.eq(e.v("key"), e.s("size")), ret_m(e, ok_cve(e, _int_cve(e, in_(e, "size"))))),
                     e.foreach(
                         in_(e, "fields"),
@@ -444,7 +444,7 @@ def module(e):
                                             e,
                                             _place(
                                                 e,
-                                                a(e, "self"),
+                                                a(e, "value"),
                                                 e.call_m(e.v("f"), "kind", e.tup()),
                                                 e.call_m(e.v("f"), "offset", e.tup()),
                                             ),
@@ -455,7 +455,7 @@ def module(e):
                                     e,
                                     tag_value(
                                         e,
-                                        a(e, "self"),
+                                        a(e, "value"),
                                         mk(
                                             e,
                                             "ut_vec",
@@ -555,7 +555,7 @@ def module(e):
                         or_b(e, e.mb.operator_lt(e.v("idx"), num(e, 0)), e.mb.operator_ge(e.v("idx"), count)),
                         ret_m(e, err_cve(e, loc(e), "uniforms: component index out of range")),
                     ),
-                    e.ret(ok_cve(e, _place(e, a(e, "self"), in_(e, "kind"), elem_offset))),
+                    e.ret(ok_cve(e, _place(e, a(e, "value"), in_(e, "kind"), elem_offset))),
                 ),
             ),
             e.p("type_opt", e.option_type_lowered_none()),
@@ -602,7 +602,7 @@ def module(e):
                         "ec",
                         e.seq(
                             e.let("idx", e.fld(e.v("idxc"), "v")),
-                            e.let("pl", _place(e, a(e, "self"), in_(e, "kind"), elem_offset)),
+                            e.let("pl", _place(e, a(e, "target"), in_(e, "kind"), elem_offset)),
                             e.let("et", _elem_type(e, in_(e, "kind"))),
                             push(
                                 e,
@@ -617,7 +617,7 @@ def module(e):
                                         e.rec(
                                             e.p("xx", xx(e)),
                                             e.p("loc", loc(e)),
-                                            e.p("self", e.v("pl")),
+                                            e.p("target", e.v("pl")),
                                             e.p("value", e.v("ec")),
                                         ),
                                     ),

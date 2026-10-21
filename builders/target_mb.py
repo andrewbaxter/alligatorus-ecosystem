@@ -96,15 +96,17 @@ def hf_rec(e, fn, *fields):
 
 
 def im0(e, iface, method, recv):
-    return e.call(e.fld(lt(e, iface), method), recv)
+    """Calls the zero-argument method `method` of the lowered interface `iface` on `recv`."""
+    return e.pipe(recv, e.fld(lt(e, iface), method), e.tup())
 
 
 def bim(e, iface, method, recv, arg):
-    return e.call(e.fld(iface, method), e.tup(recv, arg))
+    """Calls `method` of the interface type `iface` on `recv` with `arg` (a tuple, record or single value)."""
+    return e.pipe(recv, e.fld(iface, method), arg)
 
 
 def bim0(e, iface, method, recv):
-    return e.call(e.fld(iface, method), recv)
+    return e.pipe(recv, e.fld(iface, method), e.tup())
 
 
 def lookup(e, xx_, typ, iface_type):
@@ -144,7 +146,7 @@ def cve_code(e, cve_tp):
 
 
 def cve_type(e, cve_tp):
-    return e.call(e.fld(e.mb.eval_value(), "type"), cve_value(e, cve_tp))
+    return e.pipe(cve_value(e, cve_tp), e.fld(e.mb.eval_value(), "type"), e.tup())
 
 
 def cast_value(e, xx_, loc_, typ, cv):
@@ -294,7 +296,7 @@ def call_result(e, result_expr):
         e.let("__r", result_expr),
         e.let(
             "__c",
-            unwrap_m(e, code_seq(e, cve_code(e, a(e, "self")), cve_code(e, e.v("__r"))), e.mb.types_cve()),
+            unwrap_m(e, code_seq(e, cve_code(e, a(e, "function")), cve_code(e, e.v("__r"))), e.mb.types_cve()),
         ),
         ret_m(
             e,
@@ -422,6 +424,8 @@ def returns_to(expr, label):
         return returns_to(v["name"], label) or returns_to(v["value"], label)
     if kind == "call":
         return returns_to(v["func"], label) or returns_to(v["arg"], label)
+    if kind == "pipe":
+        return returns_to(v["self"], label) or returns_to(v["func"], label) or returns_to(v["arg"], label)
     if kind == "field":
         return returns_to(v["base"], label) or returns_to(v["key"], label)
     if kind == "foreach":
@@ -599,7 +603,7 @@ def as_object(e, value):
 
 def recv_of(e):
     """In a bound method's `call`: the receiver, the code value stored as the method value's data."""
-    data = e.fld(e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, a(e, "self")), voc_t(e))), "data")
+    data = e.fld(e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, a(e, "function")), voc_t(e))), "data")
     return e.call(e.mb.must_reinterpret(), e.tup(data, cve_t(e)))
 
 
@@ -1164,7 +1168,7 @@ def method_fields(e, x, obj, meth_obj, methods, when=None):
                                     e,
                                     cv_of(
                                         e,
-                                        cve_code(e, a(e, "self")),
+                                        cve_code(e, a(e, "value")),
                                         e.call(
                                             e.eval_builtin("value_object_const"),
                                             e.rec(
@@ -1175,7 +1179,7 @@ def method_fields(e, x, obj, meth_obj, methods, when=None):
                                                 p(
                                                     "data",
                                                     as_object(
-                                                        e, cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "self")))
+                                                        e, cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "value")))
                                                     ),
                                                 ),
                                             ),
@@ -1540,7 +1544,7 @@ def handle_type(
     def_obj(e, x, meth, desc + " method", e.rec(p("kind", str_(e)), p("ht", ty(e))))
 
     def self_as(type_field):
-        as_under = e.mb.as_(graft(e, a(e, "self")), e.lower(in_(e, under)))
+        as_under = e.mb.as_(graft(e, a(e, "value")), e.lower(in_(e, under)))
         if type_field == under:
             return as_under
         if ptr_cast is None:
@@ -1583,7 +1587,7 @@ def handle_type(
                                     e,
                                     cv_of(
                                         e,
-                                        cve_code(e, a(e, "self")),
+                                        cve_code(e, a(e, "value")),
                                         e.call(
                                             e.eval_builtin("value_object_const"),
                                             e.rec(
@@ -1594,7 +1598,7 @@ def handle_type(
                                                 p(
                                                     "data",
                                                     as_object(
-                                                        e, cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "self")))
+                                                        e, cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "value")))
                                                     ),
                                                 ),
                                             ),

@@ -741,7 +741,7 @@ def module(e):
                     p("xx", xx(e)),
                     p("loc", loc(e)),
                     p(
-                        "self",
+                        "function",
                         cv_of(
                             e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), e.lower(e.v(kind + "_o")))
                         ),
@@ -785,7 +785,7 @@ def module(e):
                     p("xx", xx(e)),
                     p("loc", loc(e)),
                     p(
-                        "self",
+                        "function",
                         cv_of(
                             e, code_none(e, loc(e)), e.call(e.eval_builtin("value_empty"), e.lower(e.v(special + "_o")))
                         ),

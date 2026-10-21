@@ -1040,14 +1040,14 @@ def _ref_field(e, x, obj, under, under_x):
                         e.not_(e.fld(e.v("uf"), "is_some")),
                         ret_m(e, err_cve(e, loc(e), "lifetime reference: the value has no fields")),
                     ),
-                    e.let("v", _retag_m(e, a(e, "self"), under(), cve_t(e))),
+                    e.let("v", _retag_m(e, a(e, "value"), under(), cve_t(e))),
                     e.ret(
                         bim(
                             e,
                             asp_iface(e, "field"),
                             "field",
                             e.fld(e.v("uf"), "value"),
-                            _rec_xl(e, p("self", e.v("v")), p("key", a(e, "key"))),
+                            _rec_xl(e, p("value", e.v("v")), p("key", a(e, "key"))),
                         )
                     ),
                 ),

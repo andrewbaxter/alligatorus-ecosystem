@@ -1081,7 +1081,7 @@ def module(e):
                 body(
                     e,
                     e.let("out", _insts_new(e)),
-                    e.let("f", unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), a(e, "self")), cve_t(e)))),
+                    e.let("f", unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), a(e, "function")), cve_t(e)))),
                     _append_code(e, e.v("out"), cve_code(e, e.v("f"))),
                     e.let("args", _args_of(e)),
                     _append_code(e, e.v("out"), e.fld(e.v("args"), "code")),
@@ -1116,7 +1116,7 @@ def module(e):
                 "field",
                 body(
                     e,
-                    e.let("s", unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), a(e, "self")), cve_t(e)))),
+                    e.let("s", unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), a(e, "value")), cve_t(e)))),
                     e.let("out", _insts_new(e)),
                     _append_code(e, e.v("out"), cve_code(e, e.v("s"))),
                     e.if_only(
@@ -1166,7 +1166,7 @@ def module(e):
                 "set",
                 body(
                     e,
-                    e.let("t", unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), a(e, "self")), cve_t(e)))),
+                    e.let("t", unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), a(e, "target")), cve_t(e)))),
                     e.let("v", unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), a(e, "value")), cve_t(e)))),
                     e.let("out", _insts_new(e)),
                     _append_code(e, e.v("out"), cve_code(e, e.v("t"))),
@@ -1269,7 +1269,8 @@ def module(e):
         call_args = []
         call_args.append(e.p("xx", xx(e)))
         call_args.append(e.p("loc", loc(e)))
-        call_args.append(e.p("self", hf(e, "h_gval", a(e, "self"))))
+        recv = {"function": "function", "field": "value", "set": "target"}[asp]
+        call_args.append(e.p(recv, hf(e, "h_gval", a(e, recv))))
         for pair in extra:
             call_args.append(pair)
         ps = []

@@ -304,7 +304,7 @@ def _event_objs(e, x, tg):
                 e,
                 ok_cve(
                     e,
-                    cv_of(e, codes(e, cve_code(e, a(e, "self")), cve_code(e, e.v("ev"))), cve_value(e, e.v("ev"))),
+                    cv_of(e, codes(e, cve_code(e, a(e, "function")), cve_code(e, e.v("ev"))), cve_value(e, e.v("ev"))),
                 ),
             ),
         )

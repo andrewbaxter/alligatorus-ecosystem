@@ -45,6 +45,9 @@ class EcoMb:
     def call(self, func, arg):
         return self.mb.call(func, arg)
 
+    def pipe(self, self_, func, arg):
+        return self.mb.pipe(self_, func, arg)
+
     def call_m(self, receiver, method, arg):
         return self.mb.call(self.fld(receiver, method), arg)
 

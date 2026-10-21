@@ -16,10 +16,13 @@ class Mb:
     def __init__(self):
         self._next_id = 0
 
-    def _node(self, kind, fields):
+    def _id(self):
         node_id = self._next_id
         self._next_id += 1
-        return {"id": node_id, "variant": {kind: fields}}
+        return node_id
+
+    def _node(self, kind, fields):
+        return {"id": self._id(), "variant": {kind: fields}}
 
     def num(self, value):
         return self._node("literal", {"number": float(value)})
@@ -34,12 +37,16 @@ class Mb:
         return self._node("as", {"base": base, "target": target})
 
     def bind(self, name, value):
-        node_id = self._next_id
-        self._next_id += 1
+        node_id = self._id()
         return {"id": node_id, "variant": {"bind": {"name": self.str(name), "value": value}}}
 
     def call(self, func, arg):
         return self._node("call", {"func": func, "arg": arg})
+
+    def pipe(self, self_, func, arg):
+        """`self_ | func arg`: calls `func` with `self_` spliced into `arg` (prepended to a tuple, the `self` field of
+        a record, else `(self_, arg)`)."""
+        return self._node("pipe", {"self": self_, "func": func, "arg": arg})
 
     def field(self, base, key):
         return self._node("field", {"base": base, "key": key})
@@ -149,8 +156,7 @@ class Mb:
         return self._node("record", [{"key": k, "value": v} for k, v in entries])
 
     def scope_use(self, key):
-        node_id = self._next_id
-        self._next_id += 1
+        node_id = self._id()
         return {"id": node_id, "variant": {"scope_use": self.str(key)}}
 
     def seq(self, exprs):

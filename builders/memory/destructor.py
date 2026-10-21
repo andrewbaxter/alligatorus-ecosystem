@@ -302,7 +302,7 @@ def _host_fns(e, x):
                         asp_iface(e, "function"),
                         "call",
                         e.fld(e.v("fk"), "value"),
-                        _rec_xl(e, p("self", e.v("destroy")), p("argument", e.v("v"))),
+                        _rec_xl(e, p("function", e.v("destroy")), p("argument", e.v("v"))),
                     ),
                 ),
             ),
@@ -705,7 +705,7 @@ def _oref(e, x):
                                         e.call(
                                             e.eval_builtin("value_object_const"),
                                             e.rec(
-                                                p("type", mk(e, obj, p("ref", outer(e)), p("self", a(e, "self")))),
+                                                p("type", mk(e, obj, p("ref", outer(e)), p("self", a(e, "value")))),
                                                 p("data", e.tup()),
                                             ),
                                         ),
@@ -719,14 +719,14 @@ def _oref(e, x):
                     e.if_only(
                         e.not_(e.fld(e.v("uf"), "is_some")), ret_m(e, err_cve(e, loc(e), "owned value has no fields"))
                     ),
-                    e.let("v", _retag_m(e, a(e, "self"), _ref_under(e), cve_t(e))),
+                    e.let("v", _retag_m(e, a(e, "value"), _ref_under(e), cve_t(e))),
                     e.ret(
                         bim(
                             e,
                             asp_iface(e, "field"),
                             "field",
                             e.fld(e.v("uf"), "value"),
-                            _rec_xl(e, p("self", e.v("v")), p("key", a(e, "key"))),
+                            _rec_xl(e, p("value", e.v("v")), p("key", a(e, "key"))),
                         )
                     ),
                 ),
@@ -815,10 +815,10 @@ def _oref(e, x):
                         e.if_else(
                             in_(e, "moved"),
                             code_none(e, loc(e)),
-                            _destroy_m(e, in_(e, "owned"), a(e, "self"), cve_t(e)),
+                            _destroy_m(e, in_(e, "owned"), a(e, "target"), cve_t(e)),
                         ),
                     ),
-                    e.let("sv", _retag_m(e, a(e, "self"), _ref_under(e), cve_t(e))),
+                    e.let("sv", _retag_m(e, a(e, "target"), _ref_under(e), cve_t(e))),
                     e.let(
                         "r",
                         unwrap_cve_m(
@@ -828,7 +828,7 @@ def _oref(e, x):
                                 e.mb.eval_aspect_set(),
                                 "set",
                                 e.fld(e.v("us"), "value"),
-                                _rec_xl(e, p("self", e.v("sv")), p("value", e.v("tmp"))),
+                                _rec_xl(e, p("target", e.v("sv")), p("value", e.v("tmp"))),
                             ),
                         ),
                     ),
@@ -1038,14 +1038,14 @@ def _oborrow(e, x):
                     e.if_only(
                         e.not_(e.fld(e.v("uf"), "is_some")), ret_m(e, err_cve(e, loc(e), "owned value has no fields"))
                     ),
-                    e.let("v", _retag_m(e, a(e, "self"), _under_of(e, in_(e, "owned")), cve_t(e))),
+                    e.let("v", _retag_m(e, a(e, "value"), _under_of(e, in_(e, "owned")), cve_t(e))),
                     e.ret(
                         bim(
                             e,
                             asp_iface(e, "field"),
                             "field",
                             e.fld(e.v("uf"), "value"),
-                            _rec_xl(e, p("self", e.v("v")), p("key", a(e, "key"))),
+                            _rec_xl(e, p("value", e.v("v")), p("key", a(e, "key"))),
                         )
                     ),
                 ),
@@ -1130,7 +1130,7 @@ def _oborrow(e, x):
                     e.let("tmp", _binding_use(e, e.fld(e.v("br"), "binding"), _consumed(e), code_none(e, loc(e)))),
                     # The place is computed once: its code runs after the new value's, and its value (a place) is
                     # read by the destroy and written by the store.
-                    e.let("sp", cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "self")))),
+                    e.let("sp", cv_of(e, code_none(e, loc(e)), cve_value(e, a(e, "target")))),
                     e.let("c2", _destroy_m(e, in_(e, "owned"), e.v("sp"), cve_t(e))),
                     e.let("sv", _retag_m(e, e.v("sp"), _under_of(e, in_(e, "owned")), cve_t(e))),
                     e.let(
@@ -1142,11 +1142,11 @@ def _oborrow(e, x):
                                 e.mb.eval_aspect_set(),
                                 "set",
                                 e.fld(e.v("us"), "value"),
-                                _rec_xl(e, p("self", e.v("sv")), p("value", e.v("tmp"))),
+                                _rec_xl(e, p("target", e.v("sv")), p("value", e.v("tmp"))),
                             ),
                         ),
                     ),
-                    e.let("c12", _cat_m(e, e.fld(e.v("br"), "code"), cve_code(e, a(e, "self")), cve_t(e))),
+                    e.let("c12", _cat_m(e, e.fld(e.v("br"), "code"), cve_code(e, a(e, "target")), cve_t(e))),
                     e.let("c123", _cat_m(e, e.v("c12"), e.v("c2"), cve_t(e))),
                     e.ret(ok_cve(e, cv_no(e, _cat_m(e, e.v("c123"), cve_code(e, e.v("r")), cve_t(e))))),
                 ),

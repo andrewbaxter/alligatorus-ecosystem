@@ -712,7 +712,7 @@ def _set_impl(e, x, obj):
                 "set",
                 body(
                     e,
-                    e.let("t", _operand_m(e, outer(e), a(e, "self"))),
+                    e.let("t", _operand_m(e, outer(e), a(e, "target"))),
                     e.let("v", _operand_m(e, outer(e), a(e, "value"))),
                     e.let("out", _insts_new(e)),
                     _append_code(e, e.v("out"), cve_code(e, e.v("t"))),
@@ -788,7 +788,7 @@ def _conv_methods(e, x):
                 body(
                     e,
                     *tm.const_type_arg(e, "glsl conversion", a(e, "argument"), "to"),
-                    e.let("rc", cv_of(e, cve_code(e, a(e, "self")), cve_value(e, tm.recv_of(e)))),
+                    e.let("rc", cv_of(e, cve_code(e, a(e, "function")), cve_value(e, tm.recv_of(e)))),
                     e.let("st0", cve_type(e, e.v("rc"))),
                     e.let(
                         "st",
@@ -1217,7 +1217,7 @@ def _def_types(e, x):
                 "field",
                 body(
                     e,
-                    e.let("s", _operand_m(e, outer(e), a(e, "self"))),
+                    e.let("s", _operand_m(e, outer(e), a(e, "value"))),
                     e.if_only(
                         e.not_(has_b(e, xx(e), cve_type(e, a(e, "key")), e.mb.eval_aspect_string_const())),
                         ret_m(e, err_cve(e, loc(e), "glsl: swizzle must be a constant string")),
@@ -1426,7 +1426,7 @@ def _def_refs(e, x):
                 body(
                     e,
                     e.let("out", _insts_new(e)),
-                    e.let("f", _operand_m(e, outer(e), a(e, "self"))),
+                    e.let("f", _operand_m(e, outer(e), a(e, "function"))),
                     _append_code(e, e.v("out"), cve_code(e, e.v("f"))),
                     e.let("elems", _elements_m(e, a(e, "argument"))),
                     count_let(e, "ne"),
@@ -1562,7 +1562,10 @@ def _def_refs(e, x):
     rt_lift_impl(e, x, "gt_global")
     rt_bind_impl(e, x, "gt_global", e.mb.types_string())
     rt_use_impl(e, x, "gt_global")
-    self_arg = hf_rec(e, "h_gval", e.p("cv", a(e, "self")), e.p("base", in_(e, "base")))
+    def self_arg(recv):
+        """The receiver of a builtin aspect method impl (`recv` its record field) as a global value."""
+        return hf_rec(e, "h_gval", e.p("cv", a(e, recv)), e.p("base", in_(e, "base")))
+
     base_arg = hf_rec(e, "h_gval", e.p("cv", a(e, "base")), e.p("base", in_(e, "base")))
     for op_ in bin_ops:
         x.append(
@@ -1630,7 +1633,7 @@ def _def_refs(e, x):
                             e.rec(
                                 e.p("xx", xx(e)),
                                 e.p("loc", loc(e)),
-                                e.p("self", self_arg),
+                                e.p("function", self_arg("function")),
                                 e.p("argument", a(e, "argument")),
                             ),
                         )
@@ -1654,7 +1657,7 @@ def _def_refs(e, x):
                             asp_iface(e, "field"),
                             "field",
                             lookup_v(e, xx(e), in_(e, "base"), asp_iface(e, "field")),
-                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("self", self_arg), e.p("key", a(e, "key"))),
+                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", self_arg("value")), e.p("key", a(e, "key"))),
                         )
                     ),
                 ),
@@ -1678,7 +1681,7 @@ def _def_refs(e, x):
                             "set",
                             lookup_v(e, xx(e), in_(e, "base"), e.mb.eval_aspect_set()),
                             e.rec(
-                                e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("self", self_arg), e.p("value", a(e, "value"))
+                                e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("target", self_arg("target")), e.p("value", a(e, "value"))
                             ),
                         )
                     ),
@@ -1738,7 +1741,7 @@ def _def_refs(e, x):
                             e.mb.must_reinterpret(),
                             e.tup(
                                 e.fld(
-                                    e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, a(e, "self")), voc_t(e))),
+                                    e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, a(e, "value")), voc_t(e))),
                                     "data",
                                 ),
                                 str_(e),
@@ -1756,7 +1759,7 @@ def _def_refs(e, x):
                                     e,
                                     cv_of(
                                         e,
-                                        cve_code(e, a(e, "self")),
+                                        cve_code(e, a(e, "value")),
                                         _gval_new(
                                             e,
                                             e.call_m(e.v("f"), "ty", e.tup()),
