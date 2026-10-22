@@ -4,8 +4,13 @@ functions). The `release` import frees a handle; webidl-wasm.atz calls it when a
 from ..target_mb import body, or_b, ret_m, to_str
 
 
-def _var(e, name):
-    return e.call(e.lower(e.fld(e.v("js"), "var_fn")), e.rec(e.p("mod", e.v("m")), e.p("name", e.s(name))))
+def _jsc(e, kind, *fields):
+    """A call of the js definition const function `kind` (from a staged body)."""
+    return e.call(e.lower(e.fld(e.v("js"), kind)), e.rec(*fields))
+
+
+def _var(e, name, ty_):
+    return _jsc(e, "var_fn", e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("ty", ty_))
 
 
 def _text(e, name, params, *lines):
@@ -65,30 +70,63 @@ def module(e):
     top.append(e.let("runtime_b", e.def_func(e.v("d"), "runtime")))
     runtime = []
     runtime.append(e.let("m", e.fld(e.v("arg"), "mod")))
-    # The module variables, which the text below refers to by name; `instance` is assigned by the caller when the
-    # wasm module is ready.
-    for g in ["handles", "free_handles", "freed", "instance", "decoder"]:
-        runtime.append(e.let(g, _var(e, g)))
-    for g in ["Array", "Object", "TextDecoder"]:
-        runtime.append(e.let(g, e.call(e.lower(e.fld(e.v("js"), "global_fn")), e.rec(e.p("name", e.s(g))))))
-    runtime.append(e.let("new", e.call(e.lower(e.fld(e.v("js"), "new_fn")), e.tup())))
+    # The module variables, which the text below refers to by name, and the types they hold: the table of objects
+    # (handles index it), its free slots, the freed-slot marker, the string decoder. `instance` (the wasm instance,
+    # assigned by the caller when the module is ready) is only read by the text below.
+    for name, js_name in [("object_t", "Object"), ("decoder_t", "TextDecoder"), ("instance_t", "WebAssembly.Instance")]:
+        runtime.append(e.let(name, _jsc(e, "object", e.p("name", e.s(js_name)))))
+    runtime.append(e.let("objects_t", _jsc(e, "array", e.p("elem", e.v("object_t")))))
+    runtime.append(e.let("numbers_t", _jsc(e, "array", e.p("elem", e.lower(e.fld(e.v("js"), "number"))))))
+    for g, ty_ in [
+        ("handles", "objects_t"),
+        ("free_handles", "numbers_t"),
+        ("freed", "object_t"),
+        ("instance", "instance_t"),
+        ("decoder", "decoder_t"),
+    ]:
+        runtime.append(e.let(g, _var(e, g, e.v(ty_))))
+    for g, ty_ in [("Array", "objects_t"), ("Object", "object_t"), ("TextDecoder", "decoder_t")]:
+        runtime.append(
+            e.let(
+                g,
+                _jsc(
+                    e,
+                    "global_fn",
+                    e.p("name", e.s(g)),
+                    e.p("ty", _jsc(e, "ctor", e.p("params", e.tup()), e.p("ret", e.v(ty_)))),
+                ),
+            )
+        )
+    # `Array` is declared once per element type it makes.
+    runtime.append(
+        e.let(
+            "Numbers",
+            _jsc(
+                e,
+                "global_fn",
+                e.p("name", e.s("Array")),
+                e.p("ty", _jsc(e, "ctor", e.p("params", e.tup()), e.p("ret", e.v("numbers_t")))),
+            ),
+        )
+    )
     runtime.append(
         e.call_m(
             e.v("m"),
             "run",
             e.stage(
                 e.seq(
-                    e.mb.set(e.lower(e.v("handles")), e.call(e.lower(e.v("new")), e.lower(e.v("Array")))),
-                    e.mb.set(e.lower(e.v("free_handles")), e.call(e.lower(e.v("new")), e.lower(e.v("Array")))),
+                    e.mb.set(e.lower(e.v("handles")), e.call(e.lower(e.v("Array")), e.tup())),
+                    e.mb.set(e.lower(e.v("free_handles")), e.call(e.lower(e.v("Numbers")), e.tup())),
                     # The marker a freed slot holds (distinct from every value a handle can hold, `undefined`
                     # included), so a use or a second free of a freed handle throws instead of reading a stale slot.
-                    e.mb.set(e.lower(e.v("freed")), e.call(e.lower(e.v("new")), e.lower(e.v("Object")))),
-                    e.mb.set(e.lower(e.v("decoder")), e.call(e.lower(e.v("new")), e.lower(e.v("TextDecoder")))),
+                    e.mb.set(e.lower(e.v("freed")), e.call(e.lower(e.v("Object")), e.tup())),
+                    e.mb.set(e.lower(e.v("decoder")), e.call(e.lower(e.v("TextDecoder")), e.tup())),
                 )
             ),
         )
     )
-    # The handle table reuses freed slots; these need `if`, so they are plain text.
+    # The handle table holds objects of every bound interface (no one declared type) and reuses freed slots; its
+    # functions are plain text.
     runtime.append(
         e.let(
             "h_new_n",

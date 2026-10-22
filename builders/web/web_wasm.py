@@ -16,6 +16,15 @@ def _bytes_t(e):
     return e.call(e.mb.types_array(), e.mb.types_byte())
 
 
+def _jsc(e, kind, *fields):
+    """A call of the js definition const function `kind` (from a staged body)."""
+    return e.call(e.lower(e.fld(e.v("js"), kind)), e.rec(*fields))
+
+
+def _jfn(e, params, ret):
+    return _jsc(e, "fn", e.p("params", e.tup(*params)), e.p("ret", ret))
+
+
 def module(e):
     top = []
     top.append(e.let("js", e.import_local("js", "js-es2020.atz")))
@@ -25,8 +34,44 @@ def module(e):
     top.append(e.option_type_let())
     top.append(e.let("build_b", e.def_func(e.v("d"), "build")))
     body = []
-    for g in ["WebAssembly", "fetch", "instance"]:
-        body.append(e.let(g, e.call(e.lower(e.fld(e.v("js"), "global_fn")), e.rec(e.p("name", e.s(g))))))
+    # The browser API the loader uses, declared: `fetch`, `WebAssembly.instantiateStreaming` and what its promise
+    # yields (the instance and its `_start` export), and the module variables `imports` and `instance`.
+    objects = [
+        ("response_p", "Promise<Response>"),
+        ("exports_t", "WebAssembly.Exports"),
+        ("instance_t", "WebAssembly.Instance"),
+        ("source_t", "WebAssembly.WebAssemblyInstantiatedSource"),
+        ("done_p", "Promise<undefined>"),
+        ("source_p", "Promise<WebAssembly.WebAssemblyInstantiatedSource>"),
+        ("webidl_t", "Imports.webidl"),
+        ("imports_t", "Imports"),
+    ]
+    for name, js_name in objects:
+        body.append(e.let(name, _jsc(e, "object", e.p("name", e.s(js_name)))))
+    string = e.lower(e.fld(e.v("js"), "string"))
+    void = e.lower(e.fld(e.v("js"), "void"))
+    for obj, fields, methods in [
+        ("exports_t", [], [("_start", _jfn(e, [], void))]),
+        ("instance_t", [("exports", e.v("exports_t"))], []),
+        ("source_t", [("instance", e.v("instance_t"))], []),
+        ("source_p", [], [("then", _jfn(e, [_jfn(e, [e.v("source_t")], void)], e.v("done_p")))]),
+        ("imports_t", [("webidl", e.v("webidl_t"))], []),
+    ]:
+        body.append(
+            _jsc(
+                e,
+                "members",
+                e.p("object", e.v(obj)),
+                e.p("fields", e.rec(*[e.p(k, v) for k, v in fields])),
+                e.p("methods", e.rec(*[e.p(k, v) for k, v in methods])),
+            )
+        )
+    for g, js_name, ty_ in [
+        ("WebAssembly_instantiate", "WebAssembly.instantiateStreaming", _jfn(e, [e.v("response_p"), e.v("imports_t")], e.v("source_p"))),
+        ("fetch", "fetch", _jfn(e, [string], e.v("response_p"))),
+        ("instance", "instance", e.v("instance_t")),
+    ]:
+        body.append(e.let(g, _jsc(e, "global_fn", e.p("name", e.s(js_name)), e.p("ty", ty_))))
     body.append(
         e.let(
             "r",
@@ -84,7 +129,7 @@ def module(e):
     body.append(
         e.let(
             "imports",
-            e.call(e.lower(e.fld(e.v("js"), "var_fn")), e.rec(e.p("mod", e.v("m")), e.p("name", e.s("imports")))),
+            _jsc(e, "var_fn", e.p("mod", e.v("m")), e.p("name", e.s("imports")), e.p("ty", e.v("imports_t"))),
         )
     )
     body.append(e.call_m(e.v("m"), "run", e.stage(e.mb.set(e.lower(e.v("imports")), e.rec(e.p("webidl", e.rec()))))))
@@ -115,6 +160,7 @@ def module(e):
                     e.p("mod", e.v("m")),
                     e.p("name", e.s("ready")),
                     e.p("params", e.tup(e.s("r"))),
+                    e.p("ty", _jfn(e, [e.v("source_t")], void)),
                     e.p(
                         "body",
                         e.stage(
@@ -136,7 +182,7 @@ def module(e):
                 e.call(
                     e.fld(
                         e.call(
-                            e.fld(e.lower(e.v("WebAssembly")), "instantiateStreaming"),
+                            e.lower(e.v("WebAssembly_instantiate")),
                             e.tup(e.call(e.lower(e.v("fetch")), e.s("main.wasm")), e.lower(e.v("imports"))),
                         ),
                         "then",

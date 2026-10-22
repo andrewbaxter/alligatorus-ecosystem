@@ -535,13 +535,15 @@ def artifact_exporter_impl(e, obj):
     return e.opt_some(e.eval_builtin("artifact_exporter"), bim0(e, asp_iface(e, "artifact"), "exporter", aspect))
 
 
-def self_type(e, x, obj, desc, dispatch, can_cast_from, cast_from, can_cast_to, cast_to, is_equal_):
+def self_type(e, x, obj, desc, dispatch, can_cast_from, cast_from, can_cast_to, cast_to, is_equal_, exporter=None):
+    """A type object `obj` that is its own type; `exporter` (an `option(eval.artifact_exporter)` expression) replaces
+    the exporter of its data (`artifact_exporter_impl`) when the type exports itself."""
     x.append(e.impl_interface(e.v(obj), asp_iface(e, "type"), p("type", body(e, e.ret(outer(e))))))
     x.append(
         e.impl_interface(
             e.v(obj),
             e.mb.eval_type(),
-            p("artifact_exporter", artifact_exporter_impl(e, obj)),
+            p("artifact_exporter", artifact_exporter_impl(e, obj) if exporter is None else exporter),
             p("desc", desc),
             p("aspect", dispatch),
             p("can_cast_from", can_cast_from),

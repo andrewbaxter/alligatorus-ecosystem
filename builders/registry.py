@@ -24,6 +24,18 @@ PROJECTS = {
     "javascript": [
         ("js-es2020.atz", "js", ()),
         ("js-srcmap-test.atz", "js_srcmap_test", ()),
+        ("js-loop-test.atz", "js_loop_test", ()),
+        ("js-types-test.atz", "js_types_test", ()),
+        ("js-data-test.atz", "js_data_test", ()),
+        ("js-exc-test.atz", "js_exc_test", ()),
+        ("js-decls-test.atz", "js_decls_test", ("decls",)),
+        ("js-decls-app-test.atz", "js_decls_test", ("app",)),
+        ("js-fail-member.atz", "js_fail_test", ("member",)),
+        ("js-fail-arg.atz", "js_fail_test", ("arg",)),
+        ("js-fail-union.atz", "js_fail_test", ("union",)),
+        ("js-fail-cond.atz", "js_fail_test", ("cond",)),
+        ("js-fail-untyped.atz", "js_fail_test", ("untyped",)),
+        ("js-fail-throw.atz", "js_fail_test", ("throw",)),
     ],
     "glsl": [
         ("glsl-es-3.00.atz", "glsl", ()),
