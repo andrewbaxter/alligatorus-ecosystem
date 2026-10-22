@@ -65,7 +65,9 @@ def module(e, kind, mode=APP):
     setup.append(e.let("count", e.call(e.fld(lib, "alloc_dep"), e.rec(e.p("name", e.s("destroy_count")), count_arg))))
 
     def cell():
-        return e.mb.field(tm.conv(e, _lo(e, "ptr_cast"), e.call(fn_of(e, _lo(e, "count")), e.tup()), _lo(e, "t_pi32")), e.n(0))
+        return e.mb.field(
+            tm.conv(e, _lo(e, "ptr_cast"), e.call(fn_of(e, _lo(e, "count")), e.tup()), _lo(e, "t_pi32")), e.n(0)
+        )
 
     # The destroy function (a dependency) counts into the zeroed block.
     setup.append(

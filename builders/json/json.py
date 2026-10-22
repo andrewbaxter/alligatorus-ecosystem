@@ -158,7 +158,7 @@ def _const_func(e, top, name, ops, gen, extra=()):
         top,
         name + "_b",
         "json." + name,
-        body(e, *prelude, ret_m(e, ok_cve(e, unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(gen)))))),
+        body(e, *prelude, ret_m(e, ok_cve(e, unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(gen)))))),
     )
 
 
@@ -217,9 +217,7 @@ def _yield(e, name, *args):
 def _fail(e, code=None):
     """Reports an error (an unexpected byte or end of input unless `code` is given) and stops parsing."""
     if code is None:
-        report = e.if_else(
-            e.mb.operator_lt(_c(e), e.n(0)), _set(e, "err", e.n(ERR_END)), _set(e, "err", e.n(ERR_BYTE))
-        )
+        report = e.if_else(e.mb.operator_lt(_c(e), e.n(0)), _set(e, "err", e.n(ERR_END)), _set(e, "err", e.n(ERR_BYTE)))
     else:
         report = _set(e, "err", e.n(code))
     return e.seq(report, _set(e, "state", e.n(FAILED)), _yield(e, "error", _reg(e, "err")))
@@ -371,7 +369,16 @@ def _utf8(e):
 def _escape(e):
     """An escape sequence; the lookahead is the byte after the backslash."""
     simple = []
-    for ch, out in [('"', '"'), ("\\", "\\"), ("/", "/"), ("b", "\b"), ("f", "\f"), ("n", "\n"), ("r", "\r"), ("t", "\t")]:
+    for ch, out in [
+        ('"', '"'),
+        ("\\", "\\"),
+        ("/", "/"),
+        ("b", "\b"),
+        ("f", "\f"),
+        ("n", "\n"),
+        ("r", "\r"),
+        ("t", "\t"),
+    ]:
         simple.append((_is(e, ch), _push(e, e.n(ord(out)))))
     unicode = e.seq(
         _hex4(e, "hex_hi", "cp"),
@@ -620,7 +627,15 @@ def _hex_digit(e, value):
 
 def _escaped_byte(e, b):
     simple = []
-    for ch, out in [('"', '\\"'), ("\\", "\\\\"), ("\n", "\\n"), ("\r", "\\r"), ("\t", "\\t"), ("\b", "\\b"), ("\f", "\\f")]:
+    for ch, out in [
+        ('"', '\\"'),
+        ("\\", "\\\\"),
+        ("\n", "\\n"),
+        ("\r", "\\r"),
+        ("\t", "\\t"),
+        ("\b", "\\b"),
+        ("\f", "\\f"),
+    ]:
         simple.append((e.eq(b, e.n(ord(ch))), _w_text(e, out)))
     control = e.seq(
         _w_text(e, "\\u00"),

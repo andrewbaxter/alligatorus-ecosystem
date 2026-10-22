@@ -110,7 +110,9 @@ def module(e):
                 e,
                 "h_get",
                 [e.s("h")],
-                e.s('if (h >= handles.length || handles[h] === freed) throw new Error("webidl: handle " + h + " is not live");'),
+                e.s(
+                    'if (h >= handles.length || handles[h] === freed) throw new Error("webidl: handle " + h + " is not live");'
+                ),
                 e.s("return handles[h];"),
             ),
         )
@@ -122,7 +124,9 @@ def module(e):
                 e,
                 "h_free",
                 [e.s("h")],
-                e.s('if (h >= handles.length || handles[h] === freed) throw new Error("webidl: handle " + h + " freed twice");'),
+                e.s(
+                    'if (h >= handles.length || handles[h] === freed) throw new Error("webidl: handle " + h + " freed twice");'
+                ),
                 e.s("handles[h] = freed;"),
                 e.s("free_handles.push(h);"),
             ),

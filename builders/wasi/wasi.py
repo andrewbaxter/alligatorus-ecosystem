@@ -48,7 +48,6 @@ SPEC_REPO = "https://github.com/WebAssembly/WASI"
 SPEC_COMMIT = "fae981bae14809d91f9bc2d63852d461f331d161"
 
 
-
 def _fn_def(e, out, name, arg_type, ret):
     return fn_def(e, out, "wasi", name, arg_type, ret)
 
@@ -190,6 +189,7 @@ def _exports_const_fn(e, x):
                 e.eval_builtin("const_eval"),
                 e.rec(
                     p("xx", xx(e)),
+                    p("loc", loc(e)),
                     p(
                         "staged",
                         e.call(e.eval_builtin("expr_record"), e.rec(p("loc", loc(e)), p("entries", e.v("entries")))),

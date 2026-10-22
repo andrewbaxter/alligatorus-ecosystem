@@ -360,7 +360,7 @@ def _ggfn_kind(kind):
 
 
 def _ggfn_staged(e, staged):
-    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(staged)))
+    return unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(staged)))
 
 
 def _ggfn_field(e, key):
@@ -1562,6 +1562,7 @@ def _def_refs(e, x):
     rt_lift_impl(e, x, "gt_global")
     rt_bind_impl(e, x, "gt_global", e.mb.types_string())
     rt_use_impl(e, x, "gt_global")
+
     def self_arg(recv):
         """The receiver of a builtin aspect method impl (`recv` its record field) as a global value."""
         return hf_rec(e, "h_gval", e.p("cv", a(e, recv)), e.p("base", in_(e, "base")))
@@ -1657,7 +1658,12 @@ def _def_refs(e, x):
                             asp_iface(e, "field"),
                             "field",
                             lookup_v(e, xx(e), in_(e, "base"), asp_iface(e, "field")),
-                            e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", self_arg("value")), e.p("key", a(e, "key"))),
+                            e.rec(
+                                e.p("xx", xx(e)),
+                                e.p("loc", loc(e)),
+                                e.p("value", self_arg("value")),
+                                e.p("key", a(e, "key")),
+                            ),
                         )
                     ),
                 ),
@@ -1681,7 +1687,10 @@ def _def_refs(e, x):
                             "set",
                             lookup_v(e, xx(e), in_(e, "base"), e.mb.eval_aspect_set()),
                             e.rec(
-                                e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("target", self_arg("target")), e.p("value", a(e, "value"))
+                                e.p("xx", xx(e)),
+                                e.p("loc", loc(e)),
+                                e.p("target", self_arg("target")),
+                                e.p("value", a(e, "value")),
                             ),
                         )
                     ),
@@ -1944,7 +1953,7 @@ def _def_module(e, x):
                 must_v(
                     e,
                     TARGET,
-                    e.call(e.mb.eval_const_eval(), e.rec(e.p("xx", e.v("ctx")), e.p("staged", a(e, "body")))),
+                    e.call(e.mb.eval_const_eval_function(), e.rec(e.p("xx", e.v("ctx")), e.p("staged", a(e, "body")))),
                     "compile failed",
                 ),
             ),
@@ -3273,7 +3282,9 @@ def _def_data(e, x):
         e.impl_interface(
             e.v("gval"),
             e.fld(e.v("values"), "retag"),
-            e.p("retag", mk(e, "gval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")), e.p("temp", in_(e, "temp")))),
+            e.p(
+                "retag", mk(e, "gval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")), e.p("temp", in_(e, "temp")))
+            ),
         )
     )
     accessor(e, x, "gval", "expr", str_(e))

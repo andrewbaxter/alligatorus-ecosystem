@@ -678,9 +678,7 @@ def _parser_const_fn(e, x, tg):
     places = _handle_places(
         e, {"ctx": PTR_SLOT["ctx"]}, REGISTER_CELL, [("data", PTR_SLOT["data"]), ("stack", PTR_SLOT["stack"])]
     )
-    meth = handle_type(
-        e, x, "jpt", "jpt_m", "json parser", fields, places, ["next"], ptr_cast=e.lower(e.v("ptr_cast"))
-    )
+    meth = handle_type(e, x, "jpt", "jpt_m", "json parser", fields, places, ["next"], ptr_cast=e.lower(e.v("ptr_cast")))
 
     def method_body(kind):
         return e.call(fn_of(e, e.lower(e.v("next"))), self_v(e))
@@ -787,7 +785,9 @@ def _parser_const_fn(e, x, tg):
     _dep(e, parts, "name", "free", e.v("free_t"), ["p"], _parser_free_body(e, tg))
     _dep(e, parts, "name", "next", e.v("next_t"), ["p"], _parser_next_body(e, tg))
     parts.append(
-        e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_parser_setup(e))))))
+        e.ret(
+            e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(_parser_setup(e)))))
+        )
     )
     const_fn(e, x, "parser_b", "json.parser", body(e, *parts))
 
@@ -981,7 +981,9 @@ def _writer_const_fn(e, x, tg):
         fn_t = {0: "w_t", 1: "wi_t", 2: "ws_t"}[len(params)]
         _dep(e, parts, "name", piece, e.v(fn_t), ["w"] + params, _writer_piece_body(e, tg, piece))
     parts.append(
-        e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_writer_setup(e))))))
+        e.ret(
+            e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(_writer_setup(e)))))
+        )
     )
     const_fn(e, x, "writer_b", "json.writer", body(e, *parts))
 

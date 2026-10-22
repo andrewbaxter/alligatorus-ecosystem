@@ -58,7 +58,9 @@ def module(e):
                 name,
                 e.call(
                     e.fld(e.v("wasm"), "data_fn"),
-                    e.rec(e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("elem", e.v("t_u32")), e.p("values", values)),
+                    e.rec(
+                        e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("elem", e.v("t_u32")), e.p("values", values)
+                    ),
                 ),
             )
         )
@@ -146,9 +148,7 @@ def module(e):
             ),
             e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_own"))),
             *[method("s", "push", e.n(b)) for b in MESSAGE],
-            e.mb.set(
-                e.mb.field(lo("iov"), e.n(0)), tm.conv(e, lo("ptr_to_int"), e.fld(e.v("s"), "data"), lo("t_u32"))
-            ),
+            e.mb.set(e.mb.field(lo("iov"), e.n(0)), tm.conv(e, lo("ptr_to_int"), e.fld(e.v("s"), "data"), lo("t_u32"))),
             e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(e.fld(e.fld(e.v("s"), "len"), "wrap"), lo("t_u32"))),
             e.call(
                 lo("fd_write"),

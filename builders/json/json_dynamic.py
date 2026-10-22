@@ -92,9 +92,7 @@ def _bytebuf(e, top):
         ),
     )
     _method(e, top, "bytebuf", "clear", e.tup(), None, e.mb.set(_in(e, "n"), e.int_of(0)))
-    _method(
-        e, top, "bytebuf", "pop", e.tup(), None, e.mb.set(_in(e, "n"), e.mb.operator_sub(_in(e, "n"), e.int_of(1)))
-    )
+    _method(e, top, "bytebuf", "pop", e.tup(), None, e.mb.set(_in(e, "n"), e.mb.operator_sub(_in(e, "n"), e.int_of(1))))
     _method(e, top, "bytebuf", "len", e.tup(), e.mb.types_int(), e.seq(e.ret(_in(e, "n"))))
     _method(
         e,
@@ -296,7 +294,7 @@ def _writer(e, top):
                     e.p("some", e.v("__s")),
                     e.p("none", e.mb.panic(e.s("json: the output is not valid UTF-8"))),
                 )
-            )
+            ),
         ),
     )
     _func(

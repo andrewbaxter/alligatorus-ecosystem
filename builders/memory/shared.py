@@ -194,7 +194,9 @@ def module(e, kind):
                 ),
             )
         )
-    parts.append(e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e)))))))
+    parts.append(
+        e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(_setup(e))))))
+    )
     const_fn(e, x, "shctor_b", "shared.type", body(e, *parts))
     x.append(e.finish(e.v("d")))
     x.append(e.ret(e.rec(p("type", e.fld(e.v("shctor_b"), "func")))))

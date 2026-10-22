@@ -23,6 +23,7 @@ PROJECTS = {
     ],
     "javascript": [
         ("js-es2020.atz", "js", ()),
+        ("js-srcmap-test.atz", "js_srcmap_test", ()),
     ],
     "glsl": [
         ("glsl-es-3.00.atz", "glsl", ()),
@@ -67,8 +68,10 @@ PROJECTS = {
     ],
     "core": [
         ("meta.atz", "meta", ()),
+        ("srcmap.atz", "srcmap", ()),
         ("values.atz", "values", ()),
         ("values-test.atz", "values_test", ("llvm",)),
+        ("values-test-ir.atz", "values_test", ("llvm", IR)),
         ("values-test-wasm.atz", "values_test", ("wasm",)),
     ],
     "memory": [

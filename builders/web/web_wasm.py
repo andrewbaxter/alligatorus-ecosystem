@@ -1,4 +1,5 @@
-"""web-wasm.atz: `build` helper packaging a wat module as a browser app dir (index.html, main.js, main.wasm)."""
+"""web-wasm.atz: `build` helper packaging a wat module as a browser app dir: index.html, main.js, main.wasm, and
+their debug maps (main.js.map over main.js.frames.json, main.wasm.map over frames.json, the wat module's frames)."""
 
 from . import webidl_wasm
 from ..target_mb import p_
@@ -32,8 +33,26 @@ def module(e):
             e.call(
                 e.mb.builtin("exec"),
                 e.rec(
-                    e.p("command", e.s("wat2wasm")),
-                    e.p("args", e.str_list(e.s("main.wat"), e.s("-o"), e.s("main.wasm"))),
+                    # binaryen's assembler: it turns the text's `;;@` annotations into the source map. The features
+                    # are the ones the wat target emits (`-all` would also enable proposals browsers reject).
+                    e.p("command", e.s("wasm-as")),
+                    e.p(
+                        "args",
+                        e.str_list(
+                            e.s("main.wat"),
+                            e.s("--enable-bulk-memory"),
+                            e.s("--enable-multivalue"),
+                            e.s("--enable-sign-ext"),
+                            e.s("--enable-mutable-globals"),
+                            e.s("--enable-nontrapping-float-to-int"),
+                            e.s("-o"),
+                            e.s("main.wasm"),
+                            e.s("--source-map"),
+                            e.s("main.wasm.map"),
+                            e.s("--source-map-url"),
+                            e.s("main.wasm.map"),
+                        ),
+                    ),
                     e.p("env", e.map_new(e.mb.types_string(), e.mb.types_string())),
                     e.p(
                         "files",
@@ -48,13 +67,18 @@ def module(e):
             ),
         )
     )
-    body.append(e.let("f", e.call_m(e.call_m0(e.v("r"), "dir"), "open", e.s("main.wasm"))))
-    body.append(
-        e.let(
-            "wasm_bytes",
-            e.call_m(e.v("f"), "read", e.rec(e.p("offset", e.int_of(0)), e.p("len", e.fld(e.v("f"), "len")))),
+    for var, name in [("wasm_bytes", "main.wasm"), ("wasm_map", "main.wasm.map")]:
+        body.append(e.let(var + "_f", e.call_m(e.call_m0(e.v("r"), "dir"), "open", e.s(name))))
+        body.append(
+            e.let(
+                var,
+                e.call_m(
+                    e.v(var + "_f"),
+                    "read",
+                    e.rec(e.p("offset", e.int_of(0)), e.p("len", e.fld(e.v(var + "_f"), "len"))),
+                ),
+            )
         )
-    )
     body.append(e.let("m", e.call(e.lower(e.fld(e.v("js"), "new")), e.tup())))
     body.append(e.let("rt", e.call(e.lower(e.fld(e.v("webidl"), "runtime")), e.rec(e.p("mod", e.v("m"))))))
     body.append(
@@ -122,7 +146,7 @@ def module(e):
             ),
         )
     )
-    body.append(e.let("out", e.call_m0(e.v("m"), "render")))
+    body.append(e.let("out", e.call_m(e.v("m"), "render", e.rec(e.p("frames", e.s("main.js.frames.json"))))))
     body.append(
         e.ret(
             e.call(
@@ -131,8 +155,18 @@ def module(e):
                     e.mb.types_string(),
                     _bytes_t(e),
                     e.p("index.html", e.call(e.mb.eval_str_utf8(), e.s(HTML))),
-                    e.p("main.js", e.call(e.mb.eval_str_utf8(), e.fld(e.v("out"), "js"))),
+                    e.p(
+                        "main.js",
+                        e.call(
+                            e.mb.eval_str_utf8(),
+                            e.cat(e.fld(e.v("out"), "js"), e.s("//# sourceMappingURL=main.js.map\n")),
+                        ),
+                    ),
+                    e.p("main.js.map", e.call(e.mb.eval_str_utf8(), e.fld(e.v("out"), "map"))),
+                    e.p("main.js.frames.json", e.call(e.mb.eval_str_utf8(), e.fld(e.v("out"), "frames"))),
                     e.p("main.wasm", e.v("wasm_bytes")),
+                    e.p("main.wasm.map", e.v("wasm_map")),
+                    e.p("frames.json", e.call(e.mb.eval_str_utf8(), e.fld(e.v("arg"), "frames"))),
                 ),
             )
         )
@@ -140,7 +174,11 @@ def module(e):
     top.append(
         e.func_impl(
             e.v("build_b"),
-            e.rec(e.p("wat", e.mb.types_string()), e.p("meta", e.list_type(e.fld(e.v("wasm"), "meta_t")))),
+            e.rec(
+                e.p("wat", e.mb.types_string()),
+                e.p("meta", e.list_type(e.fld(e.v("wasm"), "meta_t"))),
+                e.p("frames", e.mb.types_string()),
+            ),
             e.option_type_some(e.mb.builtin("types", "dir")),
             e.mb.opt_none_type(),
             e.stage(e.mb.seq(body)),

@@ -93,7 +93,7 @@ class _Target:
 
 
 def _staged(e, expr):
-    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(expr)))
+    return unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(expr)))
 
 
 def _codes(e, *codes):
@@ -386,7 +386,7 @@ def module(e, kind):
         ),
         e.let("ot_i", mk(e, "ot", *[p(f, e.v(f)) for f in BASE])),
         *[e.let(kind + "_i", mk(e, "oct", p("kind", e.s(kind)), *[p(f, e.v(f)) for f in BASE])) for kind in KINDS],
-        e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e)))))),
+        e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(_setup(e)))))),
     ]
     const_fn(e, x, "option_b", "option.type", body(e, *parts))
     x.append(e.finish(e.v("d")))

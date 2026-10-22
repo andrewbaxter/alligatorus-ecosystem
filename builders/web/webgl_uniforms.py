@@ -78,7 +78,7 @@ def _ugfn_kind(kind):
 
 
 def _staged(e, expr):
-    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(expr)))
+    return unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(expr)))
 
 
 def _field(e, key):
@@ -132,6 +132,7 @@ def _place(e, self_cv, kind, byte_offset):
                 const_eval_in(
                     e,
                     xx(e),
+                    loc(e),
                     e.stage(tm.conv(e, e.lower(e.v("__pc")), graft(e, e.v("__gv")), e.lower(e.v("__pt")))),
                 ),
             ),
@@ -787,7 +788,9 @@ def module(e):
     top.append(e.let("d", e.define()))
     exports = []
     for kind in UGFN_KINDS:
-        top.append(e.let(kind + "_o", e.call(e.fld(e.v("k"), "ugfn_t_new"), e.rec(e.p("kind", e.int_of(_ugfn_kind(kind)))))))
+        top.append(
+            e.let(kind + "_o", e.call(e.fld(e.v("k"), "ugfn_t_new"), e.rec(e.p("kind", e.int_of(_ugfn_kind(kind))))))
+        )
         tm.const_fn(
             e,
             top,

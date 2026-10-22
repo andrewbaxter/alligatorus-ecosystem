@@ -472,7 +472,8 @@ def module(e, mode):
                 e.let("l", _call_fn(e, "pw_main_loop_get_loop", e.v("mloop"))),
                 e.let(
                     "aprops",
-                    e.mb.as_(_call_fn_tup(
+                    e.mb.as_(
+                        _call_fn_tup(
                             e,
                             "pw_properties_new",
                             _lo(e, "s_media_type"),
@@ -482,11 +483,14 @@ def module(e, mode):
                             _lo(e, "s_media_role"),
                             _lo(e, "s_music"),
                             _lo(e, "nullp"),
-                        ), _lo(e, "own_properties")),
+                        ),
+                        _lo(e, "own_properties"),
+                    ),
                 ),
                 e.let(
                     "astream",
-                    e.mb.as_(_call_fn_tup(
+                    e.mb.as_(
+                        _call_fn_tup(
                             e,
                             "pw_stream_new_simple",
                             e.v("l"),
@@ -494,12 +498,15 @@ def module(e, mode):
                             e.call(e.fld(e.v("aprops"), "forget"), e.tup()),
                             _lo(e, "g_audio_events"),
                             _lo(e, "nullp"),
-                        ), _lo(e, "own_stream")),
+                        ),
+                        _lo(e, "own_stream"),
+                    ),
                 ),
                 _set(e, _lo(e, "g_audio_stream"), e.v("astream")),
                 e.let(
                     "mprops",
-                    e.mb.as_(_call_fn_tup(
+                    e.mb.as_(
+                        _call_fn_tup(
                             e,
                             "pw_properties_new",
                             _lo(e, "s_media_type"),
@@ -509,11 +516,14 @@ def module(e, mode):
                             _lo(e, "s_media_role"),
                             _lo(e, "s_dsp"),
                             _lo(e, "nullp"),
-                        ), _lo(e, "own_properties")),
+                        ),
+                        _lo(e, "own_properties"),
+                    ),
                 ),
                 e.let(
                     "mstream",
-                    e.mb.as_(_call_fn_tup(
+                    e.mb.as_(
+                        _call_fn_tup(
                             e,
                             "pw_stream_new_simple",
                             e.v("l"),
@@ -521,7 +531,9 @@ def module(e, mode):
                             e.call(e.fld(e.v("mprops"), "forget"), e.tup()),
                             _lo(e, "g_midi_events"),
                             _lo(e, "nullp"),
-                        ), _lo(e, "own_stream")),
+                        ),
+                        _lo(e, "own_stream"),
+                    ),
                 ),
                 _set(e, _lo(e, "g_midi_stream"), e.v("mstream")),
                 _call_fn_tup(

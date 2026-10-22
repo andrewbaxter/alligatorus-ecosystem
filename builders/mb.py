@@ -270,6 +270,9 @@ class Mb:
     def eval_const_eval(self):
         return self.builtin("eval", "const_eval")
 
+    def eval_const_eval_function(self):
+        return self.builtin("eval", "const_eval_function")
+
     def eval_target(self):
         return self.builtin("eval", "target")
 

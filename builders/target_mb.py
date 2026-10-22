@@ -27,12 +27,12 @@ def code_t(e):
     return e.mb.types_code()
 
 
-def const_eval_in(e, xx_, staged):
-    return e.call(e.mb.eval_const_eval(), e.rec(p("xx", xx_), p("staged", staged)))
+def const_eval_in(e, xx_, loc_, staged):
+    return e.call(e.mb.eval_const_eval(), e.rec(p("xx", xx_), p("loc", loc_), p("staged", staged)))
 
 
 def host_cve(e, staged):
-    return unwrap_cve_t(e, const_eval_in(e, xx(e), staged))
+    return unwrap_cve_t(e, const_eval_in(e, xx(e), loc(e), staged))
 
 
 def str_cve(e, str_expr):
@@ -783,9 +783,7 @@ def named_conv(e, x, bind, name, src_ok, to_ok, make):
                 ),
             ),
             e.let("valuecv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("value")))),
-            e.if_only(
-                e.not_(cve_has(e, e.v("valuecv"))), ret_m(e, err_cve(e, loc(e), name + ": value has no value"))
-            ),
+            e.if_only(e.not_(cve_has(e, e.v("valuecv"))), ret_m(e, err_cve(e, loc(e), name + ": value has no value"))),
             *const_type_arg(e, name, unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("to"))), "to"),
             e.let("st", cve_type(e, e.v("valuecv"))),
             e.if_only(
@@ -1103,7 +1101,9 @@ def const_type_arg(e, label, cv, bind):
         e.let(bind + "_dyn", is_equal(e, xx(e), cve_type(e, cv), e.mb.eval_type())),
         e.if_only(
             is_runtime(e, cv),
-            ret_m(e, err_cve(e, loc(e), label + ": " + bind + " must be a type known at compile time, not target code")),
+            ret_m(
+                e, err_cve(e, loc(e), label + ": " + bind + " must be a type known at compile time, not target code")
+            ),
         ),
         e.if_only(
             e.not_(or_b(e, e.fld(e.v(bind + "_tk"), "is_some"), e.v(bind + "_dyn"))),
@@ -1239,7 +1239,7 @@ def int_as(e, n, type_):
 
 
 def staged_in(e, expr):
-    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(expr)))
+    return unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(expr)))
 
 
 def codes(e, *codes):

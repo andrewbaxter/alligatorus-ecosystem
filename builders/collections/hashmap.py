@@ -177,17 +177,13 @@ class _Target:
             return conv(
                 e,
                 e.lower(e.v("int_to_ptr")),
-                e.mb.operator_add(
-                    conv(e, e.lower(e.v("ptr_to_int")), base, e.lower(e.v("i32"))), e.n(offset)
-                ),
+                e.mb.operator_add(conv(e, e.lower(e.v("ptr_to_int")), base, e.lower(e.v("i32"))), e.n(offset)),
                 ptr_type,
             )
         return conv(
             e,
             e.lower(e.v("ptr_cast")),
-            e.mb.operator_add(
-                conv(e, e.lower(e.v("ptr_cast")), base, e.lower(e.v("pu8"))), e.n(offset)
-            ),
+            e.mb.operator_add(conv(e, e.lower(e.v("ptr_cast")), base, e.lower(e.v("pu8"))), e.n(offset)),
             ptr_type,
         )
 
@@ -515,7 +511,8 @@ def _clear_body(e, tg, lay, with_values):
                             e.not_(e.mb.operator_lt(e.v("__i"), _i32_cell(e, h, lay.cap))), e.mb.return_label("dr")
                         ),
                         e.if_only(
-                            e.eq(e.mb.field(e.v("states"), e.v("__i")), e.n(FULL)), _drop_value_at(e, lay, h, e.v("__i"))
+                            e.eq(e.mb.field(e.v("states"), e.v("__i")), e.n(FULL)),
+                            _drop_value_at(e, lay, h, e.v("__i")),
                         ),
                         e.mb.set(e.v("__i"), e.mb.operator_add(e.v("__i"), e.n(1))),
                     ),
@@ -602,7 +599,9 @@ def _drop_value_at(e, lay, h, idx):
     return e.seq(
         e.let(
             "__o",
-            e.mb.as_(e.mb.field(_typed(e, _ptr_cell(e, h, lay.vals), "pvalue"), idx), _up(e, e.v("value_own"), BODY_HOST)),
+            e.mb.as_(
+                e.mb.field(_typed(e, _ptr_cell(e, h, lay.vals), "pvalue"), idx), _up(e, e.v("value_own"), BODY_HOST)
+            ),
         )
     )
 
@@ -987,7 +986,8 @@ def module(e, kind, with_values):
     parts.append(
         e.ret(
             e.eresult_ok(
-                e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e, tg, lay, with_values))))
+                e.mb.types_cve(),
+                unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(_setup(e, tg, lay, with_values)))),
             )
         )
     )

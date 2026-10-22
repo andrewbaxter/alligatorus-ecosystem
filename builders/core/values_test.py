@@ -48,7 +48,7 @@ def _seed_and_hash(e, hash_fn):
     ]
 
 
-def module(e, kind):
+def module(e, kind, mode=APP):
     setup = []
     if kind == LLVM:
         setup.append(e.let("llvm", e.import_local("llvm", "llvm-ir-22.atz")))
@@ -113,7 +113,7 @@ def module(e, kind):
                 ),
             )
         )
-        top.append(root_mode_finish(APP, e, e.v("llvm"), e.v("ll")))
+        top.append(root_mode_finish(mode, e, e.v("llvm"), e.v("ll")))
         return top
     top.append(
         e.let(
@@ -128,7 +128,9 @@ def module(e, kind):
             ),
         )
     )
-    body = e.seq(*_seed_and_hash(e, hash_fn), e.call(_lo(e, "proc_exit"), e.call(e.fld(e.v("status"), "wrap"), _lo(e, "t_u32"))))
+    body = e.seq(
+        *_seed_and_hash(e, hash_fn), e.call(_lo(e, "proc_exit"), e.call(e.fld(e.v("status"), "wrap"), _lo(e, "t_u32")))
+    )
     top.append(
         e.let(
             "start",

@@ -30,7 +30,9 @@ def _host(e):
     out.append(
         e.let(
             "r",
-            e.call(e.fld(e.fld(e.v("jd"), "reader"), "new"), e.rec(e.p("bytes", e.v("bytes")), e.p("pos", e.int_of(0)))),
+            e.call(
+                e.fld(e.fld(e.v("jd"), "reader"), "new"), e.rec(e.p("bytes", e.v("bytes")), e.p("pos", e.int_of(0)))
+            ),
         )
     )
     out.append(e.let("p", e.call(e.fld(e.fld(e.v("jd"), "parser"), "new"), e.v("r"))))
@@ -53,7 +55,14 @@ def _host(e):
                     "ev",
                     None,
                     e.p("end", e.mb.return_label("doc")),
-                    e.p("error", e.seq(e.mb.set(e.v("status"), e.int_of(1)), e.mb.set(e.v("err"), e.v("ev")), e.mb.return_label("doc"))),
+                    e.p(
+                        "error",
+                        e.seq(
+                            e.mb.set(e.v("status"), e.int_of(1)),
+                            e.mb.set(e.v("err"), e.v("ev")),
+                            e.mb.return_label("doc"),
+                        ),
+                    ),
                     piece("null"),
                     piece("bool", e.v("ev")),
                     piece("number", e.v("ev")),
@@ -140,7 +149,9 @@ def module(e):
                 name,
                 e.call(
                     e.fld(e.v("wasm"), "data_fn"),
-                    e.rec(e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("elem", e.v("t_u32")), e.p("values", values)),
+                    e.rec(
+                        e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("elem", e.v("t_u32")), e.p("values", values)
+                    ),
                 ),
             )
         )

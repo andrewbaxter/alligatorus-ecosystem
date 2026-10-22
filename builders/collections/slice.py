@@ -227,9 +227,7 @@ def _objs(e, x, tg):
         e.mb.if_of([], e.opt_none(e.mb.types_aspect())),
         body(
             e,
-            e.ret(
-                type_can_cast_from(e, xx(e), loc(e), acc(e, xx(e), in_(e, "sl"), "sl_m", "pt"), a(e, "source_type"))
-            ),
+            e.ret(type_can_cast_from(e, xx(e), loc(e), acc(e, xx(e), in_(e, "sl"), "sl_m", "pt"), a(e, "source_type"))),
         ),
         body(
             e,
@@ -355,7 +353,9 @@ def module(e, kind):
             e.mb.as_(e.call(e.lower(e.fld(e.v("slof"), "new")), e.rec(p("sl", e.v("sl_t")))), e.mb.eval_type()),
         )
     )
-    parts.append(e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e)))))))
+    parts.append(
+        e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(_setup(e))))))
+    )
     const_fn(e, x, "slice_b", "slice.type", body(e, *parts))
     x.append(e.finish(e.v("d")))
     x.append(e.ret(e.rec(p("type", e.fld(e.v("slice_b"), "func")))))

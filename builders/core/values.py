@@ -210,7 +210,7 @@ def module(e):
             e.let("st", bim(e, asp_iface(e, "type"), "type", e.fld(e.v("tyk"), "value"), cve_value(e, e.v("argv")))),
             *_need(e, "values.size", e.v("st"), "size_i", "size"),
             e.let("n", bim0(e, e.lower(e.fld(e.v("size_i"), "type")), "size", _impl(e))),
-            e.ret(const_eval_in(e, xx(e), e.stage(e.lower(e.v("n"))))),
+            e.ret(const_eval_in(e, xx(e), loc(e), e.stage(e.lower(e.v("n"))))),
         ),
     )
     top.append(e.finish(e.v("d")))

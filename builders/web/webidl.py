@@ -1376,7 +1376,18 @@ def module(e):
                     e.p("optional", a(e, "optional")),
                     e.p("nullable", e.call_m(e.v("r"), "nullable", e.tup())),
                     e.p("kind", e.v("k")),
-                    e.p("iface", hf(e, "h_handle_iface", e.rec(e.p("table", a(e, "table")), e.p("kind", e.v("k")), e.p("name", e.call_m(e.v("r"), "name", e.tup()))))),
+                    e.p(
+                        "iface",
+                        hf(
+                            e,
+                            "h_handle_iface",
+                            e.rec(
+                                e.p("table", a(e, "table")),
+                                e.p("kind", e.v("k")),
+                                e.p("name", e.call_m(e.v("r"), "name", e.tup())),
+                            ),
+                        ),
+                    ),
                 )
             ),
         ),
@@ -1393,7 +1404,18 @@ def module(e):
                 e.rec(
                     e.p("out", e.call_m(e.v("r"), "nullable", e.tup())),
                     e.p("kind", e.v("k")),
-                    e.p("iface", hf(e, "h_handle_iface", e.rec(e.p("table", a(e, "table")), e.p("kind", e.v("k")), e.p("name", e.call_m(e.v("r"), "name", e.tup()))))),
+                    e.p(
+                        "iface",
+                        hf(
+                            e,
+                            "h_handle_iface",
+                            e.rec(
+                                e.p("table", a(e, "table")),
+                                e.p("kind", e.v("k")),
+                                e.p("name", e.call_m(e.v("r"), "name", e.tup())),
+                            ),
+                        ),
+                    ),
                 )
             ),
         ),
@@ -1430,11 +1452,18 @@ def module(e):
             e.if_only(e.eq(a(e, "iface"), a(e, "of")), ret_m(e, e.mb.as_(e.b(True), bool_t(e)))),
             e.let("defs", e.call_m(a(e, "table"), "defs", e.tup())),
             e.if_only(
-                e.not_(hf(e, "h_has", e.rec(e.p("defs", e.v("defs")), e.p("name", a(e, "iface"))))), ret_m(e, e.mb.as_(e.b(False), bool_t(e)))
+                e.not_(hf(e, "h_has", e.rec(e.p("defs", e.v("defs")), e.p("name", a(e, "iface"))))),
+                ret_m(e, e.mb.as_(e.b(False), bool_t(e))),
             ),
             e.let("parent", e.call_m(e.call_m(e.v("defs"), "get", a(e, "iface")), "parent", e.tup())),
             e.if_only(e.eq(e.v("parent"), e.s("")), ret_m(e, e.mb.as_(e.b(False), bool_t(e)))),
-            e.ret(hf(e, "h_ancestor", e.rec(e.p("table", a(e, "table")), e.p("iface", e.v("parent")), e.p("of", a(e, "of"))))),
+            e.ret(
+                hf(
+                    e,
+                    "h_ancestor",
+                    e.rec(e.p("table", a(e, "table")), e.p("iface", e.v("parent")), e.p("of", a(e, "of"))),
+                )
+            ),
         ),
     )
     fn_impl(

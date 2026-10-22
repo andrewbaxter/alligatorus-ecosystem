@@ -1244,6 +1244,7 @@ def _octor(e, x):
                         const_eval_in(
                             e,
                             xx(e),
+                            loc(e),
                             e.stage(
                                 e.mb.labeled(
                                     "__r",

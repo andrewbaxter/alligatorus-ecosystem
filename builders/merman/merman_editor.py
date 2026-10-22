@@ -129,7 +129,11 @@ def module(e):
     top.append(
         e.func_impl(
             e.v("build_b"),
-            e.rec(e.p("wat", e.mb.types_string()), e.p("meta", e.list_type(e.fld(e.v("wasm"), "meta_t")))),
+            e.rec(
+                e.p("wat", e.mb.types_string()),
+                e.p("meta", e.list_type(e.fld(e.v("wasm"), "meta_t"))),
+                e.p("frames", e.mb.types_string()),
+            ),
             e.option_type_some(e.fld(e.v("editor_o"), "type")),
             e.mb.opt_none_type(),
             e.stage(e.mb.seq(body)),

@@ -17,7 +17,7 @@ SipHash key block is reached through `mod.siphash_key()`."""
 
 from collections import namedtuple
 
-from ..core import meta, values
+from ..core import meta, srcmap, values
 from .. import target_mb
 from .. import target_mb as tm
 from ..target_mb import (
@@ -138,6 +138,19 @@ def _lval_t(e):
     return t(e, "lval")
 
 
+# The fixed debug metadata nodes !0..!5 of every module: line tables only, over the one "file" frames.json whose
+# line numbers are frame indices plus one (line 0 is "no location" in DWARF).
+DBG_HEADER = [
+    'distinct !DICompileUnit(language: DW_LANG_C, file: !3, producer: "alligatorus", isOptimized: false, '
+    "runtimeVersion: 0, emissionKind: LineTablesOnly)",
+    '!{i32 7, !"Dwarf Version", i32 5}',
+    '!{i32 2, !"Debug Info Version", i32 3}',
+    '!DIFile(filename: "frames.json", directory: "")',
+    "!DISubroutineType(types: !5)",
+    "!{null}",
+]
+
+
 def _lmod_t(e):
     return t(e, "lmod")
 
@@ -154,7 +167,12 @@ META_EXPORTS = ["meta_t", "meta_other", "meta_new"]
 
 
 def _render_t(e, meta_t):
-    return e.rec(e.p("ir", str_(e)), e.p("libs", e.list_type(str_(e))), e.p("meta", e.list_type(meta_t)))
+    return e.rec(
+        e.p("ir", str_(e)),
+        e.p("libs", e.list_type(str_(e))),
+        e.p("meta", e.list_type(meta_t)),
+        e.p("frames", str_(e)),
+    )
 
 
 def _init_fn(e, ty_, cv):
@@ -568,7 +586,9 @@ def _value_aspects(e, x, obj, size_expr, hash_stage):
         e.impl_interface(
             e.v(obj),
             e.fld(e.v("values"), "eq_i"),
-            e.p("eq", const_eval_in(e, a(e, "xx"), e.stage(e.eq(graft(e, a(e, "a")), graft(e, a(e, "b")))))),
+            e.p(
+                "eq", const_eval_in(e, a(e, "xx"), a(e, "loc"), e.stage(e.eq(graft(e, a(e, "a")), graft(e, a(e, "b")))))
+            ),
         )
     )
     if hash_stage is not None:
@@ -728,12 +748,22 @@ def _sip_hash(e, to_i64, key_arg):
                 # The key block's pointer as the cell type (a retag: the block is the module's).
                 e.let(
                     "keypc",
-                    hf_rec(e, "h_retag", e.p("mod", _xmod_must(e)), e.p("cv", e.v("keyp")), e.p("ty", e.v("pi64"))),
+                    hf_rec(
+                        e,
+                        "h_retag",
+                        e.p("loc", a(e, "loc")),
+                        e.p("mod", _xmod_must(e)),
+                        e.p("cv", e.v("keyp")),
+                        e.p("ty", e.v("pi64")),
+                    ),
                 ),
                 e.let(
                     "args",
                     unwrap_cve_t(
-                        e, const_eval_in(e, a(e, "xx"), e.stage(e.tup(to_i64(graft(e, a(e, "cv"))), key(0), key(1))))
+                        e,
+                        const_eval_in(
+                            e, a(e, "xx"), a(e, "loc"), e.stage(e.tup(to_i64(graft(e, a(e, "cv"))), key(0), key(1)))
+                        ),
                     ),
                 ),
                 e.mb.return_to(
@@ -789,14 +819,28 @@ def _insts_new(e):
     return e.list_new(lt(e, "linst"))
 
 
-def _inst(e, variant, *fields):
-    return mk(e, "linst", e.p("k", e.call(e.lower_v("li_" + variant), e.rec(*fields))))
+def _loc_opt_t(e):
+    return e.call(e.mb.types_option(), loc_t(e))
+
+
+def _inst(e, loc_, variant, *fields):
+    """An instruction at `loc_`, the expression it computes: its `!dbg` names that location's frame."""
+    return _inst_at(e, e.opt_some(loc_t(e), loc_), variant, *fields)
+
+
+def _inst_bare(e, variant, *fields):
+    """A structural instruction (label, branch, dependency) with no location of its own."""
+    return _inst_at(e, e.opt_none(loc_t(e)), variant, *fields)
+
+
+def _inst_at(e, loc_opt, variant, *fields):
+    return mk(e, "linst", e.p("k", e.call(e.lower_v("li_" + variant), e.rec(*fields))), e.p("loc", loc_opt))
 
 
 def _dep_inst(e, variant, *fields):
     dep = mk(e, "ldep", e.p("k", e.call(e.lower_v(variant), e.rec(*fields))))
     meta_ = mk(e, "lmeta", e.p("k", e.call(e.lower_v("lm_dep"), e.rec(e.p("dep", dep)))))
-    return _inst(e, "meta", e.p("meta", meta_))
+    return _inst_bare(e, "meta", e.p("meta", meta_))
 
 
 def _append_code(e, out, code_tp):
@@ -837,24 +881,25 @@ def _lv_ty(e, lval_tp):
     return e.call_m(lval_tp, "ty", e.tup())
 
 
-def _store_inst(e, val, ptr):
-    return _inst(e, "store", e.p("val", val), e.p("ptr", ptr))
+def _store_inst(e, loc_, val, ptr):
+    return _inst(e, loc_, "store", e.p("val", val), e.p("ptr", ptr))
 
 
 def _label_inst(e, name):
-    return _inst(e, "label", e.p("name", name))
+    return _inst_bare(e, "label", e.p("name", name))
 
 
 def _br_inst(e, name):
-    return _inst(e, "br", e.p("name", name))
+    return _inst_bare(e, "br", e.p("name", name))
 
 
-def _inst_binop_i64(e, res, op_, a_, b):
+def _inst_binop_i64(e, loc_, res, op_, a_, b):
     return push(
         e,
         e.v("out"),
         _inst(
             e,
+            loc_,
             "binop",
             e.p("res", e.v(res)),
             e.p("op", e.s(op_)),
@@ -864,12 +909,17 @@ def _inst_binop_i64(e, res, op_, a_, b):
     )
 
 
-def _load_inst(e, res, ty_, ptr):
-    return _inst(e, "load", e.p("res", res), e.p("ty", ty_), e.p("ptr", ptr))
+def _load_inst(e, loc_, res, ty_, ptr):
+    return _inst(e, loc_, "load", e.p("res", res), e.p("ty", ty_), e.p("ptr", ptr))
+
+
+def _dbg(e):
+    """The `, !dbg !N` suffix of the instruction `i0` being rendered (empty for a structural one)."""
+    return e.call_m(outer(e), "dbg_of", e.call_m(e.v("i0"), "loc", e.tup()))
 
 
 def _render_arm(e, *line_parts):
-    return e.seq(push(e, e.v("out"), e.cat(*line_parts)), e.mb.set(e.fld(e.v("st"), "open"), num(e, 1)))
+    return e.seq(push(e, e.v("out"), e.cat(*line_parts, _dbg(e))), e.mb.set(e.fld(e.v("st"), "open"), num(e, 1)))
 
 
 def _count_ref(e, name):
@@ -891,7 +941,7 @@ def _flush_pend(e):
 
 
 def _render_terminator(e, *line_parts):
-    return e.seq(push(e, e.v("out"), e.cat(*line_parts)), e.mb.set(e.fld(e.v("st"), "open"), num(e, 0)))
+    return e.seq(push(e, e.v("out"), e.cat(*line_parts, _dbg(e))), e.mb.set(e.fld(e.v("st"), "open"), num(e, 0)))
 
 
 def _ir_of(e, ty_):
@@ -936,11 +986,13 @@ def _signed_op(e, signed, unsigned):
 
 
 def _conv(e, op_, from_, to):
-    return ok_cve(e, hf_rec(e, "h_conv", e.p("mod", _xmod(e)), e.p("op", op_), e.p("a", from_), e.p("to", to)))
+    return ok_cve(
+        e, hf_rec(e, "h_conv", e.p("loc", loc(e)), e.p("mod", _xmod(e)), e.p("op", op_), e.p("a", from_), e.p("to", to))
+    )
 
 
 def _retag(e, cv, ty_):
-    return ok_cve(e, hf_rec(e, "h_retag", e.p("mod", _xmod(e)), e.p("cv", cv), e.p("ty", ty_)))
+    return ok_cve(e, hf_rec(e, "h_retag", e.p("loc", loc(e)), e.p("mod", _xmod(e)), e.p("cv", cv), e.p("ty", ty_)))
 
 
 def _literal(e, ty_, ref):
@@ -1078,7 +1130,7 @@ def _if_branch_stmts(e, cv_var):
                     ),
                 ),
                 _append_code(e, e.v("out"), cve_code(e, e.v("bv"))),
-                push(e, e.v("out"), _store_inst(e, _lval_of(e, e.v("bv")), e.fld(e.v("st"), "slot"))),
+                push(e, e.v("out"), _store_inst(e, loc(e), _lval_of(e, e.v("bv")), e.fld(e.v("st"), "slot"))),
             ),
         ),
         e.if_only(
@@ -1145,6 +1197,7 @@ def _arms_body(e, pre, branches, skip_last, prelude, else_is_some, else_prelude)
                             e.v("out"),
                             _inst(
                                 e,
+                                loc(e),
                                 "condbr",
                                 e.p("cond", _lval_of(e, e.v("c"))),
                                 e.p("t", e.v("thn")),
@@ -1171,7 +1224,7 @@ def _arms_body(e, pre, branches, skip_last, prelude, else_is_some, else_prelude)
             ret_m(e, err_cve(e, loc(e), "if: some branches yield a value and some do not")),
         ),
         e.let("r", _fresh(e, e.v("mod"))),
-        push(e, e.v("out"), _load_inst(e, e.v("r"), e.fld(e.v("st"), "ty", "value"), e.fld(e.v("st"), "slot"))),
+        push(e, e.v("out"), _load_inst(e, loc(e), e.v("r"), e.fld(e.v("st"), "ty", "value"), e.fld(e.v("st"), "slot"))),
         e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _lval_new(e, e.fld(e.v("st"), "ty", "value"), e.v("r"))))),
     )
 
@@ -1301,6 +1354,7 @@ def _tuple_type(e, x):
                         e.v("out"),
                         _inst(
                             e,
+                            loc(e),
                             "gep",
                             e.p("res", e.v("r")),
                             e.p("base", outer(e)),
@@ -1316,7 +1370,7 @@ def _tuple_type(e, x):
                     ret_m(e, ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _lval_mem(e, elem_t, e.v("r"))))),
                 ),
             ),
-            push(e, e.v("out"), _inst(e, "extv", e.p("res", e.v("r")), e.p("agg", e.v("sl")), e.p("idx", idx))),
+            push(e, e.v("out"), _inst(e, loc(e), "extv", e.p("res", e.v("r")), e.p("agg", e.v("sl")), e.p("idx", idx))),
             ret_m(e, ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _lval_new(e, elem_t, e.v("r"))))),
         )
 
@@ -1405,6 +1459,7 @@ def _tuple_type(e, x):
                     e.v("out"),
                     _inst(
                         e,
+                        loc(e),
                         "insv",
                         e.p("res", e.v("r")),
                         e.p("ty", outer(e)),
@@ -1585,7 +1640,7 @@ def _lgfn_is(e, kind):
 
 
 def _lgfn_staged(e, staged):
-    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(staged)))
+    return unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(staged)))
 
 
 def _lgfn_global_t(e, base, mem):
@@ -1639,7 +1694,9 @@ def _def_extern_type(e, x):
                     e,
                     e.let("out", _insts_new(e)),
                     push(
-                        e, e.v("out"), _dep_inst(e, "ld_extern", e.p("name", in_(e, "name")), e.p("ty", in_(e, "base")))
+                        e,
+                        e.v("out"),
+                        _dep_inst(e, "ld_extern", e.p("name", in_(e, "name")), e.p("ty", in_(e, "base"))),
                     ),
                     e.foreach(in_(e, "libs"), "l", push(e, e.v("out"), _dep_inst(e, "ld_lib", e.p("name", e.v("l"))))),
                     e.let(
@@ -1817,6 +1874,17 @@ def _lmod_render(e, x):
                 ),
             ),
             e.foreach(in_(e, "funcs"), "f", push(e, e.v("out"), e.v("f"))),
+            push(e, e.v("out"), e.s("!llvm.dbg.cu = !{!0}")),
+            push(e, e.v("out"), e.s("!llvm.module.flags = !{!1, !2}")),
+            e.let("di", e.rec(e.p("v", e.int_of(0)))),
+            e.foreach(
+                in_(e, "dbg"),
+                "d",
+                e.seq(
+                    push(e, e.v("out"), e.cat(e.s("!"), to_str(e, e.fld(e.v("di"), "v")), e.s(" = "), e.v("d"))),
+                    e.incr(e.fld(e.v("di"), "v")),
+                ),
+            ),
             e.let("all", e.list_new(str_(e))),
             e.foreach(in_(e, "struct_lines"), "l", push(e, e.v("all"), e.v("l"))),
             e.foreach(e.v("out"), "l", push(e, e.v("all"), e.v("l"))),
@@ -1825,6 +1893,72 @@ def _lmod_render(e, x):
                     e.p("ir", e.cat(e.join(e.v("all"), "\n"), e.s("\n"))),
                     e.p("libs", e.v("libs")),
                     e.p("meta", in_(e, "meta")),
+                    e.p("frames", e.call_m(in_(e, "frames"), "render", e.tup())),
+                )
+            ),
+        ),
+    )
+
+
+def _lmod_dbg(e, x):
+    """The module's debug metadata: `dbg_sub` adds a function's subprogram node, `dbg_of` the `!dbg` suffix of an
+    instruction at a location (one DILocation node per frame and subprogram)."""
+    method(
+        e,
+        x,
+        "lmod",
+        "dbg_sub",
+        e.rec(e.p("name", str_(e)), e.p("loc", loc_t(e))),
+        int_t(e),
+        e.seq(
+            e.let("f", e.call_m(in_(e, "frames"), "index", a(e, "loc"))),
+            e.let("id", e.fld(in_(e, "dbg"), "len")),
+            push(
+                e,
+                in_(e, "dbg"),
+                e.cat(
+                    e.s('distinct !DISubprogram(name: "'),
+                    a(e, "name"),
+                    e.s('", scope: !3, file: !3, line: '),
+                    to_str(e, e.mb.operator_add(e.v("f"), e.int_of(1))),
+                    e.s(", type: !4, spFlags: DISPFlagDefinition, unit: !0)"),
+                ),
+            ),
+            e.ret(e.v("id")),
+        ),
+    )
+    method(
+        e,
+        x,
+        "lmod",
+        "dbg_of",
+        _loc_opt_t(e),
+        str_(e),
+        e.seq(
+            e.if_only(e.not_(e.fld(e.v("arg"), "is_some")), e.ret(e.dstr(""))),
+            e.let("f", e.call_m(in_(e, "frames"), "index", e.fld(e.v("arg"), "value"))),
+            e.let("key", e.cat(to_str(e, e.v("f")), e.s(":"), to_str(e, in_(e, "sp")))),
+            e.if_only(
+                e.not_(e.call_m(in_(e, "dbg_keys"), "has", e.v("key"))),
+                e.seq(
+                    e.call_m(in_(e, "dbg_keys"), "put", e.tup(e.v("key"), e.fld(in_(e, "dbg"), "len"))),
+                    push(
+                        e,
+                        in_(e, "dbg"),
+                        e.cat(
+                            e.s("!DILocation(line: "),
+                            to_str(e, e.mb.operator_add(e.v("f"), e.int_of(1))),
+                            e.s(", column: 0, scope: !"),
+                            to_str(e, in_(e, "sp")),
+                            e.s(")"),
+                        ),
+                    ),
+                ),
+            ),
+            e.ret(
+                e.cat(
+                    e.s(", !dbg !"),
+                    to_str(e, e.mb.as_(e.call_m(in_(e, "dbg_keys"), "get", e.v("key")), e.mb.types_int())),
                 )
             ),
         ),
@@ -1881,6 +2015,7 @@ def module(e):
     x = []
     x.append(e.let("meta", e.import_local("meta", meta.FILE)))
     x.append(e.let("values", e.import_local("values", values.FILE)))
+    x.append(e.let("srcmap", e.import_local("srcmap", srcmap.FILE)))
     for vid in ["size_id", "hash_id", "eq_id"]:
         x.append(e.let(vid, e.fld(e.v("values"), vid)))
     x.append(e.let("d", e.define()))
@@ -2031,7 +2166,7 @@ def module(e):
     def_obj(e, x, "lmeta", "llvm metadata", e.rec(e.p("k", t(e, "lmeta_u"))))
     accessor(e, x, "lmeta", "k", t(e, "lmeta_u"))
     _def_variant(e, x, "meta", e.rec(e.p("meta", t(e, "lmeta"))))
-    def_obj(e, x, "linst", "llvm instruction", e.rec(e.p("k", t(e, "linst_u"))))
+    def_obj(e, x, "linst", "llvm instruction", e.rec(e.p("k", t(e, "linst_u")), e.p("loc", _loc_opt_t(e))))
     def_iface(e, x, "linst_m")
     def_iface(e, x, "lglobal_m")
     def_iface(e, x, "lalloca_m")
@@ -2064,6 +2199,13 @@ def module(e):
             e.p("sip_key_id", target_mb.unique_t(e)),
             e.p("sip_fn_id", target_mb.unique_t(e)),
             e.p("labels", e.list_type(t(e, "llabel"))),
+            # Debug info: the frame table, the metadata nodes (`!<index> = <node>`; the first six are the compile
+            # unit, flags, file and subroutine type), the DILocation node of each (frame, subprogram) pair, and the
+            # subprogram node of the function whose body is being rendered.
+            e.p("frames", e.fld(e.v("srcmap"), "table_t")),
+            e.p("dbg", e.list_type(str_(e))),
+            e.p("dbg_keys", e.map_type(str_(e), e.mb.types_int_box())),
+            e.p("sp", int_t(e)),
         ),
     )
     def_obj(e, x, "ltarget", "llvm target", e.rec(e.p("mod", _lmod_t(e))))
@@ -2206,7 +2348,7 @@ def module(e):
         cve_t(e),
     )
     fn_throws(e, "h_ssa", errs_t(e))
-    _fn_def(e, x, "h_mat", e.rec(e.p("mod", _lmod_t(e)), e.p("cv", cve_t(e))), cve_t(e))
+    _fn_def(e, x, "h_mat", e.rec(e.p("loc", loc_t(e)), e.p("mod", _lmod_t(e)), e.p("cv", cve_t(e))), cve_t(e))
     _fn_def(
         e,
         x,
@@ -2291,18 +2433,30 @@ def module(e):
         e,
         x,
         "h_conv",
-        e.rec(e.p("mod", _lmod_t(e)), e.p("op", str_(e)), e.p("a", cve_t(e)), e.p("to", ty(e))),
+        e.rec(e.p("loc", loc_t(e)), e.p("mod", _lmod_t(e)), e.p("op", str_(e)), e.p("a", cve_t(e)), e.p("to", ty(e))),
         cve_t(e),
     )
     _fn_def(
         e,
         x,
         "h_gep",
-        e.rec(e.p("mod", _lmod_t(e)), e.p("base", ty(e)), e.p("ptr", str_(e)), e.p("idx", e.list_type(t(e, "lval")))),
+        e.rec(
+            e.p("loc", loc_t(e)),
+            e.p("mod", _lmod_t(e)),
+            e.p("base", ty(e)),
+            e.p("ptr", str_(e)),
+            e.p("idx", e.list_type(t(e, "lval"))),
+        ),
         cve_t(e),
     )
     _fn_def(e, x, "h_key_str", e.rec(e.p("xx", xx_t(e)), e.p("cv", cve_t(e))), str_(e))
-    _fn_def(e, x, "h_retag", e.rec(e.p("mod", _lmod_t(e)), e.p("cv", cve_t(e)), e.p("ty", ty(e))), cve_t(e))
+    _fn_def(
+        e,
+        x,
+        "h_retag",
+        e.rec(e.p("loc", loc_t(e)), e.p("mod", _lmod_t(e)), e.p("cv", cve_t(e)), e.p("ty", ty(e))),
+        cve_t(e),
+    )
     _fn_def(e, x, "h_literal", e.rec(e.p("loc", loc_t(e)), e.p("ty", ty(e)), e.p("ref", str_(e))), cve_t(e))
     _fn_def(
         e,
@@ -2458,7 +2612,7 @@ def module(e):
             e.if_only(e.not_(e.fld(e.v("lk"), "is_some")), throw_err(e, loc(e), "not an llvm value")),
             e.let("st", im0(e, "ltype", "ssa", e.fld(e.v("lk"), "value"))),
             e.let("c", unwrap_cve_t(e, cast_value(e, xx(e), loc(e), e.v("st"), a(e, "cv")))),
-            e.ret(hf_rec(e, "h_mat", e.p("mod", a(e, "mod")), e.p("cv", e.v("c")))),
+            e.ret(hf_rec(e, "h_mat", e.p("loc", loc(e)), e.p("mod", a(e, "mod")), e.p("cv", e.v("c")))),
         ),
     )
     fn_impl(
@@ -2491,7 +2645,7 @@ def module(e):
             e.let("out", _insts_new(e)),
             _append_code(e, e.v("out"), cve_code(e, a(e, "cv"))),
             e.let("r", _fresh(e, a(e, "mod"))),
-            push(e, e.v("out"), _load_inst(e, e.v("r"), _lv_ty(e, e.v("lv")), _lv_mem(e, e.v("lv")))),
+            push(e, e.v("out"), _load_inst(e, loc(e), e.v("r"), _lv_ty(e, e.v("lv")), _lv_mem(e, e.v("lv")))),
             e.ret(cv_of(e, _code_of(e, e.v("out")), _lval_new(e, _lv_ty(e, e.v("lv")), e.v("r")))),
         ),
     )
@@ -2503,7 +2657,7 @@ def module(e):
             e,
             e.if_only(e.not_(cve_has(e, a(e, "cv"))), throw_err(e, loc(e), "operand has no value")),
             e.let("c", unwrap_cve_t(e, cast_value(e, xx(e), loc(e), a(e, "ty"), a(e, "cv")))),
-            e.ret(hf_rec(e, "h_mat", e.p("mod", a(e, "mod")), e.p("cv", e.v("c")))),
+            e.ret(hf_rec(e, "h_mat", e.p("loc", loc(e)), e.p("mod", a(e, "mod")), e.p("cv", e.v("c")))),
         ),
     )
     fn_impl(
@@ -2518,7 +2672,7 @@ def module(e):
             e.let("out", _insts_new(e)),
             _append_code(e, e.v("out"), cve_code(e, a(e, "self"))),
             _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
-            push(e, e.v("out"), _store_inst(e, _lval_of(e, e.v("v")), _lv_mem(e, e.v("sl")))),
+            push(e, e.v("out"), _store_inst(e, loc(e), _lval_of(e, e.v("v")), _lv_mem(e, e.v("sl")))),
             e.ret(cv_no(e, _code_of(e, e.v("out")))),
         ),
     )
@@ -2539,6 +2693,7 @@ def module(e):
                 e.v("out"),
                 _inst(
                     e,
+                    loc(e),
                     "binop",
                     e.p("res", e.v("r")),
                     e.p("op", a(e, "op")),
@@ -2566,6 +2721,7 @@ def module(e):
                 e.v("out"),
                 _inst(
                     e,
+                    loc(e),
                     "cmp",
                     e.p("res", e.v("r")),
                     e.p("op", a(e, "op")),
@@ -2589,7 +2745,7 @@ def module(e):
             push(
                 e,
                 e.v("out"),
-                _inst(e, "unop", e.p("res", e.v("r")), e.p("op", a(e, "op")), e.p("a", _lval_of(e, e.v("a2")))),
+                _inst(e, loc(e), "unop", e.p("res", e.v("r")), e.p("op", a(e, "op")), e.p("a", _lval_of(e, e.v("a2")))),
             ),
             e.ret(cv_of(e, _code_of(e, e.v("out")), _lval_new(e, a(e, "ty"), e.v("r")))),
         ),
@@ -2605,7 +2761,7 @@ def module(e):
             e.let("s", e.call_m(a(e, "mod"), "slot", e.v("ty"))),
             e.let("out", _insts_new(e)),
             _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
-            push(e, e.v("out"), _store_inst(e, _lval_of(e, e.v("v")), e.v("s"))),
+            push(e, e.v("out"), _store_inst(e, loc(e), _lval_of(e, e.v("v")), e.v("s"))),
             e.ret(cv_of(e, _code_of(e, e.v("out")), _lval_mem(e, e.v("ty"), e.v("s")))),
         ),
     )
@@ -2615,7 +2771,7 @@ def module(e):
         "h_conv",
         body(
             e,
-            e.let("a0", hf_rec(e, "h_mat", e.p("mod", a(e, "mod")), e.p("cv", a(e, "a")))),
+            e.let("a0", hf_rec(e, "h_mat", e.p("loc", loc(e)), e.p("mod", a(e, "mod")), e.p("cv", a(e, "a")))),
             e.let("out", _insts_new(e)),
             _append_code(e, e.v("out"), cve_code(e, e.v("a0"))),
             e.let("r", _fresh(e, a(e, "mod"))),
@@ -2624,6 +2780,7 @@ def module(e):
                 e.v("out"),
                 _inst(
                     e,
+                    loc(e),
                     "conv",
                     e.p("res", e.v("r")),
                     e.p("op", a(e, "op")),
@@ -2647,6 +2804,7 @@ def module(e):
                 e.v("out"),
                 _inst(
                     e,
+                    loc(e),
                     "gep",
                     e.p("res", e.v("r")),
                     e.p("base", a(e, "base")),
@@ -2682,7 +2840,7 @@ def module(e):
         "h_retag",
         body(
             e,
-            e.let("m", hf_rec(e, "h_mat", e.p("mod", a(e, "mod")), e.p("cv", a(e, "cv")))),
+            e.let("m", hf_rec(e, "h_mat", e.p("loc", loc(e)), e.p("mod", a(e, "mod")), e.p("cv", a(e, "cv")))),
             e.ret(cv_of(e, cve_code(e, e.v("m")), _lval_new(e, a(e, "ty"), _lv_ref(e, _lval_of(e, e.v("m")))))),
         ),
     )
@@ -2756,6 +2914,7 @@ def module(e):
                 hf_rec(
                     e,
                     "h_gep",
+                    e.p("loc", loc(e)),
                     e.p("mod", a(e, "mod")),
                     e.p("base", a(e, "st")),
                     e.p("ptr", a(e, "ptr")),
@@ -2797,6 +2956,7 @@ def module(e):
                 hf_rec(
                     e,
                     "h_gep",
+                    e.p("loc", loc(e)),
                     e.p("mod", a(e, "mod")),
                     e.p("base", a(e, "base")),
                     e.p("ptr", a(e, "ptr")),
@@ -2856,6 +3016,7 @@ def module(e):
                         e.v("out"),
                         _inst(
                             e,
+                            loc(e),
                             "gep",
                             e.p("res", e.v("rv")),
                             e.p("base", a(e, "st")),
@@ -2907,6 +3068,7 @@ def module(e):
                 e.v("out"),
                 _inst(
                     e,
+                    loc(e),
                     "gep",
                     e.p("res", e.v("ra")),
                     e.p("base", a(e, "st")),
@@ -2927,6 +3089,7 @@ def module(e):
                 e.v("out"),
                 _inst(
                     e,
+                    loc(e),
                     "gep",
                     e.p("res", e.v("re")),
                     e.p("base", e.v("aty")),
@@ -2969,7 +3132,7 @@ def module(e):
                 throw_err(e, loc(e), "struct tail length must be an integer field"),
             ),
             e.let("rl", _fresh(e, a(e, "mod"))),
-            push(e, e.v("out"), _load_inst(e, e.v("rl"), e.v("lty"), e.fld(e.v("cur"), "ptr"))),
+            push(e, e.v("out"), _load_inst(e, loc(e), e.v("rl"), e.v("lty"), e.fld(e.v("cur"), "ptr"))),
             e.let("len", e.rec(e.p("ref", e.v("rl")))),
             e.if_only(
                 e.mb.operator_lt(acc(e, xx(e), e.v("lty"), "lint", "bits"), num(e, 64)),
@@ -2980,6 +3143,7 @@ def module(e):
                         e.v("out"),
                         _inst(
                             e,
+                            loc(e),
                             "conv",
                             e.p("res", e.v("rz")),
                             e.p("op", e.s("zext")),
@@ -2996,6 +3160,7 @@ def module(e):
                 e.v("out"),
                 _inst(
                     e,
+                    loc(e),
                     "conv",
                     e.p("res", e.v("pi")),
                     e.p("op", e.s("ptrtoint")),
@@ -3009,6 +3174,7 @@ def module(e):
                 e.v("out"),
                 _inst(
                     e,
+                    loc(e),
                     "conv",
                     e.p("res", e.v("ei")),
                     e.p("op", e.s("ptrtoint")),
@@ -3018,19 +3184,22 @@ def module(e):
             ),
             e.let("align", e.call_m(e.v("tl"), "align", e.tup())),
             e.let("off", _fresh(e, a(e, "mod"))),
-            _inst_binop_i64(e, "off", "sub", e.v("ei"), e.v("pi")),
+            _inst_binop_i64(e, loc(e), "off", "sub", e.v("ei"), e.v("pi")),
             e.let("tot", _fresh(e, a(e, "mod"))),
-            _inst_binop_i64(e, "tot", "add", e.v("off"), e.fld(e.v("len"), "ref")),
+            _inst_binop_i64(e, loc(e), "tot", "add", e.v("off"), e.fld(e.v("len"), "ref")),
             e.let("up", _fresh(e, a(e, "mod"))),
-            _inst_binop_i64(e, "up", "add", e.v("tot"), to_str(e, e.mb.operator_sub(e.v("align"), e.int_of(1)))),
+            _inst_binop_i64(
+                e, loc(e), "up", "add", e.v("tot"), to_str(e, e.mb.operator_sub(e.v("align"), e.int_of(1)))
+            ),
             e.let("al", _fresh(e, a(e, "mod"))),
-            _inst_binop_i64(e, "al", "and", e.v("up"), to_str(e, e.mb.operator_sub(e.int_of(0), e.v("align")))),
+            _inst_binop_i64(e, loc(e), "al", "and", e.v("up"), to_str(e, e.mb.operator_sub(e.int_of(0), e.v("align")))),
             e.let("nx", _fresh(e, a(e, "mod"))),
             push(
                 e,
                 e.v("out"),
                 _inst(
                     e,
+                    loc(e),
                     "gep",
                     e.p("res", e.v("nx")),
                     e.p("base", _int_ty(e, "i8")),
@@ -4005,6 +4174,7 @@ def module(e):
     accessor(e, x, "lirctx", "xx", xx_t(e))
     accessor(e, x, "lirctx", "mod", _lmod_opt_t(e))
     accessor(e, x, "linst", "k", t(e, "linst_u"))
+    accessor(e, x, "linst", "loc", _loc_opt_t(e))
     accessor(e, x, "lmod", "sip_key_id", target_mb.unique_t(e))
     accessor(e, x, "lmod", "sip_fn_id", target_mb.unique_t(e))
     for vo in ["lfield", "lglobal", "lalloca", "llabel", "linst", "lmod"]:
@@ -4413,6 +4583,7 @@ def module(e):
                                         e.s("("),
                                         e.join(e.v("parts"), ", "),
                                         e.s(")"),
+                                        _dbg(e),
                                     ),
                                 ),
                                 e.mb.set(e.fld(e.v("st"), "open"), num(e, 1)),
@@ -4433,7 +4604,7 @@ def module(e):
                         e.p(
                             "trap",
                             e.seq(
-                                push(e, e.v("out"), e.s("  call void @llvm.trap()")),
+                                push(e, e.v("out"), e.cat(e.s("  call void @llvm.trap()"), _dbg(e))),
                                 _render_terminator(e, e.s("  unreachable")),
                             ),
                         ),
@@ -4449,6 +4620,7 @@ def module(e):
         ),
     )
     _lmod_render(e, x)
+    _lmod_dbg(e, x)
     x.append(_lmod_meta_method(e))
     target_mb.module_defs_methods(e, x, "lmod", "ldef")
     # A zeroed global defined on first use (dependencies ask for it from every use site).
@@ -4601,7 +4773,7 @@ def module(e):
                     e.let("an", e.cat(e.s("%a"), to_str(e, e.fld(e.v("pi"), "i")))),
                     push(e, e.v("sig"), e.cat(_ir_of(e, e.v("pty")), e.s(" "), e.v("an"))),
                     e.let("s", e.call_m(outer(e), "slot", e.v("pty"))),
-                    push(e, e.v("out"), _store_inst(e, _lval_new(e, e.v("pty"), e.v("an")), e.v("s"))),
+                    push(e, e.v("out"), _store_inst(e, e.v("loc"), _lval_new(e, e.v("pty"), e.v("an")), e.v("s"))),
                     e.call_m(
                         e.v("entries"),
                         "put",
@@ -4646,7 +4818,7 @@ def module(e):
                 "r",
                 _must_v(
                     e,
-                    e.call(e.mb.eval_const_eval(), e.rec(e.p("xx", e.v("ctx")), e.p("staged", a(e, "body")))),
+                    e.call(e.mb.eval_const_eval_function(), e.rec(e.p("xx", e.v("ctx")), e.p("staged", a(e, "body")))),
                     "compile failed",
                 ),
             ),
@@ -4760,11 +4932,15 @@ def module(e):
             ),
             e.if_only(
                 and_b(e, e.not_(e.v("ended")), e.v("is_void")),
-                push(e, e.v("out"), _inst(e, "ret", e.p("val", e.opt_none(lt(e, "lval"))))),
+                push(e, e.v("out"), _inst(e, e.v("loc"), "ret", e.p("val", e.opt_none(lt(e, "lval"))))),
             ),
             e.if_only(
                 e.v("need_cast"),
-                push(e, e.v("out"), _inst(e, "ret", e.p("val", e.opt_some(lt(e, "lval"), _lval_of(e, e.v("v")))))),
+                push(
+                    e,
+                    e.v("out"),
+                    _inst(e, e.v("loc"), "ret", e.p("val", e.opt_some(lt(e, "lval"), _lval_of(e, e.v("v"))))),
+                ),
             ),
             e.foreach(
                 e.v("out"),
@@ -4798,6 +4974,8 @@ def module(e):
                     e.incr(e.fld(e.v("si"), "i")),
                 ),
             ),
+            e.let("fsp", e.call_m(outer(e), "dbg_sub", e.rec(e.p("name", e.v("fname")), e.p("loc", e.v("loc"))))),
+            e.mb.set(in_(e, "sp"), e.v("fsp")),
             e.foreach(e.call_m(outer(e), "render_insts", e.v("out")), "l0", push(e, e.v("lines"), e.v("l0"))),
             push(
                 e,
@@ -4810,7 +4988,9 @@ def module(e):
                     e.v("fname"),
                     e.s("("),
                     e.join(e.v("sig"), ", "),
-                    e.s(") nounwind {\n"),
+                    e.s(") nounwind !dbg !"),
+                    to_str(e, e.v("fsp")),
+                    e.s(" {\n"),
                     e.join(e.v("lines"), "\n"),
                     e.s("\n}"),
                 ),
@@ -5297,6 +5477,7 @@ def module(e):
                         hf_rec(
                             e,
                             "h_gep",
+                            e.p("loc", loc(e)),
                             e.p("mod", _xmod(e)),
                             e.p("base", in_(e, "pointee")),
                             e.p("ptr", _lv_ref(e, _lval_of(e, e.v("p")))),
@@ -5520,6 +5701,7 @@ def module(e):
                         hf_rec(
                             e,
                             "h_gep",
+                            e.p("loc", loc(e)),
                             e.p("mod", _xmod(e)),
                             e.p("base", outer(e)),
                             e.p("ptr", e.v("p")),
@@ -5886,6 +6068,7 @@ def module(e):
                                 e.v("out"),
                                 _inst(
                                     e,
+                                    loc(e),
                                     "call",
                                     e.p("res", e.opt_none(str_(e))),
                                     e.p("fn", e.v("fnv")),
@@ -5901,6 +6084,7 @@ def module(e):
                         e.v("out"),
                         _inst(
                             e,
+                            loc(e),
                             "call",
                             e.p("res", e.opt_some(str_(e), e.v("r"))),
                             e.p("fn", e.v("fnv")),
@@ -5948,7 +6132,7 @@ def module(e):
             ),
             e.let("out", _insts_new(e)),
             _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
-            push(e, e.v("out"), _store_inst(e, _lval_of(e, e.v("v")), in_(e, "ptr"))),
+            push(e, e.v("out"), _store_inst(e, loc(e), _lval_of(e, e.v("v")), in_(e, "ptr"))),
             e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _lval_mem(e, outer(e), in_(e, "ptr"))))),
         ),
         body(e, e.ret(type_can_cast_from(e, xx(e), loc(e), a(e, "dest_type"), in_(e, "base")))),
@@ -5957,7 +6141,7 @@ def module(e):
             e.let("r", _fresh(e, _xmod(e))),
             e.let("out", _insts_new(e)),
             _append_code(e, e.v("out"), cve_code(e, a(e, "cv"))),
-            push(e, e.v("out"), _load_inst(e, e.v("r"), in_(e, "base"), in_(e, "ptr"))),
+            push(e, e.v("out"), _load_inst(e, loc(e), e.v("r"), in_(e, "base"), in_(e, "ptr"))),
             e.let("loaded", cv_of(e, _code_of(e, e.v("out")), _lval_new(e, in_(e, "base"), e.v("r")))),
             e.ret(cast_value(e, xx(e), loc(e), a(e, "dest_type"), e.v("loaded"))),
         ),
@@ -6319,25 +6503,26 @@ def module(e):
                     e.let("rv", reinterpret(e, cve_value(e, a(e, "base")), "lrange")),
                     _append_code(e, e.v("out"), e.call_m(e.v("rv"), "code", e.tup())),
                     e.let("ns", e.call_m(e.v("mod"), "slot", e.v("elem"))),
-                    push(e, e.v("out"), _store_inst(e, e.call_m(e.v("rv"), "n", e.tup()), e.v("ns"))),
+                    push(e, e.v("out"), _store_inst(e, loc(e), e.call_m(e.v("rv"), "n", e.tup()), e.v("ns"))),
                     e.let("lb", reinterpret(e, a(e, "loop"), "lbinding")),
                     e.let("cs", e.call_m(e.v("lb"), "ptr", e.tup())),
-                    push(e, e.v("out"), _store_inst(e, _lval_new(e, e.v("elem"), e.s("0")), e.v("cs"))),
+                    push(e, e.v("out"), _store_inst(e, loc(e), _lval_new(e, e.v("elem"), e.s("0")), e.v("cs"))),
                     e.let("head", _fresh_label(e, e.v("mod"))),
                     e.let("bodyl", _fresh_label(e, e.v("mod"))),
                     e.let("end", _fresh_label(e, e.v("mod"))),
                     push(e, e.v("out"), _br_inst(e, e.v("head"))),
                     push(e, e.v("out"), _label_inst(e, e.v("head"))),
                     e.let("i", _fresh(e, e.v("mod"))),
-                    push(e, e.v("out"), _load_inst(e, e.v("i"), e.v("elem"), e.v("cs"))),
+                    push(e, e.v("out"), _load_inst(e, loc(e), e.v("i"), e.v("elem"), e.v("cs"))),
                     e.let("nn", _fresh(e, e.v("mod"))),
-                    push(e, e.v("out"), _load_inst(e, e.v("nn"), e.v("elem"), e.v("ns"))),
+                    push(e, e.v("out"), _load_inst(e, loc(e), e.v("nn"), e.v("elem"), e.v("ns"))),
                     e.let("c", _fresh(e, e.v("mod"))),
                     push(
                         e,
                         e.v("out"),
                         _inst(
                             e,
+                            loc(e),
                             "cmp",
                             e.p("res", e.v("c")),
                             e.p(
@@ -6355,6 +6540,7 @@ def module(e):
                         e.v("out"),
                         _inst(
                             e,
+                            loc(e),
                             "condbr",
                             e.p("cond", _lval_new(e, _int_ty(e, "i1"), e.v("c"))),
                             e.p("t", e.v("bodyl")),
@@ -6368,13 +6554,14 @@ def module(e):
                         e.not_(cve_ended(e, a(e, "body"))),
                         e.seq(
                             e.let("i2", _fresh(e, e.v("mod"))),
-                            push(e, e.v("out"), _load_inst(e, e.v("i2"), e.v("elem"), e.v("cs"))),
+                            push(e, e.v("out"), _load_inst(e, loc(e), e.v("i2"), e.v("elem"), e.v("cs"))),
                             e.let("i3", _fresh(e, e.v("mod"))),
                             push(
                                 e,
                                 e.v("out"),
                                 _inst(
                                     e,
+                                    loc(e),
                                     "binop",
                                     e.p("res", e.v("i3")),
                                     e.p("op", e.s("add")),
@@ -6382,7 +6569,9 @@ def module(e):
                                     e.p("b", _lval_new(e, e.v("elem"), e.s("1"))),
                                 ),
                             ),
-                            push(e, e.v("out"), _store_inst(e, _lval_new(e, e.v("elem"), e.v("i3")), e.v("cs"))),
+                            push(
+                                e, e.v("out"), _store_inst(e, loc(e), _lval_new(e, e.v("elem"), e.v("i3")), e.v("cs"))
+                            ),
                             push(e, e.v("out"), _br_inst(e, e.v("head"))),
                         ),
                     ),
@@ -6433,7 +6622,16 @@ def module(e):
                 body(
                     e,
                     e.let("out", _insts_new(e)),
-                    push(e, e.v("out"), mk(e, "linst", e.p("k", e.call(e.lower_v("li_trap"), e.tup())))),
+                    push(
+                        e,
+                        e.v("out"),
+                        mk(
+                            e,
+                            "linst",
+                            e.p("k", e.call(e.lower_v("li_trap"), e.tup())),
+                            e.p("loc", e.opt_some(loc_t(e), loc(e))),
+                        ),
+                    ),
                     e.ret(ok_cve(e, e.call(e.eval_builtin("codevalue_control_ended"), _code_of(e, e.v("out"))))),
                 ),
             ),
@@ -6775,7 +6973,7 @@ def module(e):
                 "ir",
                 e.if_else(
                     _lgfn_is(e, "global_zero_fn"),
-                    unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(e.s("zeroinitializer")))),
+                    unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(e.s("zeroinitializer")))),
                     unwrap_cve_m(
                         e,
                         try_er(
@@ -7020,6 +7218,10 @@ def module(e):
                             e.p("sip_key_id", target_mb.fresh_unique(e)),
                             e.p("sip_fn_id", target_mb.fresh_unique(e)),
                             e.p("labels", e.list_new(lt(e, "llabel"))),
+                            e.p("frames", e.call(e.lower(e.fld(e.v("srcmap"), "new")), e.tup())),
+                            e.p("dbg", e.list_new(str_(e), *[e.s(node) for node in DBG_HEADER])),
+                            e.p("dbg_keys", e.map_new(str_(e), e.mb.types_int_box())),
+                            e.p("sp", e.int_of(0)),
                         ),
                     ),
                     e.let("tgt", mk(e, "ltarget", e.p("mod", e.v("m")))),
@@ -7527,15 +7729,11 @@ def module(e):
                 ),
                 when(
                     and_b(e, has(e, xx(e), st, "lfloat"), has(e, xx(e), to, "lint")),
-                    _conv(
-                        e, e.if_else(acc(e, xx(e), to, "lint", "signed"), e.dstr("fptosi"), e.dstr("fptoui")), v, to
-                    ),
+                    _conv(e, e.if_else(acc(e, xx(e), to, "lint", "signed"), e.dstr("fptosi"), e.dstr("fptoui")), v, to),
                 ),
                 when(
                     and_b(e, has(e, xx(e), st, "lint"), has(e, xx(e), to, "lfloat")),
-                    _conv(
-                        e, e.if_else(acc(e, xx(e), st, "lint", "signed"), e.dstr("sitofp"), e.dstr("uitofp")), v, to
-                    ),
+                    _conv(e, e.if_else(acc(e, xx(e), st, "lint", "signed"), e.dstr("sitofp"), e.dstr("uitofp")), v, to),
                 ),
                 e.let("__fb", cv_bits(e, st, "lfloat")),
                 e.let("__ftb", acc(e, xx(e), to, "lfloat", "bits")),

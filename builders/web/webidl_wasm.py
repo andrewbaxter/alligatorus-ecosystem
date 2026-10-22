@@ -167,6 +167,7 @@ def _handle_fn(e, x):
                         const_eval_in(
                             e,
                             xx(e),
+                            loc(e),
                             e.stage(
                                 e.rec(
                                     p("raw", e.lower(e.v("raw"))),
@@ -250,9 +251,7 @@ def _raw_type(e, x):
         ),
         body(
             e,
-            e.if_only(
-                is_equal(e, xx(e), in_(e, "under"), a(e, "dest_type")), ret_m(e, e.mb.as_(e.b(True), bool_t(e)))
-            ),
+            e.if_only(is_equal(e, xx(e), in_(e, "under"), a(e, "dest_type")), ret_m(e, e.mb.as_(e.b(True), bool_t(e)))),
             e.if_only(e.not_(has(e, xx(e), a(e, "dest_type"), "wi_raw_m")), ret_m(e, dfalse(e))),
             e.ret(
                 e.call(
@@ -352,7 +351,7 @@ def module(e):
                     e,
                     # The caller's context may be a target function body (no builtins), so the string is made here.
                     e.let("ref", e.cat(e.s("$"), in_(e, "name"))),
-                    e.let("refcv", unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(e.lower(e.v("ref")))))),
+                    e.let("refcv", unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(e.lower(e.v("ref")))))),
                     e.let("fnv", unwrap_cve_m(e, tag_value(e, e.v("refcv"), in_(e, "ity")))),
                     *call_result(
                         e,
@@ -361,6 +360,7 @@ def module(e):
                             const_eval_in(
                                 e,
                                 xx(e),
+                                loc(e),
                                 e.stage(
                                     e.mb.as_(
                                         e.call(graft(e, e.v("fnv")), graft(e, a(e, "argument"))),
@@ -404,7 +404,7 @@ def module(e):
         "h_str",
         body(
             e,
-            e.let("c", unwrap_cve_t(e, const_eval_in(e, xx(e), e.stage(graft(e, a(e, "cv")))))),
+            e.let("c", unwrap_cve_t(e, const_eval_in(e, xx(e), loc(e), e.stage(graft(e, a(e, "cv")))))),
             e.if_only(
                 is_runtime(e, e.v("c")), throw_err(e, loc(e), "webidl: iface and member must be constant strings")
             ),
@@ -550,7 +550,10 @@ def module(e):
                                 ok_cve(
                                     e,
                                     unwrap_cve_m(
-                                        e, const_eval_in(e, xx(e), e.stage(e.lower(e.mb.as_(e.v("value"), int_t(e)))))
+                                        e,
+                                        const_eval_in(
+                                            e, xx(e), loc(e), e.stage(e.lower(e.mb.as_(e.v("value"), int_t(e))))
+                                        ),
                                     ),
                                 ),
                             ),
@@ -646,7 +649,9 @@ def module(e):
                     ),
                     e.let(
                         "refcv",
-                        unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(e.cat(e.s("$"), e.lower(e.v("name")))))),
+                        unwrap_cve_m(
+                            e, const_eval_in(e, xx(e), loc(e), e.stage(e.cat(e.s("$"), e.lower(e.v("name")))))
+                        ),
                     ),
                     e.if_only(
                         or_b(e, e.eq(e.v("rkind"), e.s("handle")), e.eq(e.v("rkind"), e.s("str"))),
@@ -667,7 +672,15 @@ def module(e):
                                                     "wret",
                                                     p("ity", e.v("ity")),
                                                     p("name", e.v("name")),
-                                                    p("wrap", e.fld(_handle_types(e, e.call_m(e.v("sig"), "ret_iface", e.tup())), "own")),
+                                                    p(
+                                                        "wrap",
+                                                        e.fld(
+                                                            _handle_types(
+                                                                e, e.call_m(e.v("sig"), "ret_iface", e.tup())
+                                                            ),
+                                                            "own",
+                                                        ),
+                                                    ),
                                                 ),
                                             ),
                                             p("data", e.tup()),
@@ -766,7 +779,12 @@ def module(e):
                     e.rec(
                         p("ity", ity),
                         p("name", e.s(special)),
-                        p("wrap", e.fld(e.call(e.fld(e.v("k"), "handle"), e.s("Window" if special == "global" else "")), "own")),
+                        p(
+                            "wrap",
+                            e.fld(
+                                e.call(e.fld(e.v("k"), "handle"), e.s("Window" if special == "global" else "")), "own"
+                            ),
+                        ),
                     ),
                 ),
             )

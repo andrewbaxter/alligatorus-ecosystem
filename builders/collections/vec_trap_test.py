@@ -110,7 +110,9 @@ def _wasm(e):
                 name,
                 e.call(
                     e.fld(e.v("wasm"), "data_fn"),
-                    e.rec(e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("elem", e.v("t_u32")), e.p("values", values)),
+                    e.rec(
+                        e.p("mod", e.v("m")), e.p("name", e.s(name)), e.p("elem", e.v("t_u32")), e.p("values", values)
+                    ),
                 ),
             )
         )

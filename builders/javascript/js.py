@@ -6,7 +6,7 @@ never reassigned. Names: functions and temporaries are minted per module (`hint$
 their names for the module's text helpers."""
 
 from .. import target_mb
-from ..core import values
+from ..core import srcmap, values
 from .. import target_mb as tm
 from ..target_mb import (
     a,
@@ -107,12 +107,15 @@ def _fn_def(e, out, name, arg_type, ret):
     return target_mb.fn_def(e, out, TARGET, name, arg_type, ret)
 
 
+VLQ_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+
 def _jmod_t(e):
     return t(e, "jmod")
 
 
 def _render_t(e):
-    return e.rec(e.p("js", str_(e)))
+    return e.rec(e.p("js", str_(e)), e.p("map", str_(e)), e.p("frames", str_(e)))
 
 
 def _insts_t(e):
@@ -123,8 +126,16 @@ def _insts_new(e):
     return e.list_new(lt(e, "jinst"))
 
 
-def _inst(e, text):
-    return mk(e, "jinst", e.p("text", text))
+def _inst(e, text, loc_):
+    return mk(e, "jinst", e.p("text", text), e.p("loc", loc_))
+
+
+def _cell(e, name, value):
+    return e.let(name, e.rec(e.p("v", value)))
+
+
+def _cv(e, name):
+    return e.fld(e.v(name), "v")
 
 
 def _jany_t(e):
@@ -199,7 +210,7 @@ def _if_branch_stmts(e, cv_var):
                 push(
                     e,
                     e.v("bo"),
-                    _inst(e, e.cat(e.fld(e.v("st"), "res"), e.s(" = "), _jv_expr(e, e.v("bv")), e.s(";"))),
+                    _inst(e, e.cat(e.fld(e.v("st"), "res"), e.s(" = "), _jv_expr(e, e.v("bv")), e.s(";")), loc(e)),
                 ),
             ),
         ),
@@ -233,7 +244,13 @@ def _indent(e, depth):
 
 def _push_indented(e, insts, pre, extra):
     return e.foreach(
-        insts, "i0", push(e, e.v("out"), _inst(e, e.cat(pre, e.s(extra), e.call_m(e.v("i0"), "text", e.tup()))))
+        insts,
+        "i0",
+        push(
+            e,
+            e.v("out"),
+            _inst(e, e.cat(pre, e.s(extra), e.call_m(e.v("i0"), "text", e.tup())), e.call_m(e.v("i0"), "loc", e.tup())),
+        ),
     )
 
 
@@ -265,7 +282,9 @@ def _if_hook(e):
                 e.let("cl", _insts_new(e)),
                 _append_code(e, e.v("cl"), cve_code(e, e.v("c"))),
                 _push_indented(e, e.v("cl"), e.v("pre"), ""),
-                push(e, e.v("out"), _inst(e, e.cat(e.v("pre"), e.s("if ("), _jv_expr(e, e.v("c")), e.s(") {")))),
+                push(
+                    e, e.v("out"), _inst(e, e.cat(e.v("pre"), e.s("if ("), _jv_expr(e, e.v("c")), e.s(") {")), loc(e))
+                ),
                 e.let("bo", _insts_new(e)),
                 e.let("b", e.fld(e.v("br"), "body")),
                 _if_branch_stmts(e, "b"),
@@ -277,8 +296,8 @@ def _if_hook(e):
                         e.mb.operator_lt(e.fld(e.v("ci"), "v"), e.fld(e.v("nc"), "v")),
                         e.fld(a(e, "else"), "is_some"),
                     ),
-                    push(e, e.v("out"), _inst(e, e.cat(e.v("pre"), e.s("} else {")))),
-                    push(e, e.v("out"), _inst(e, e.cat(e.v("pre"), e.s("}")))),
+                    push(e, e.v("out"), _inst(e, e.cat(e.v("pre"), e.s("} else {")), loc(e))),
+                    push(e, e.v("out"), _inst(e, e.cat(e.v("pre"), e.s("}")), loc(e))),
                 ),
             ),
         ),
@@ -293,7 +312,7 @@ def _if_hook(e):
                 push(
                     e,
                     e.v("out"),
-                    _inst(e, e.cat(_indent(e, e.mb.operator_sub(e.fld(e.v("nc"), "v"), num(e, 1))), e.s("}"))),
+                    _inst(e, e.cat(_indent(e, e.mb.operator_sub(e.fld(e.v("nc"), "v"), num(e, 1))), e.s("}")), loc(e)),
                 ),
             ),
         ),
@@ -311,7 +330,7 @@ def _if_hook(e):
             e.if_only(
                 e.mb.operator_ge(e.fld(e.v("depth"), "v"), num(e, 0)),
                 e.seq(
-                    push(e, e.v("out"), _inst(e, e.cat(_indent(e, e.fld(e.v("depth"), "v")), e.s("}")))),
+                    push(e, e.v("out"), _inst(e, e.cat(_indent(e, e.fld(e.v("depth"), "v")), e.s("}")), loc(e))),
                     e.mb.set(e.fld(e.v("depth"), "v"), e.mb.operator_sub(e.fld(e.v("depth"), "v"), num(e, 1))),
                 ),
             ),
@@ -326,7 +345,7 @@ def _if_hook(e):
             ret_m(e, err_cve(e, loc(e), "if: some branches yield a value and some do not")),
         ),
         e.let("all", _insts_new(e)),
-        push(e, e.v("all"), _inst(e, e.cat(e.s("let "), e.fld(e.v("st"), "res"), e.s(";")))),
+        push(e, e.v("all"), _inst(e, e.cat(e.s("let "), e.fld(e.v("st"), "res"), e.s(";")), loc(e))),
         e.foreach(e.v("out"), "i0", push(e, e.v("all"), e.v("i0"))),
         e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("all")), _jval_new(e, e.fld(e.v("st"), "res"))))),
     )
@@ -357,7 +376,7 @@ def _jgfn_is(e, kind):
 
 
 def _jgfn_staged(e, staged):
-    return unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(staged)))
+    return unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(staged)))
 
 
 def _jgfn_field(e, key):
@@ -368,8 +387,24 @@ def _push_utf8(e, out, text):
     return e.foreach(e.call(e.mb.eval_str_utf8(), text), "__b", push(e, out, e.v("__b")))
 
 
-def _lines(e, insts, out, indent):
-    return e.foreach(insts, "i0", push(e, out, e.cat(e.s(indent), e.call_m(e.v("i0"), "text", e.tup()))))
+def _lines(e, insts, out, frames_out, indent):
+    """Appends the statements' text to `out` (a jmod's line list) and each one's frame to `frames_out`."""
+    return e.foreach(
+        insts,
+        "i0",
+        e.seq(
+            push(e, out, e.cat(e.s(indent), e.call_m(e.v("i0"), "text", e.tup()))),
+            push(e, frames_out, _frame(e, e.call_m(e.v("i0"), "loc", e.tup()))),
+        ),
+    )
+
+
+def _frame(e, loc_):
+    return e.call_m(in_(e, "frames"), "index", loc_)
+
+
+def _no_frame(e):
+    return e.int_of(-1)
 
 
 def module(e):
@@ -393,6 +428,7 @@ def module(e):
         entries.append(e.p(str(b), e.s(text)))
     escape_table = e.map_new(str_(e), str_(e), *entries)
     x.append(e.let("values", e.import_local("values", values.FILE)))
+    x.append(e.let("srcmap", e.import_local("srcmap", srcmap.FILE)))
     x.append(e.let("d", e.define()))
     x.append(e.option_type_let())
     def_iface(e, x, "jany_m")
@@ -402,7 +438,7 @@ def module(e):
     def_iface(e, x, "jinst_m")
     def_iface(e, x, "jmod_m")
     def_iface(e, x, "jbinding_m")
-    def_obj(e, x, "jinst", "js statement", e.rec(e.p("text", str_(e))))
+    def_obj(e, x, "jinst", "js statement", e.rec(e.p("text", str_(e)), e.p("loc", loc_t(e))))
     def_obj(e, x, "jcode", "js code", e.rec(e.p("insts", _insts_t(e))))
     x.append(e.impl_interface(e.v("jcode"), e.mb.builtin("eval", "code_dyn")))
     method(e, x, "jcode", "insts", e.tup(), _insts_t(e), in_(e, "insts"))
@@ -411,7 +447,9 @@ def module(e):
         e.impl_interface(
             e.v("jval"),
             e.fld(e.v("values"), "retag"),
-            e.p("retag", mk(e, "jval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")), e.p("temp", in_(e, "temp")))),
+            e.p(
+                "retag", mk(e, "jval", e.p("ty", e.v("arg")), e.p("expr", in_(e, "expr")), e.p("temp", in_(e, "temp")))
+            ),
         )
     )
     def_obj(
@@ -423,7 +461,10 @@ def module(e):
             e.p("n", int_t(e)),
             e.p("xx", e.call(e.mb.types_option(), e.types_expr_context())),
             e.p("funcs", e.list_type(str_(e))),
+            e.p("func_frames", e.list_type(int_t(e))),
             e.p("stmts", e.list_type(str_(e))),
+            e.p("stmt_frames", e.list_type(int_t(e))),
+            e.p("frames", e.fld(e.v("srcmap"), "table_t")),
         ),
     )
     def_obj(e, x, "jtarget", "js target", e.rec(e.p("mod", _jmod_t(e))))
@@ -619,6 +660,7 @@ def module(e):
     )
 
     accessor(e, x, "jinst", "text", str_(e))
+    accessor(e, x, "jinst", "loc", loc_t(e))
     accessor(e, x, "jval", "expr", str_(e))
     accessor(e, x, "jval", "ty", ty(e))
     accessor(e, x, "jval", "temp", bool_t(e))
@@ -713,7 +755,7 @@ def module(e):
                 must_v(
                     e,
                     TARGET,
-                    e.call(e.mb.eval_const_eval(), e.rec(e.p("xx", e.v("ctx")), e.p("staged", a(e, "body")))),
+                    e.call(e.mb.eval_const_eval_function(), e.rec(e.p("xx", e.v("ctx")), e.p("staged", a(e, "body")))),
                     "compile failed",
                 )
             ),
@@ -728,22 +770,24 @@ def module(e):
         str_(e),
         e.seq(
             e.let("fname", e.call_m(outer(e), "mint", a(e, "name"))),
+            e.let("floc", e.call(e.eval_builtin("expr_loc"), a(e, "body"))),
             e.let("r", e.call_m(outer(e), "lower", e.rec(e.p("params", a(e, "params")), e.p("body", a(e, "body"))))),
             e.let("out", _insts_new(e)),
             _append_code(e, e.v("out"), cve_code(e, e.v("r"))),
             e.if_only(
                 and_b(e, e.not_(cve_ended(e, e.v("r"))), _is_js(e, in_(e, "xx", "value"), e.v("r"))),
-                push(e, e.v("out"), _inst(e, e.cat(e.s("return "), _jv_expr(e, e.v("r")), e.s(";")))),
+                push(e, e.v("out"), _inst(e, e.cat(e.s("return "), _jv_expr(e, e.v("r")), e.s(";")), e.v("floc"))),
             ),
-            e.let("all", e.list_new(str_(e))),
+            e.let("ff", _frame(e, e.v("floc"))),
             push(
                 e,
-                e.v("all"),
+                in_(e, "funcs"),
                 e.cat(e.s("function "), e.v("fname"), e.s("("), e.join(a(e, "params"), ", "), e.s(") {")),
             ),
-            _lines(e, e.v("out"), e.v("all"), "  "),
-            push(e, e.v("all"), e.s("}")),
-            push(e, in_(e, "funcs"), e.join(e.v("all"), "\n")),
+            push(e, in_(e, "func_frames"), e.v("ff")),
+            _lines(e, e.v("out"), in_(e, "funcs"), in_(e, "func_frames"), "  "),
+            push(e, in_(e, "funcs"), e.s("}")),
+            push(e, in_(e, "func_frames"), e.v("ff")),
             e.ret(e.v("fname")),
         ),
     )
@@ -756,15 +800,22 @@ def module(e):
         str_(e),
         e.seq(
             e.let("fname", e.call_m(outer(e), "mint", a(e, "name"))),
-            e.let("all", e.list_new(str_(e))),
             push(
                 e,
-                e.v("all"),
+                in_(e, "funcs"),
                 e.cat(e.s("function "), e.v("fname"), e.s("("), e.join(a(e, "params"), ", "), e.s(") {")),
             ),
-            e.foreach(a(e, "lines"), "l", push(e, e.v("all"), e.cat(e.s("  "), e.v("l")))),
-            push(e, e.v("all"), e.s("}")),
-            push(e, in_(e, "funcs"), e.join(e.v("all"), "\n")),
+            push(e, in_(e, "func_frames"), _no_frame(e)),
+            e.foreach(
+                a(e, "lines"),
+                "l",
+                e.seq(
+                    push(e, in_(e, "funcs"), e.cat(e.s("  "), e.v("l"))),
+                    push(e, in_(e, "func_frames"), _no_frame(e)),
+                ),
+            ),
+            push(e, in_(e, "funcs"), e.s("}")),
+            push(e, in_(e, "func_frames"), _no_frame(e)),
             e.ret(e.v("fname")),
         ),
     )
@@ -778,7 +829,11 @@ def module(e):
         # A variable keeps its name: the module's text helpers (`func_text` lines) refer to variables by name, and
         # a let-bound variable's minted name cannot reach text at the staged level. The module's function scope keeps
         # the name from the page.
-        e.seq(push(e, in_(e, "stmts"), e.cat(e.s("let "), e.v("arg"), e.s(";"))), e.ret(e.v("arg"))),
+        e.seq(
+            push(e, in_(e, "stmts"), e.cat(e.s("let "), e.v("arg"), e.s(";"))),
+            push(e, in_(e, "stmt_frames"), _no_frame(e)),
+            e.ret(e.v("arg")),
+        ),
     )
     x.append(
         e.method_impl(
@@ -787,12 +842,20 @@ def module(e):
             e.rec(e.p("target", str_(e)), e.p("key", str_(e)), e.p("value", str_(e))),
             e.option_type_none(),
             e.stage(
-                push(
-                    e,
-                    in_(e, "stmts"),
-                    e.cat(
-                        a(e, "target"), e.s("["), hf(e, "h_str_lit", a(e, "key")), e.s("] = "), a(e, "value"), e.s(";")
+                e.seq(
+                    push(
+                        e,
+                        in_(e, "stmts"),
+                        e.cat(
+                            a(e, "target"),
+                            e.s("["),
+                            hf(e, "h_str_lit", a(e, "key")),
+                            e.s("] = "),
+                            a(e, "value"),
+                            e.s(";"),
+                        ),
                     ),
+                    push(e, in_(e, "stmt_frames"), _no_frame(e)),
                 )
             ),
         )
@@ -811,7 +874,7 @@ def module(e):
                     ),
                     e.let("out", _insts_new(e)),
                     _append_code(e, e.v("out"), cve_code(e, e.v("r"))),
-                    _lines(e, e.v("out"), in_(e, "stmts"), ""),
+                    _lines(e, e.v("out"), in_(e, "stmts"), in_(e, "stmt_frames"), ""),
                 )
             ),
         )
@@ -821,16 +884,102 @@ def module(e):
         x,
         "jmod",
         "render",
-        e.tup(),
+        e.rec(e.p("frames", str_(e))),
         _render_t(e),
         e.seq(
             e.let("all", e.list_new(str_(e))),
+            e.let("fr", e.list_new(int_t(e))),
             push(e, e.v("all"), e.s('"use strict";')),
+            push(e, e.v("fr"), _no_frame(e)),
             push(e, e.v("all"), e.s("(() => {")),
+            push(e, e.v("fr"), _no_frame(e)),
             e.foreach(in_(e, "funcs"), "f", push(e, e.v("all"), e.v("f"))),
+            e.foreach(in_(e, "func_frames"), "f", push(e, e.v("fr"), e.v("f"))),
             e.foreach(in_(e, "stmts"), "s", push(e, e.v("all"), e.v("s"))),
+            e.foreach(in_(e, "stmt_frames"), "s", push(e, e.v("fr"), e.v("s"))),
             push(e, e.v("all"), e.s("})();")),
-            e.ret(e.rec(e.p("js", e.cat(e.join(e.v("all"), "\n"), e.s("\n"))))),
+            push(e, e.v("fr"), _no_frame(e)),
+            # Source map v3 over one source, the sidecar: every line with a frame is one segment at column 0 whose
+            # original line is the frame (the fields are deltas from the previous segment; only the line moves).
+            e.let("segs", e.list_new(str_(e))),
+            _cell(e, "prev", e.int_of(0)),
+            e.foreach(
+                e.v("fr"),
+                "f",
+                e.if_else(
+                    e.mb.operator_lt(e.v("f"), e.int_of(0)),
+                    push(e, e.v("segs"), e.dstr("")),
+                    e.seq(
+                        push(
+                            e,
+                            e.v("segs"),
+                            e.cat(
+                                e.s("AA"),
+                                e.call_m(outer(e), "vlq", e.mb.operator_sub(e.v("f"), _cv(e, "prev"))),
+                                e.s("A"),
+                            ),
+                        ),
+                        e.mb.set(_cv(e, "prev"), e.v("f")),
+                    ),
+                ),
+            ),
+            e.ret(
+                e.rec(
+                    e.p("js", e.cat(e.join(e.v("all"), "\n"), e.s("\n"))),
+                    e.p(
+                        "map",
+                        e.cat(
+                            e.s('{"version":3,"sources":["'),
+                            a(e, "frames"),
+                            e.s('"],"names":[],"mappings":"'),
+                            e.join(e.v("segs"), ";"),
+                            e.s('"}\n'),
+                        ),
+                    ),
+                    e.p("frames", e.call_m(in_(e, "frames"), "render", e.tup())),
+                )
+            ),
+        ),
+    )
+    method(
+        e,
+        x,
+        "jmod",
+        "vlq",
+        int_t(e),
+        str_(e),
+        e.seq(
+            e.let("b64", e.list_new(str_(e), *[e.s(c) for c in VLQ_ALPHABET])),
+            _cell(
+                e,
+                "v",
+                e.if_else(
+                    e.mb.operator_lt(e.v("arg"), e.int_of(0)),
+                    e.mb.operator_or(e.mb.operator_shl(e.mb.operator_neg(e.v("arg")), e.int_of(1)), e.int_of(1)),
+                    e.mb.operator_shl(e.v("arg"), e.int_of(1)),
+                ),
+            ),
+            _cell(e, "out", e.dstr("")),
+            e.mb.labeled(
+                "digits",
+                e.mb.loop(
+                    e.seq(
+                        e.let("digit", e.mb.operator_and(_cv(e, "v"), e.int_of(31))),
+                        e.mb.set(_cv(e, "v"), e.mb.operator_ushr(_cv(e, "v"), e.int_of(5))),
+                        e.let(
+                            "d",
+                            e.if_else(
+                                e.mb.operator_gt(_cv(e, "v"), e.int_of(0)),
+                                e.mb.operator_or(e.v("digit"), e.int_of(32)),
+                                e.v("digit"),
+                            ),
+                        ),
+                        e.mb.set(_cv(e, "out"), e.cat(_cv(e, "out"), e.call_m(e.v("b64"), "get", e.v("d")))),
+                        e.if_only(e.eq(_cv(e, "v"), e.int_of(0)), e.mb.return_label("digits")),
+                    )
+                ),
+            ),
+            e.ret(_cv(e, "out")),
         ),
     )
 
@@ -883,11 +1032,15 @@ def module(e):
                     e.if_only(
                         _is_js(e, xx(e), a(e, "value")),
                         e.seq(
-                            push(e, e.v("out"), _inst(e, e.cat(e.s("return "), _jv_expr(e, a(e, "value")), e.s(";")))),
+                            push(
+                                e,
+                                e.v("out"),
+                                _inst(e, e.cat(e.s("return "), _jv_expr(e, a(e, "value")), e.s(";")), loc(e)),
+                            ),
                             ret_m(e, e.eresult_ok(code_t(e), _code_of(e, e.v("out")))),
                         ),
                     ),
-                    push(e, e.v("out"), _inst(e, e.s("return;"))),
+                    push(e, e.v("out"), _inst(e, e.s("return;"), loc(e))),
                     e.ret(e.eresult_ok(code_t(e), _code_of(e, e.v("out")))),
                 ),
             ),
@@ -911,6 +1064,7 @@ def module(e):
                                 e.cat(e.s("return "), _jv_expr(e, a(e, "cv")), e.s(";")),
                                 e.dstr("return;"),
                             ),
+                            loc(e),
                         ),
                     ),
                     e.ret(e.call(e.eval_builtin("codevalue_control_ended"), _code_of(e, e.v("out")))),
@@ -1100,6 +1254,7 @@ def module(e):
                                 e.join(e.fld(e.v("args"), "exprs"), ", "),
                                 e.s(");"),
                             ),
+                            loc(e),
                         ),
                     ),
                     e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _jval_temp(e, e.v("r"))))),
@@ -1174,7 +1329,7 @@ def module(e):
                     push(
                         e,
                         e.v("out"),
-                        _inst(e, e.cat(_jv_expr(e, e.v("t")), e.s(" = "), _jv_expr(e, e.v("v")), e.s(";"))),
+                        _inst(e, e.cat(_jv_expr(e, e.v("t")), e.s(" = "), _jv_expr(e, e.v("v")), e.s(";")), loc(e)),
                     ),
                     e.ret(ok_cve(e, cv_no(e, _code_of(e, e.v("out"))))),
                 ),
@@ -1205,7 +1360,9 @@ def module(e):
                         push(
                             e,
                             e.v("out"),
-                            _inst(e, e.cat(e.s("const "), e.v("r"), e.s(" = "), _jv_expr(e, e.v("v")), e.s(";"))),
+                            _inst(
+                                e, e.cat(e.s("const "), e.v("r"), e.s(" = "), _jv_expr(e, e.v("v")), e.s(";")), loc(e)
+                            ),
                         ),
                     ),
                     e.ret(
@@ -1358,6 +1515,7 @@ def module(e):
                                 e.join(e.v("rest"), ", "),
                                 e.s(");"),
                             ),
+                            loc(e),
                         ),
                     ),
                     e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _jval_temp(e, e.v("r"))))),
@@ -1426,9 +1584,7 @@ def module(e):
                 ret_m(e, err_cve(e, loc(e), "js definition name must be constant")),
             ),
             e.let("name", _const_str(e, e.v("namecv"))),
-            e.if_only(
-                _jgfn_is(e, "global_fn"), ret_m(e, tag_value(e, e.v("namecv"), mk_arg(e, "jglobal", e.tup())))
-            ),
+            e.if_only(_jgfn_is(e, "global_fn"), ret_m(e, tag_value(e, e.v("namecv"), mk_arg(e, "jglobal", e.tup())))),
             e.let("modcv", _jgfn_field(e, "mod")),
             e.if_only(
                 _jgfn_is(e, "var_fn"),
@@ -1437,9 +1593,7 @@ def module(e):
                         "varcv",
                         _jgfn_staged(
                             e,
-                            e.call_m(
-                                e.call_m(graft(e, e.v("modcv")), "m", e.tup()), "declare", e.lower(e.v("name"))
-                            ),
+                            e.call_m(e.call_m(graft(e, e.v("modcv")), "m", e.tup()), "declare", e.lower(e.v("name"))),
                         ),
                     ),
                     ret_m(e, tag_value(e, e.v("varcv"), mk_arg(e, "jglobal", e.tup()))),
@@ -1507,7 +1661,10 @@ def module(e):
                             e.p("n", num(e, 0)),
                             e.p("xx", e.opt_none(e.types_expr_context())),
                             e.p("funcs", e.list_new(str_(e))),
+                            e.p("func_frames", e.list_new(int_t(e))),
                             e.p("stmts", e.list_new(str_(e))),
+                            e.p("stmt_frames", e.list_new(int_t(e))),
+                            e.p("frames", e.call(e.lower(e.fld(e.v("srcmap"), "new")), e.tup())),
                         ),
                     ),
                     e.let("tgt", mk(e, "jtarget", e.p("mod", e.v("m")))),
@@ -1557,7 +1714,9 @@ def module(e):
     y.append(e.let("global", e.mb.as_(e.call(e.fld(e.v("k"), "jglobal_new"), e.tup()), ty(e))))
     for kind in JGFN_KINDS:
         exported.append(kind)
-        y.append(e.let(kind + "_o", e.call(e.fld(e.v("k"), "jgfn_t_new"), e.rec(e.p("kind", e.int_of(_jgfn_kind(kind)))))))
+        y.append(
+            e.let(kind + "_o", e.call(e.fld(e.v("k"), "jgfn_t_new"), e.rec(e.p("kind", e.int_of(_jgfn_kind(kind))))))
+        )
     y.append(e.let("d", e.define()))
     y.append(e.let("gfn_d", e.define()))
     for kind in JGFN_KINDS:
@@ -1582,9 +1741,9 @@ def module(e):
         e.method_impl(
             e.v("mod_o"),
             "render",
-            e.tup(),
+            e.rec(e.p("frames", str_(e))),
             e.option_type_some(_render_t(e)),
-            e.stage(e.call_m(in_(e, "m"), "render", e.tup())),
+            e.stage(e.call_m(in_(e, "m"), "render", e.v("arg"))),
         )
     )
     y.append(

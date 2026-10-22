@@ -172,9 +172,7 @@ class _Target:
             return conv(
                 e,
                 _up(e, e.v("int_to_ptr"), depth),
-                e.mb.operator_add(
-                    conv(e, _up(e, e.v("ptr_to_int"), depth), base, i32), e.mb.operator_mul(idx, size)
-                ),
+                e.mb.operator_add(conv(e, _up(e, e.v("ptr_to_int"), depth), base, i32), e.mb.operator_mul(idx, size)),
                 ptr_type,
             )
         return e.mb.operator_add(base, idx)
@@ -196,7 +194,8 @@ def _cell(e, h, index, depth):
 
 def _data_cell(e, h, depth):
     return e.mb.field(
-        conv(e, _up(e, e.v("ptr_cast"), depth), e.mb.as_(h, _up(e, e.v("pv"), depth)), _up(e, e.v("ppv"), depth)), e.n(0)
+        conv(e, _up(e, e.v("ptr_cast"), depth), e.mb.as_(h, _up(e, e.v("pv"), depth)), _up(e, e.v("ppv"), depth)),
+        e.n(0),
     )
 
 
@@ -360,7 +359,10 @@ def _drop_elems(e, tg, d, dh):
                         e.not_(e.mb.operator_lt(e.v("__i"), _cell(e, e.v("v"), LEN_CELL, d))), e.mb.return_label("dr")
                     ),
                     e.seq(
-                        e.let("__o", e.mb.as_(e.mb.field(_data(e, e.v("v"), d, dh), e.v("__i")), _up(e, e.v("elem_own"), dh)))
+                        e.let(
+                            "__o",
+                            e.mb.as_(e.mb.field(_data(e, e.v("v"), d, dh), e.v("__i")), _up(e, e.v("elem_own"), dh)),
+                        )
                     ),
                     e.mb.set(e.v("__i"), e.mb.operator_add(e.v("__i"), e.n(1))),
                 ),
@@ -722,7 +724,7 @@ def module(e, kind):
     _host_types(e, parts)
     _deps(e, tg, parts)
     parts.append(
-        e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), e.stage(_setup(e, tg))))))
+        e.ret(e.eresult_ok(e.mb.types_cve(), unwrap_cve_m(e, const_eval_in(e, xx(e), loc(e), e.stage(_setup(e, tg))))))
     )
     const_fn(e, x, "vec_b", "vec.type", body(e, *parts))
     x.append(e.finish(e.v("d")))
