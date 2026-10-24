@@ -1,7 +1,8 @@
 """owned-test.atz (llvm) / owned-test-wasm.atz (wasi): a vec and a map holding values with a destructor
-(destructor.atz owned blocks over `ptr(void)`); the exit status is the number of destroy calls, expected 11:
+(destructor.atz owned blocks over `ptr(void)`); the exit status is the number of destroy calls, expected 12:
 vec: pop (1, the popped binding drops), assigning through `at(0)` (1, the old element), clear (2), the owned vec's
-drop (2); map: an overwriting put (1), remove (1), clear (2), the owned map's drop (1)."""
+drop (2); map: an overwriting put (1), remove (1), clear (2), the owned map's drop (1); a labeled block yielding an
+owned binding's value by `move()` (1: the moved binding does not drop, the block's value does)."""
 
 from ..root_mode import APP, root_mode_finish
 from .. import target_mb as tm
@@ -11,7 +12,7 @@ from ..wasm.wat import bind_types
 LLVM = "llvm"
 WASM = "wasm"
 FILES = {LLVM: "owned-test.atz", WASM: "owned-test-wasm.atz"}  # plus owned-test-ir.atz: the llvm IR logged
-EXPECTED_DESTROYS = 11
+EXPECTED_DESTROYS = 12
 
 
 def _lo(e, name):
@@ -98,7 +99,10 @@ def module(e, kind, mode=APP):
     setup2.append(
         e.let(
             "blk",
-            e.call(e.fld(e.v("destructor"), "type"), e.rec(e.p("under", e.v("t_pv")), e.p("destroy", e.v("destroy")))),
+            e.call(
+                e.fld(e.v("destructor"), "type"),
+                e.rec(e.p("under", e.v("t_pv")), e.p("destroy", e.v("destroy"))),
+            ),
         )
     )
     for f in ["type", "own"]:
@@ -138,7 +142,7 @@ def module(e, kind, mode=APP):
 
     body = e.seq(
         e.seq(
-            e.let("v", e.mb.as_(e.call(_lo(e, "blks_new"), e.tup()), _lo(e, "blks_own"))),
+            e.let("v", e.call(_lo(e, "blks_new"), e.tup())),
             method("v", "push", block()),
             method("v", "push", block()),
             method("v", "push", block()),
@@ -148,7 +152,7 @@ def module(e, kind, mode=APP):
             method("v", "clear", e.tup()),
             method("v", "push", block()),
             method("v", "push", block()),
-            e.let("m", e.mb.as_(e.call(_lo(e, "bmap_new"), e.tup()), _lo(e, "bmap_own"))),
+            e.let("m", e.call(_lo(e, "bmap_new"), e.tup())),
             method("m", "put", e.n(1), block()),
             method("m", "put", e.n(1), block()),
             e.let("removed", method("m", "remove", e.n(1))),
@@ -156,6 +160,10 @@ def module(e, kind, mode=APP):
             method("m", "put", e.n(3), block()),
             method("m", "clear", e.tup()),
             method("m", "put", e.n(4), block()),
+            e.let(
+                "w",
+                e.mb.labeled("lb", e.seq(e.let("t", block()), e.mb.return_to("lb", method("t", "move", e.tup())))),
+            ),
         ),
     )
     if kind == LLVM:

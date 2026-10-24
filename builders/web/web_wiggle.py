@@ -2,6 +2,7 @@
 
 from .. import target_mb as tm
 from ..target_mb import fn_of, int_as
+from ..collections import closure_wasm
 from ..wasm.wat import bind_types
 
 BLOCK = "u"
@@ -190,6 +191,7 @@ def _byte_count(e, text):
 def module(e):
     setup = []
     setup.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
+    setup.append(e.let("closure", e.import_local("closure", closure_wasm.FILE)))
     setup.append(e.let("m", e.call(e.fld(e.v("wasm"), "new"), e.tup())))
     bind_types(e, setup)
     setup.append(e.let("t_pu8", e.call(e.fld(e.v("wasm"), "ptr"), e.fld(e.v("wasm"), "u8"))))
@@ -205,15 +207,15 @@ def module(e):
     )
     setup.append(
         e.let(
-            "frame_fn_t",
-            e.call(
-                e.fld(e.v("wasm"), "fn"),
-                e.rec(e.p("params", e.list_new(e.mb.eval_type(), e.v("t_f64"))), e.p("ret", e.v("t_void"))),
+            "frame_cb_t",
+            e.fld(
+                e.call(e.fld(e.v("closure"), "callable"), e.rec(e.p("arg", e.v("t_f64")), e.p("ret", e.v("t_void")))),
+                "type",
             ),
         )
     )
     setup_out = []
-    for n in ["m", "start_fn_t", "frame_fn_t", "t_i32", "t_u32", "t_f32", "t_f64", "t_pu8", "ptr_cast"]:
+    for n in ["m", "start_fn_t", "frame_cb_t", "t_i32", "t_u32", "t_f32", "t_f64", "t_pu8", "ptr_cast"]:
         setup_out.append(e.p(n, e.v(n)))
     setup.append(e.ret(e.rec(*setup_out)))
     shader_setup_ = shader_setup(e)
@@ -225,7 +227,8 @@ def module(e):
     top.append(e.let("glsl", e.import_local("glsl", "glsl-es-3.00.atz")))
     top.append(e.let("uniforms", e.import_local("uniforms", "webgl-uniforms.atz")))
     top.append(e.let("k", e.lower(e.mb.seq(setup))))
-    for n in ["m", "start_fn_t", "frame_fn_t", "t_i32", "t_u32", "t_f32", "t_f64", "t_pu8", "ptr_cast"]:
+    top.append(e.let("closure", e.import_local("closure", closure_wasm.FILE)))
+    for n in ["m", "start_fn_t", "frame_cb_t", "t_i32", "t_u32", "t_f32", "t_f64", "t_pu8", "ptr_cast"]:
         top.append(e.let(n, e.fld(e.v("k"), n)))
     top.append(e.let("g", e.lower(e.mb.seq(shader_setup_))))
     for n in ["vs", "fs", "main_t"]:
@@ -262,10 +265,9 @@ def module(e):
         ("s_canvas_style", CANVAS_STYLE),
         ("s_webgl2", "webgl2"),
         ("s_block", BLOCK + "_block"),
-        ("s_frame", "frame"),
     ]:
         top.append(e.let(bind, e.call_m(e.v("m"), "cstr", e.s(text))))
-    for name, count in [("cells", 3), ("out", 2)]:
+    for name, count in [("cells", 3)]:
         zeros = []
         for _ in range(count):
             zeros.append(e.n(0))
@@ -295,6 +297,7 @@ def module(e):
         ("h_height", "set", "HTMLCanvasElement", "height"),
         ("h_get_context", "op", "HTMLCanvasElement", "getContext"),
         ("h_raf", "op", "Window", "requestAnimationFrame"),
+        ("h_frame_cb", "callback", "FrameRequestCallback", ""),
         ("h_create_shader", "op", "WebGL2RenderingContext", "createShader"),
         ("h_shader_source", "op", "WebGL2RenderingContext", "shaderSource"),
         ("h_compile_shader", "op", "WebGL2RenderingContext", "compileShader"),
@@ -316,74 +319,111 @@ def module(e):
         ("c_dynamic_draw", "const", "WebGL2RenderingContext", "DYNAMIC_DRAW"),
         ("c_triangles", "const", "WebGL2RenderingContext", "TRIANGLES"),
     ]
-    out = _cell(e, "out", 1)
     canvas = _str(e, "s_canvas", "canvas")
     style = _str(e, "s_style", "style")
     body_style = _str(e, "s_body_style", BODY_STYLE)
     canvas_style = _str(e, "s_canvas_style", CANVAS_STYLE)
     webgl2 = _str(e, "s_webgl2", "webgl2")
     block = _str(e, "s_block", BLOCK + "_block")
-    frame = _str(e, "s_frame", "frame")
     px = e.v("px")
+
+    def must(opt, name, *rest):
+        """`rest` with `name` bound to the payload of the option `opt` (a nullable result that is never null here;
+        none traps)."""
+        return e.match_of(
+            opt,
+            name,
+            None,
+            e.p("some", e.seq(*rest)),
+            e.p("none", e.call(fn_of(e, e.lower(e.fld(e.v("wasm"), "trap"))), e.tup())),
+        )
+
     start_body = e.stage(
         e.seq(
             e.let("win", e.call(e.lower(e.fld(e.v("webidl"), "global")), e.tup())),
             e.let("doc", _call(e, "h_document", e.v("win"))),
-            _call(e, "h_body", e.v("doc"), e.lower(e.v("out"))),
-            e.let("body", out),
-            _call(e, "h_set_attr", e.v("body"), style[0], style[1], body_style[0], body_style[1]),
-            e.let("canvas", _call(e, "h_create", e.v("doc"), canvas[0], canvas[1], e.n(0), e.n(0), e.n(0))),
-            _call(e, "h_set_attr", e.v("canvas"), style[0], style[1], canvas_style[0], canvas_style[1]),
-            _call(e, "h_append", e.v("body"), e.v("canvas")),
-            e.let("dpr", _call(e, "h_dpr", e.v("win"))),
-            e.let("cw", _call(e, "h_client_width", e.v("canvas"))),
-            e.let(
-                "px",
-                e.call(
-                    e.fld(e.mb.operator_mul(e.mb.as_(e.v("cw"), e.lower(e.v("t_f64"))), e.v("dpr")), "trunc"),
-                    e.lower(e.v("t_i32")),
+            must(
+                _call(e, "h_body", e.v("doc")),
+                "body",
+                _call(e, "h_set_attr", e.v("body"), style[0], style[1], body_style[0], body_style[1]),
+                e.let("canvas", _call(e, "h_create", e.v("doc"), canvas[0], canvas[1], e.n(0), e.n(0), e.n(0))),
+                _call(e, "h_set_attr", e.v("canvas"), style[0], style[1], canvas_style[0], canvas_style[1]),
+                _call(e, "h_append", e.v("body"), e.v("canvas")),
+                e.let("dpr", _call(e, "h_dpr", e.v("win"))),
+                e.let("cw", _call(e, "h_client_width", e.v("canvas"))),
+                e.let(
+                    "px",
+                    e.call(
+                        e.fld(e.mb.operator_mul(e.mb.as_(e.v("cw"), e.lower(e.v("t_f64"))), e.v("dpr")), "trunc"),
+                        e.lower(e.v("t_i32")),
+                    ),
+                ),
+                _call(e, "h_width", e.v("canvas"), int_as(e, px, e.lower(e.v("t_u32")))),
+                _call(e, "h_height", e.v("canvas"), int_as(e, px, e.lower(e.v("t_u32")))),
+                must(
+                    _call(e, "h_get_context", e.v("canvas"), webgl2[0], webgl2[1], e.n(0), e.n(0)),
+                    "gl",
+                    must(
+                        _call(e, "h_create_shader", e.v("gl"), e.lower(e.v("c_vertex"))),
+                        "vsh",
+                        _call(e, "h_shader_source", e.v("gl"), e.v("vsh"), e.lower(e.v("vsrc")), e.lower(e.v("vlen"))),
+                        _call(e, "h_compile_shader", e.v("gl"), e.v("vsh")),
+                        must(
+                            _call(e, "h_create_shader", e.v("gl"), e.lower(e.v("c_fragment"))),
+                            "fsh",
+                            _call(
+                                e, "h_shader_source", e.v("gl"), e.v("fsh"), e.lower(e.v("fsrc")), e.lower(e.v("flen"))
+                            ),
+                            _call(e, "h_compile_shader", e.v("gl"), e.v("fsh")),
+                            e.let("prog", _call(e, "h_create_program", e.v("gl"))),
+                            _call(e, "h_attach", e.v("gl"), e.v("prog"), e.v("vsh")),
+                            _call(e, "h_attach", e.v("gl"), e.v("prog"), e.v("fsh")),
+                            _call(e, "h_link", e.v("gl"), e.v("prog")),
+                            _call(e, "h_use_program", e.v("gl"), e.n(1), e.v("prog")),
+                            e.let("buf", _call(e, "h_create_buffer", e.v("gl"))),
+                            _call(e, "h_bind_buffer", e.v("gl"), e.lower(e.v("c_uniform_buffer")), e.n(1), e.v("buf")),
+                            _call(
+                                e,
+                                "h_bind_buffer_base",
+                                e.v("gl"),
+                                e.lower(e.v("c_uniform_buffer")),
+                                e.n(0),
+                                e.n(1),
+                                e.v("buf"),
+                            ),
+                            e.let("idx", _call(e, "h_block_index", e.v("gl"), e.v("prog"), block[0], block[1])),
+                            _call(e, "h_block_binding", e.v("gl"), e.v("prog"), e.v("idx"), e.n(0)),
+                            _call(e, "h_viewport", e.v("gl"), e.n(0), e.n(0), px, px),
+                            e.mb.set(
+                                e.fld(e.lower(e.v("ub")), "resolution"),
+                                e.tup(
+                                    e.call(e.fld(px, "to_float"), e.lower(e.v("t_f32"))),
+                                    e.call(e.fld(px, "to_float"), e.lower(e.v("t_f32"))),
+                                ),
+                            ),
+                            e.let(
+                                "fcb",
+                                e.call(
+                                    e.lower(e.fld(e.v("closure"), "callback_of")),
+                                    e.call(fn_of(e, e.lower(e.v("frame_make"))), e.rec()),
+                                ),
+                            ),
+                            e.let("cb", _call(e, "h_frame_cb", e.v("fcb"))),
+                            _call(e, "h_raf", e.v("win"), e.v("cb")),
+                            # The callback handle outlives `_start`: it leaves ownership into its cell (the window
+                            # and the context below, each where it is bound).
+                            e.mb.set(_cell(e, "cells", 2), e.call(e.fld(e.v("cb"), "forget"), e.tup())),
+                        ),
+                    ),
+                    e.mb.set(_cell(e, "cells", 1), e.call(e.fld(e.v("gl"), "forget"), e.tup())),
                 ),
             ),
-            _call(e, "h_width", e.v("canvas"), int_as(e, px, e.lower(e.v("t_u32")))),
-            _call(e, "h_height", e.v("canvas"), int_as(e, px, e.lower(e.v("t_u32")))),
-            _call(e, "h_get_context", e.v("canvas"), webgl2[0], webgl2[1], e.n(0), e.n(0), e.lower(e.v("out"))),
-            e.let("gl", out),
-            e.mb.set(_cell(e, "cells", 1), e.v("gl")),
-            _call(e, "h_create_shader", e.v("gl"), e.lower(e.v("c_vertex")), e.lower(e.v("out"))),
-            e.let("vsh", out),
-            _call(e, "h_shader_source", e.v("gl"), e.v("vsh"), e.lower(e.v("vsrc")), e.lower(e.v("vlen"))),
-            _call(e, "h_compile_shader", e.v("gl"), e.v("vsh")),
-            _call(e, "h_create_shader", e.v("gl"), e.lower(e.v("c_fragment")), e.lower(e.v("out"))),
-            e.let("fsh", out),
-            _call(e, "h_shader_source", e.v("gl"), e.v("fsh"), e.lower(e.v("fsrc")), e.lower(e.v("flen"))),
-            _call(e, "h_compile_shader", e.v("gl"), e.v("fsh")),
-            e.let("prog", _call(e, "h_create_program", e.v("gl"))),
-            _call(e, "h_attach", e.v("gl"), e.v("prog"), e.v("vsh")),
-            _call(e, "h_attach", e.v("gl"), e.v("prog"), e.v("fsh")),
-            _call(e, "h_link", e.v("gl"), e.v("prog")),
-            _call(e, "h_use_program", e.v("gl"), e.n(1), e.v("prog")),
-            e.let("buf", _call(e, "h_create_buffer", e.v("gl"))),
-            _call(e, "h_bind_buffer", e.v("gl"), e.lower(e.v("c_uniform_buffer")), e.n(1), e.v("buf")),
-            _call(e, "h_bind_buffer_base", e.v("gl"), e.lower(e.v("c_uniform_buffer")), e.n(0), e.n(1), e.v("buf")),
-            e.let("idx", _call(e, "h_block_index", e.v("gl"), e.v("prog"), block[0], block[1])),
-            _call(e, "h_block_binding", e.v("gl"), e.v("prog"), e.v("idx"), e.n(0)),
-            _call(e, "h_viewport", e.v("gl"), e.n(0), e.n(0), px, px),
-            e.mb.set(
-                e.fld(e.lower(e.v("ub")), "resolution"),
-                e.tup(
-                    e.call(e.fld(px, "to_float"), e.lower(e.v("t_f32"))),
-                    e.call(e.fld(px, "to_float"), e.lower(e.v("t_f32"))),
-                ),
-            ),
-            e.let("cb", e.call(e.lower(e.fld(e.v("webidl"), "callback")), e.tup(frame[0], frame[1]))),
-            _call(e, "h_raf", e.v("win"), e.v("cb")),
-            # The window and callback handles outlive `_start`: they leave ownership into the cells.
             e.mb.set(_cell(e, "cells", 0), e.call(e.fld(e.v("win"), "forget"), e.tup())),
-            e.mb.set(_cell(e, "cells", 2), e.call(e.fld(e.v("cb"), "forget"), e.tup())),
         )
     )
     frame_body = e.stage(
         e.seq(
+            e.let("t", e.v("arg")),
             e.mb.set(
                 e.fld(e.lower(e.v("ub")), "time"),
                 e.call(e.fld(e.mb.operator_mul(e.v("t"), e.n(0.001)), "to_float"), e.lower(e.v("t_f32"))),
@@ -407,6 +447,19 @@ def module(e):
         top.append(
             e.let(bind, e.call(e.fld(e.v("webidl"), kind), e.rec(e.p("iface", e.s(iface)), e.p("member", e.s(member)))))
         )
+    # the frame: a closure without captures (the window and callback handles are in the cells)
+    top.append(
+        e.let(
+            "frame_make",
+            e.fld(
+                e.call(
+                    e.fld(e.v("closure"), "new"),
+                    e.rec(e.p("callable", e.v("frame_cb_t")), e.p("capture", e.rec()), e.p("body", frame_body)),
+                ),
+                "make",
+            ),
+        )
+    )
     top.append(
         e.call(
             e.fld(e.v("wasm"), "export_fn"),
@@ -416,18 +469,6 @@ def module(e):
                 e.p("params", e.tup()),
                 e.p("ty", e.v("start_fn_t")),
                 e.p("body", start_body),
-            ),
-        )
-    )
-    top.append(
-        e.call(
-            e.fld(e.v("wasm"), "export_fn"),
-            e.rec(
-                e.p("mod", e.v("m")),
-                e.p("name", e.s("frame")),
-                e.p("params", e.tup(e.s("t"))),
-                e.p("ty", e.v("frame_fn_t")),
-                e.p("body", frame_body),
             ),
         )
     )

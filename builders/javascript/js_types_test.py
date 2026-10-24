@@ -1,5 +1,5 @@
-"""js-types-test.atz: a js app dir pinning the typed js target's semantics (harness/verify-js-types.sh runs it under node
-and compares its lines): `number` and `bigint` with js's operators (float division, int32 bitwise ops, unbounded
+"""js-types-test.atz: a js app dir pinning the typed js target's semantics (harness/verify-js-types.sh runs it under
+node and compares its lines): `number` and `bigint` with js's operators (float division, int32 bitwise ops, unbounded
 BigInts), their conversions, bool and string operators, a typed function, a valued `if`."""
 
 

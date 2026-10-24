@@ -1,7 +1,7 @@
 """values-test.atz (llvm) / values-test-wasm.atz (wasi): `values.hash` checked, in the program itself, against the
 published SipHash-1-3 test vector (Rust's library/coretests/tests/hash/sip.rs: key 00..0f, message 00..07 ->
-0x369095118d299a8e). The app seeds the module's SipHash key block (`mod.siphash_key()`) with that key, hashes the message as an i64 and
-exits with 0 when the hash equals the vector's low 32 bits, else 1."""
+0x369095118d299a8e). The app seeds the module's SipHash key block (`mod.siphash_key()`) with that key, hashes the
+message as an i64 and exits with 0 when the hash equals the vector's low 32 bits, else 1."""
 
 from ..root_mode import APP, root_mode_finish
 from .. import target_mb as tm

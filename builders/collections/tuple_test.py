@@ -1,14 +1,17 @@
 """tuple-test-wasm.atz / tuple-test.atz: apps exercising the targets' tuple values (wasm multi-value, llvm first-class
 aggregates): a tuple built from a host tuple, bound, read by component, passed to and returned from a function,
-yielded by an `if`, assigned through its binding and returned through a labeled block. The wasm app exits with the
-number of failed checks; the llvm app prints `pass` or `fail` per check."""
+yielded by an `if`, assigned through its binding and returned through a labeled block; and the tuples' storage layout
+(values.atz `size`/`align`: a pair of i32 is 8 bytes aligned to 4, an (i32, f64, i32) is 24 bytes aligned to 8, as C
+lays out a struct). The wasm app exits with the number of failed checks; the llvm app prints `pass` or `fail` per
+check."""
 
+from ..core import values
 from ..root_mode import APP, root_mode_finish
 from ..wasm.wat import bind_types
 
 WASM = "wasm"
 LLVM = "llvm"
-CHECKS = 8
+CHECKS = 14
 
 
 def _checks(e, lo, check, pair, swap):
@@ -32,7 +35,30 @@ def _checks(e, lo, check, pair, swap):
         check(e.eq(e.mb.operator_add(at("t", 0), at("t", 1)), e.n(15))),
         e.let("w", e.mb.labeled("w", e.seq(e.mb.return_to("w", e.call(swap, pair(9, 10)))))),
         check(e.eq(e.mb.operator_sub(at("w", 0), at("w", 1)), e.n(1))),
+        check(e.eq(lo("pair_size"), e.n(8))),
+        check(e.eq(lo("pair_align"), e.n(4))),
+        check(e.eq(lo("trio_size"), e.n(24))),
+        check(e.eq(lo("trio_align"), e.n(8))),
     ]
+
+
+def _trio(e, setup, lib):
+    """Setup statement binding `trio_t`, the (i32, f64, i32) tuple type."""
+    setup.append(
+        e.let(
+            "trio_t",
+            e.call(e.fld(e.v(lib), "tuple"), e.list_new(e.mb.eval_type(), e.v("t_i32"), e.v("t_f64"), e.v("t_i32"))),
+        )
+    )
+
+
+def _layouts(e, top):
+    """Top-level statements binding the pair's and the trio's size and alignment (host ints, from the lowered
+    types: a const function's argument must come from an inner block)."""
+    top.append(e.let("values", e.import_local("values", values.FILE)))
+    for t in ["pair", "trio"]:
+        for what in ["size", "align"]:
+            top.append(e.let(t + "_" + what, e.call(e.fld(e.v("values"), what), e.v(t + "_t"))))
 
 
 def _swap_body(e, pair_t):
@@ -67,7 +93,8 @@ def _wasm(e):
             ),
         )
     )
-    exported = ["m", "proc_exit_fn_t", "swap_fn_t", "start_fn_t", "t_i32", "t_u32", "pair_t"]
+    _trio(e, setup, "wasm")
+    exported = ["m", "proc_exit_fn_t", "swap_fn_t", "start_fn_t", "t_i32", "t_u32", "pair_t", "trio_t"]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
@@ -76,6 +103,7 @@ def _wasm(e):
     top.append(e.let("k", e.lower(e.mb.seq(setup))))
     for n in exported:
         top.append(e.let(n, e.fld(e.v("k"), n)))
+    _layouts(e, top)
     top.append(
         e.let(
             "proc_exit",
@@ -131,6 +159,7 @@ def _llvm(e):
     setup.append(e.let("ll", e.call(e.fld(e.v("llvm"), "new"), e.tup())))
     setup.append(e.let("c", e.import_local("libc", "libc-2.42.atz")))
     setup.append(e.let("t_i32", e.fld(e.v("llvm"), "i32")))
+    setup.append(e.let("t_f64", e.fld(e.v("llvm"), "f64")))
     setup.append(
         e.let("pair_t", e.call(e.fld(e.v("llvm"), "tuple"), e.list_new(e.mb.eval_type(), e.v("t_i32"), e.v("t_i32"))))
     )
@@ -146,13 +175,15 @@ def _llvm(e):
                 ),
             )
         )
-    exported = ["llvm", "ll", "c", "t_i32", "pair_t", "main_fn_t", "swap_fn_t"]
+    _trio(e, setup, "llvm")
+    exported = ["llvm", "ll", "c", "t_i32", "pair_t", "trio_t", "main_fn_t", "swap_fn_t"]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
     top.append(e.let("k", e.lower(e.mb.seq(setup))))
     for n in exported:
         top.append(e.let(n, e.fld(e.v("k"), n)))
+    _layouts(e, top)
     for name, text in [("s_pass", "pass"), ("s_fail", "fail")]:
         top.append(e.let(name, e.call_m(e.v("ll"), "cstr", e.s(text))))
     puts = e.lower(e.fld(e.v("c"), "puts"))

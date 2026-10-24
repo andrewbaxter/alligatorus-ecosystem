@@ -24,8 +24,8 @@ from ..memory import destructor, readonly
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
+    up,
     bim0,
-    acc,
     a,
     alloc_or_trap,
     asp_iface,
@@ -96,12 +96,6 @@ def _methods(with_values):
     return (["get", "put"] if with_values else ["add"]) + ["has", "remove", "clear"]
 
 
-def _up(e, expr, depth):
-    for _ in range(depth):
-        expr = e.lower(expr)
-    return expr
-
-
 class _Target:
     def __init__(self, kind):
         self.kind = kind
@@ -120,10 +114,10 @@ class _Target:
     def null(self, e, depth):
         """The null pointer, in a dependency body."""
         if self.kind == WASM:
-            return e.mb.as_(e.n(0), _up(e, e.v("pv"), depth))
+            return e.mb.as_(e.n(0), up(e, e.v("pv"), depth))
         return e.call(
-            _up(e, e.fld(e.v("lib"), "ref_fn"), depth),
-            e.rec(p("ref", e.s("null")), p("ty", _up(e, e.v("pv_gt"), depth))),
+            up(e, e.fld(e.v("lib"), "ref_fn"), depth),
+            e.rec(p("ref", e.s("null")), p("ty", up(e, e.v("pv_gt"), depth))),
         )
 
     def module_lets(self, e, out):
@@ -138,22 +132,22 @@ class _Target:
     def size(self, e, n, depth):
         if self.kind == WASM:
             return n
-        return int_as(e, n, _up(e, e.fld(e.v("lib"), "u64"), depth))
+        return int_as(e, n, up(e, e.fld(e.v("lib"), "u64"), depth))
 
     def trap(self, e, depth):
         """A trap statement in target code: the target's trap, a callable type, called through its function value."""
-        return e.call(fn_of(e, _up(e, e.fld(e.v("lib"), "trap"), depth)), e.tup())
+        return e.call(fn_of(e, up(e, e.fld(e.v("lib"), "trap"), depth)), e.tup())
 
     def addr_int(self, e, depth):
         """The address-sized integer type (module let)."""
-        return _up(e, e.v("i32" if self.kind == WASM else "i64"), depth)
+        return up(e, e.v("i32" if self.kind == WASM else "i64"), depth)
 
     def malloc(self, e, n, depth):
         """`n` bytes from the heap, or a trap when the allocation fails."""
         return alloc_or_trap(
             e,
-            e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth)),
-            _up(e, e.v("ptr_to_int"), depth),
+            e.call(up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth)),
+            up(e, e.v("ptr_to_int"), depth),
             self.addr_int(e, depth),
             self.trap(e, depth),
         )
@@ -161,15 +155,15 @@ class _Target:
     def free(self, e, ptr, depth):
         """Frees the block at `ptr` (a pointer of any type)."""
         return e.call(
-            _up(e, e.fld(e.v("heap"), "free"), depth),
-            conv(e, _up(e, e.v("ptr_cast"), depth), ptr, _up(e, e.v("pv"), depth)),
+            up(e, e.fld(e.v("heap"), "free"), depth),
+            conv(e, up(e, e.v("ptr_cast"), depth), ptr, up(e, e.v("pv"), depth)),
         )
 
     def zero_fill(self, e, dst, n, depth):
         """Zeroes `n` bytes at `dst`; a statement (the wasm intrinsic is instantiated in the body)."""
         if self.kind == WASM:
-            return e.call(e.call(_up(e, e.fld(e.v("lib"), "memory_fill_fn"), depth), e.rec()), e.tup(dst, e.n(0), n))
-        return e.call(_up(e, e.fld(e.v("heap"), "memset"), depth), e.tup(dst, e.n(0), self.size(e, n, depth)))
+            return e.call(e.call(up(e, e.fld(e.v("lib"), "memory_fill_fn"), depth), e.rec()), e.tup(dst, e.n(0), n))
+        return e.call(up(e, e.fld(e.v("heap"), "memset"), depth), e.tup(dst, e.n(0), self.size(e, n, depth)))
 
     def byte_ptr(self, e, base, offset, ptr_type):
         """`base` plus `offset` bytes, as `ptr_type` (the int and byte-pointer types are host locals)."""
@@ -200,10 +194,10 @@ class _Target:
     def loop(self, e, depth):
         """An infinite loop value, made in the body from the lowered intrinsic type."""
         if self.kind == WASM:
-            return e.call(_up(e, e.fld(e.v("lib"), "loop_fn"), depth), e.rec())
+            return e.call(up(e, e.fld(e.v("lib"), "loop_fn"), depth), e.rec())
         return e.call(
-            _up(e, e.fld(e.v("lib"), "ref_fn"), depth),
-            e.rec(p("ref", e.s("loop")), p("ty", _up(e, e.fld(e.v("lib"), "loop"), depth))),
+            up(e, e.fld(e.v("lib"), "ref_fn"), depth),
+            e.rec(p("ref", e.s("loop")), p("ty", up(e, e.fld(e.v("lib"), "loop"), depth))),
         )
 
 
@@ -246,12 +240,12 @@ def _i32(e, n):
 
 def _hash(e, key, depth):
     """The key's 32-bit hash through values.atz (the key type's hash aspect)."""
-    return e.call(_up(e, e.fld(e.v("values"), "hash"), depth), key)
+    return e.call(up(e, e.fld(e.v("values"), "hash"), depth), key)
 
 
 def _eq(e, k1, k2, depth):
     """Whether two keys are equal (the target's native comparison), through values.atz."""
-    return e.call(_up(e, e.fld(e.v("values"), "eq"), depth), e.tup(k1, k2))
+    return e.call(up(e, e.fld(e.v("values"), "eq"), depth), e.tup(k1, k2))
 
 
 def _probe(e, tg, lay, h, key, depth, on_found, on_empty, label=None):
@@ -322,10 +316,10 @@ def _alloc_arrays(e, tg, lay, with_values, h, cap):
     d = BODY_MOD
     out = [
         # The array byte sizes must fit the (signed 32-bit) size arithmetic: a capacity past that traps.
-        e.if_only(e.mb.operator_gt(cap, _up(e, e.v("max_cap_k"), BODY_HOST)), tg.trap(e, d)),
+        e.if_only(e.mb.operator_gt(cap, up(e, e.v("max_cap_k"), BODY_HOST)), tg.trap(e, d)),
         e.mb.set(
             _ptr_cell(e, h, lay.keys),
-            tg.malloc(e, e.mb.operator_mul(cap, _up(e, e.v("key_size"), BODY_HOST)), d),
+            tg.malloc(e, e.mb.operator_mul(cap, up(e, e.v("key_size"), BODY_HOST)), d),
         ),
         e.mb.set(_ptr_cell(e, h, lay.states), tg.malloc(e, cap, d)),
         tg.zero_fill(e, _ptr_cell(e, h, lay.states), cap, d),
@@ -338,12 +332,12 @@ def _alloc_arrays(e, tg, lay, with_values, h, cap):
             2,
             e.mb.set(
                 _ptr_cell(e, h, lay.vals),
-                tg.malloc(e, e.mb.operator_mul(cap, _up(e, e.v("value_size"), BODY_HOST)), d),
+                tg.malloc(e, e.mb.operator_mul(cap, up(e, e.v("value_size"), BODY_HOST)), d),
             ),
         )
         out.insert(
             1,
-            e.if_only(e.mb.operator_gt(cap, _up(e, e.v("max_cap_v"), BODY_HOST)), tg.trap(e, d)),
+            e.if_only(e.mb.operator_gt(cap, up(e, e.v("max_cap_v"), BODY_HOST)), tg.trap(e, d)),
         )
     return e.seq(*out)
 
@@ -435,7 +429,7 @@ def _insert_fn_body(e, tg, lay):
     h = e.v("t")
 
     def rehash():
-        return e.call(fn_of(e, _up(e, e.v("rehash"), BODY_HOST)), h)
+        return e.call(fn_of(e, up(e, e.v("rehash"), BODY_HOST)), h)
 
     return e.mb.labeled(
         "i",
@@ -490,7 +484,7 @@ def _remove_body(e, tg, lay, with_values):
 
     if not with_values:
         return e.stage(body(False))
-    return e.stage(e.if_else(_up(e, e.v("value_drops"), BODY_HOST), body(True), body(False)))
+    return e.stage(e.if_else(up(e, e.v("value_drops"), BODY_HOST), body(True), body(False)))
 
 
 def _clear_body(e, tg, lay, with_values):
@@ -533,7 +527,7 @@ def _clear_body(e, tg, lay, with_values):
 
     if not with_values:
         return e.stage(body(False))
-    return e.stage(e.if_else(_up(e, e.v("value_drops"), BODY_HOST), body(True), body(False)))
+    return e.stage(e.if_else(up(e, e.v("value_drops"), BODY_HOST), body(True), body(False)))
 
 
 def _free_body(e, tg, lay, with_values):
@@ -558,7 +552,7 @@ def _new_body(e, tg, lay):
 
 def _dep_call(e, name, dh, *args):
     """A call of the dependency `name` (a local `dh` stages up) in a dependency body."""
-    return e.call(fn_of(e, _up(e, e.v(name), dh)), args[0] if len(args) == 1 else e.tup(*args))
+    return e.call(fn_of(e, up(e, e.v(name), dh)), args[0] if len(args) == 1 else e.tup(*args))
 
 
 def _has_body(e, tg, lay):
@@ -590,7 +584,7 @@ def _put_body(e, tg, lay):
         )
 
     # The variant is chosen inside the staged body by the constant condition (one staged body).
-    return e.stage(e.if_else(_up(e, e.v("value_drops"), BODY_HOST), body(True), body(False)))
+    return e.stage(e.if_else(up(e, e.v("value_drops"), BODY_HOST), body(True), body(False)))
 
 
 def _drop_value_at(e, lay, h, idx):
@@ -600,7 +594,7 @@ def _drop_value_at(e, lay, h, idx):
         e.let(
             "__o",
             e.mb.as_(
-                e.mb.field(_typed(e, _ptr_cell(e, h, lay.vals), "pvalue"), idx), _up(e, e.v("value_own"), BODY_HOST)
+                e.mb.field(_typed(e, _ptr_cell(e, h, lay.vals), "pvalue"), idx), up(e, e.v("value_own"), BODY_HOST)
             ),
         )
     )
@@ -630,22 +624,22 @@ def _get_body(e, tg, lay, dm, dh):
                 e,
                 "opt_of_t",
                 dh,
-                e.mb.as_(e.v("found"), _up(e, e.v("i32"), dh)),
+                e.mb.as_(e.v("found"), up(e, e.v("i32"), dh)),
                 e.if_else(
                     e.v("found"),
                     conv(
                         e,
-                        _up(e, e.v("ptr_cast"), dh),
+                        up(e, e.v("ptr_cast"), dh),
                         tg.elem_ptr(
                             e,
                             _ptr_cell(e, e.v("t"), lay.vals),
                             e.v("idx"),
-                            _up(e, e.v("value_size"), dh),
-                            _up(e, e.v("pvalue"), dh),
+                            up(e, e.v("value_size"), dh),
+                            up(e, e.v("pvalue"), dh),
                         ),
-                        _up(e, e.v("pvref"), dh),
+                        up(e, e.v("pvref"), dh),
                     ),
-                    conv(e, _up(e, e.v("ptr_cast"), dh), tg.null(e, dm), _up(e, e.v("pvref"), dh)),
+                    conv(e, up(e, e.v("ptr_cast"), dh), tg.null(e, dm), up(e, e.v("pvref"), dh)),
                 ),
             )
         ),
@@ -731,11 +725,11 @@ def _setup(e, tg, lay, with_values):
     ):
         out.append(e.let(name, e.lower(e.v(name))))
     for tname in ["pv", "pi32", "ppv", "pu8", "i32", "ptr_cast", "ptr_to_int", "int_to_ptr"]:
-        out.append(e.let(tname, _up(e, e.v(tname), SETUP_MOD)))
+        out.append(e.let(tname, up(e, e.v(tname), SETUP_MOD)))
     # The places' type: read-only, so a user cannot desynchronize the length and capacity.
-    out.append(e.let("ro_i32", e.call(_up(e, e.fld(e.v("readonly"), "type"), SETUP_MOD), e.v("i32"))))
+    out.append(e.let("ro_i32", e.call(up(e, e.fld(e.v("readonly"), "type"), SETUP_MOD), e.v("i32"))))
     if with_values:
-        out.append(e.let("opt", e.call(_up(e, e.fld(e.v("option"), "type"), SETUP_MOD), e.v("pvref"))))
+        out.append(e.let("opt", e.call(up(e, e.fld(e.v("option"), "type"), SETUP_MOD), e.v("pvref"))))
         out.append(e.let("opt_t", e.fld(e.v("opt"), "type")))
         out.append(e.let("opt_of_t", e.fld(e.v("opt"), "of_t")))
         out.append(
@@ -743,11 +737,11 @@ def _setup(e, tg, lay, with_values):
                 "m_get",
                 _func_dep(
                     e,
-                    _up(e, e.fld(e.v("lib"), "func_dep"), SETUP_MOD),
+                    up(e, e.fld(e.v("lib"), "func_dep"), SETUP_MOD),
                     e.cat(e.v("name"), e.s("_get")),
                     ("t", "key"),
                     e.call(
-                        _up(e, e.fld(e.v("lib"), "fn"), SETUP_MOD),
+                        up(e, e.fld(e.v("lib"), "fn"), SETUP_MOD),
                         e.rec(p("params", e.list_new(e.mb.eval_type(), e.v("pv"), e.v("key"))), p("ret", e.v("opt_t"))),
                     ),
                     _get_body(e, tg, lay, SETUP_MOD + 1, 1),
@@ -756,14 +750,14 @@ def _setup(e, tg, lay, with_values):
         )
     fields = [p(k, e.v(k)) for k in _fields(with_values)]
     out.append(
-        e.let("raw", e.mb.as_(e.call(_up(e, e.fld(e.v("ht"), "new"), SETUP_MOD), e.rec(*fields)), e.mb.eval_type()))
+        e.let("raw", e.mb.as_(e.call(up(e, e.fld(e.v("ht"), "new"), SETUP_MOD), e.rec(*fields)), e.mb.eval_type()))
     )
     out.append(
         e.let(
             "owned_r",
             e.call(
-                e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
-                e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free_table")))),
+                e.fld(up(e, e.v("destructor"), SETUP_MOD), "owning"),
+                e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free_table"))), p("new", e.v("new"))),
             ),
         )
     )
@@ -773,7 +767,7 @@ def _setup(e, tg, lay, with_values):
                 p("type", e.fld(e.v("owned_r"), "type")),
                 p("own", e.fld(e.v("owned_r"), "own")),
                 p("raw", e.v("raw")),
-                p("new", fn_of(e, e.v("new"))),
+                p("new", e.fld(e.v("owned_r"), "new")),
             )
         )
     )

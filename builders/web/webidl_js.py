@@ -3,6 +3,28 @@ functions). The `release` import frees a handle; webidl-wasm.atz calls it when a
 
 from ..target_mb import body, or_b, ret_m, to_str
 
+# The JS of webidl-wasm.atz's intrinsics, (name, parameters, lines); a line is a list of parts, `$x` the runtime
+# helper `x`'s minted name.
+INTRINSIC_TEXT = [
+    ("handle_dup", ["h"], [["return ", "$h_new", "(", "$h_get", "(h));"]]),
+    ("string_len", ["h"], [["return encoder.encode(", "$h_get", "(h)).length;"]]),
+    (
+        "string_copy",
+        ["h", "ptr", "len"],
+        [["encoder.encodeInto(", "$h_get", "(h), new Uint8Array(instance.exports.memory.buffer, ptr, len));"]],
+    ),
+    ("seq_len", ["h"], [["return ", "$h_get", "(h).length;"]]),
+    ("seq_get", ["h", "i"], [["return ", "$h_new", "(", "$h_get", "(h)[i]);"]]),
+    ("sin", ["x"], [["return Math.sin(x);"]]),
+    ("cos", ["x"], [["return Math.cos(x);"]]),
+    ("atan2", ["y", "x"], [["return Math.atan2(y, x);"]]),
+    ("exp", ["x"], [["return Math.exp(x);"]]),
+    ("log", ["x"], [["return Math.log(x);"]]),
+    ("pow", ["x", "y"], [["return Math.pow(x, y);"]]),
+    ("num_format", ["x"], [["return ", "$h_new", "(String(x));"]]),
+    ("num_parse", ["ptr", "len"], [["return Number(", "$str", "(ptr, len));"]]),
+]
+
 
 def _jsc(e, kind, *fields):
     """A call of the js definition const function `kind` (from a staged body)."""
@@ -60,6 +82,121 @@ def _kind_is(e, kind, *names):
     return expr
 
 
+def _callback_lines(e):
+    """In `define` for a callback hook: the function calling the callable's wasm function (the table entry at its
+    index, resolved once) with its object pointer and then the callback's arguments (`cb_args`: handles and strings
+    as new owned handles, an optional or nullable one as a presence flag then the value) and handing back its
+    result (`cb_ret`)."""
+    out = []
+    out.append(_line(e, e.s("const cb = ["), e.v("argv"), e.s("];")))
+    out.append(_line(e, e.s("const f = instance.exports.table.get(cb[0]);")))
+    out.append(e.let("cparams", e.list_new(e.mb.types_string())))
+    out.append(e.let("cexprs", e.list_new(e.mb.types_string(), e.s("cb[1]"))))
+    out.append(e.let("ci", e.rec(e.p("v", e.int_of(0)))))
+    c = e.cat(e.s("c"), e.v("cn"))
+    out.append(
+        e.foreach(
+            _sig(e, "cb_args"),
+            "cp",
+            e.seq(
+                e.let("cn", to_str(e, e.fld(e.v("ci"), "v"))),
+                e.incr(e.fld(e.v("ci"), "v")),
+                e.push(e.v("cparams"), c),
+                e.let("ck", e.call_m(e.v("cp"), "kind", e.tup())),
+                e.let(
+                    "absent_able",
+                    or_b(e, e.call_m(e.v("cp"), "optional", e.tup()), e.call_m(e.v("cp"), "nullable", e.tup())),
+                ),
+                e.if_only(
+                    _kind_is(e, e.v("ck"), "buf"),
+                    e.mb.panic(
+                        e.cat(
+                            e.s("webidl-js: buffer callback arguments are not supported: "), e.fld(e.v("arg"), "name")
+                        )
+                    ),
+                ),
+                e.if_only(
+                    e.call_m(e.v("cp"), "optional", e.tup()),
+                    e.push(e.v("cexprs"), e.cat(e.s("("), c, e.s(" === undefined ? 0 : 1)"))),
+                ),
+                e.if_only(
+                    e.call_m(e.v("cp"), "nullable", e.tup()),
+                    e.push(e.v("cexprs"), e.cat(e.s("("), c, e.s(" === null ? 0 : 1)"))),
+                ),
+                e.let("cx", e.rec(e.p("v", e.dstr("")))),
+                e.if_else(
+                    _kind_is(e, e.v("ck"), "handle", "str"),
+                    e.mb.set(e.fld(e.v("cx"), "v"), e.cat(_rt(e, "h_new"), e.s("("), c, e.s(")"))),
+                    e.if_else(
+                        _kind_is(e, e.v("ck"), "bool"),
+                        e.mb.set(e.fld(e.v("cx"), "v"), e.cat(e.s("("), c, e.s(" ? 1 : 0)"))),
+                        e.if_else(
+                            _kind_is(e, e.v("ck"), "i64", "u64"),
+                            e.mb.set(e.fld(e.v("cx"), "v"), e.cat(e.s("BigInt("), c, e.s(")"))),
+                            e.mb.set(e.fld(e.v("cx"), "v"), c),
+                        ),
+                    ),
+                ),
+                e.if_only(
+                    e.v("absent_able"),
+                    e.mb.set(
+                        e.fld(e.v("cx"), "v"),
+                        e.cat(
+                            e.s("("),
+                            c,
+                            e.s(" === undefined || "),
+                            c,
+                            e.s(" === null ? "),
+                            e.if_else(_kind_is(e, e.v("ck"), "i64", "u64"), e.dstr("0n"), e.dstr("0")),
+                            e.s(" : "),
+                            e.fld(e.v("cx"), "v"),
+                            e.s(")"),
+                        ),
+                    ),
+                ),
+                e.push(e.v("cexprs"), e.fld(e.v("cx"), "v")),
+            ),
+        )
+    )
+    out.append(e.let("ccall", e.cat(e.s("f("), e.join(e.v("cexprs"), ", "), e.s(")"))))
+    out.append(e.let("crk", _sig(e, "cb_ret")))
+    out.append(
+        e.if_only(
+            _kind_is(e, e.v("crk"), "handle", "str", "buf"),
+            e.mb.panic(
+                e.cat(
+                    e.s("webidl-js: callback result of kind "),
+                    e.v("crk"),
+                    e.s(" is not supported: "),
+                    e.fld(e.v("arg"), "name"),
+                )
+            ),
+        )
+    )
+    out.append(
+        e.let(
+            "cbody",
+            e.if_else(
+                _kind_is(e, e.v("crk"), "void"),
+                e.cat(e.v("ccall"), e.s(";")),
+                e.if_else(
+                    _kind_is(e, e.v("crk"), "bool"),
+                    e.cat(e.s("return "), e.v("ccall"), e.s(" !== 0;")),
+                    e.if_else(
+                        _kind_is(e, e.v("crk"), "i64", "u64"),
+                        e.cat(e.s("return Number("), e.v("ccall"), e.s(");")),
+                        e.cat(e.s("return "), e.v("ccall"), e.s(";")),
+                    ),
+                ),
+            ),
+        )
+    )
+    out.append(
+        _line(e, e.s("const r = function("), e.join(e.v("cparams"), ", "), e.s(") { "), e.v("cbody"), e.s(" };"))
+    )
+    return out
+
+
 def module(e):
     top = []
     top.append(e.let("js", e.import_local("js", "js-es2020.atz")))
@@ -73,7 +210,12 @@ def module(e):
     # The module variables, which the text below refers to by name, and the types they hold: the table of objects
     # (handles index it), its free slots, the freed-slot marker, the string decoder. `instance` (the wasm instance,
     # assigned by the caller when the module is ready) is only read by the text below.
-    for name, js_name in [("object_t", "Object"), ("decoder_t", "TextDecoder"), ("instance_t", "WebAssembly.Instance")]:
+    for name, js_name in [
+        ("object_t", "Object"),
+        ("decoder_t", "TextDecoder"),
+        ("encoder_t", "TextEncoder"),
+        ("instance_t", "WebAssembly.Instance"),
+    ]:
         runtime.append(e.let(name, _jsc(e, "object", e.p("name", e.s(js_name)))))
     runtime.append(e.let("objects_t", _jsc(e, "array", e.p("elem", e.v("object_t")))))
     runtime.append(e.let("numbers_t", _jsc(e, "array", e.p("elem", e.lower(e.fld(e.v("js"), "number"))))))
@@ -83,9 +225,15 @@ def module(e):
         ("freed", "object_t"),
         ("instance", "instance_t"),
         ("decoder", "decoder_t"),
+        ("encoder", "encoder_t"),
     ]:
         runtime.append(e.let(g, _var(e, g, e.v(ty_))))
-    for g, ty_ in [("Array", "objects_t"), ("Object", "object_t"), ("TextDecoder", "decoder_t")]:
+    for g, ty_ in [
+        ("Array", "objects_t"),
+        ("Object", "object_t"),
+        ("TextDecoder", "decoder_t"),
+        ("TextEncoder", "encoder_t"),
+    ]:
         runtime.append(
             e.let(
                 g,
@@ -121,6 +269,7 @@ def module(e):
                     # included), so a use or a second free of a freed handle throws instead of reading a stale slot.
                     e.mb.set(e.lower(e.v("freed")), e.call(e.lower(e.v("Object")), e.tup())),
                     e.mb.set(e.lower(e.v("decoder")), e.call(e.lower(e.v("TextDecoder")), e.tup())),
+                    e.mb.set(e.lower(e.v("encoder")), e.call(e.lower(e.v("TextEncoder")), e.tup())),
                 )
             ),
         )
@@ -149,7 +298,8 @@ def module(e):
                 "h_get",
                 [e.s("h")],
                 e.s(
-                    'if (h >= handles.length || handles[h] === freed) throw new Error("webidl: handle " + h + " is not live");'
+                    "if (h >= handles.length || handles[h] === freed)"
+                    + ' throw new Error("webidl: handle " + h + " is not live");'
                 ),
                 e.s("return handles[h];"),
             ),
@@ -163,7 +313,8 @@ def module(e):
                 "h_free",
                 [e.s("h")],
                 e.s(
-                    'if (h >= handles.length || handles[h] === freed) throw new Error("webidl: handle " + h + " freed twice");'
+                    "if (h >= handles.length || handles[h] === freed)"
+                    + ' throw new Error("webidl: handle " + h + " freed twice");'
                 ),
                 e.s("handles[h] = freed;"),
                 e.s("free_handles.push(h);"),
@@ -211,6 +362,22 @@ def module(e):
             ret_m(e, _text(e, "wi_release", [e.s("h")], e.cat(_rt(e, "h_free"), e.s("(h);")))),
         )
     )
+    # The intrinsics beside the spec's members (webidl-wasm.atz's `INTRINSICS`).
+    for name, params, lines in INTRINSIC_TEXT:
+        define.append(
+            e.if_only(
+                e.eq(e.fld(e.v("arg"), "name"), e.s(name)),
+                ret_m(
+                    e,
+                    _text(
+                        e,
+                        "wi_" + name,
+                        [e.s(p_) for p_ in params],
+                        *[e.cat(*[_rt(e, x[1:]) if x.startswith("$") else e.s(x) for x in line]) for line in lines]
+                    ),
+                ),
+            )
+        )
     define.append(
         e.let(
             "sig",
@@ -306,7 +473,6 @@ def module(e):
         )
     )
     define.append(e.let("ret_out", _sig(e, "ret_out")))
-    define.append(e.if_only(e.v("ret_out"), _param(e, e.s("out"))))
     define.append(e.let("argv", e.join(e.v("exprs"), ", ")))
     define.append(e.let("rk", _sig(e, "ret_kind")))
     define.append(
@@ -333,12 +499,7 @@ def module(e):
                         _line(e, e.s("const r = new recv("), e.v("argv"), e.s(");")),
                         e.if_else(
                             e.eq(e.v("kind"), e.s("callback")),
-                            _line(
-                                e,
-                                e.s("const r = function() { return instance.exports["),
-                                e.v("argv"),
-                                e.s("].apply(null, arguments); };"),
-                            ),
+                            e.seq(*_callback_lines(e)),
                             _line(e, e.s("const r = globalThis;")),
                         ),
                     ),
@@ -366,28 +527,18 @@ def module(e):
             ),
         )
     )
+    # A nullable result is the option's pair (a multi-value return): the tag, then the value or its zero.
     define.append(
         e.if_else(
             e.v("ret_out"),
             e.seq(
-                e.if_only(
-                    _kind_is(e, e.v("rk"), "i64", "u64", "f32", "f64"),
-                    e.mb.panic(
-                        e.cat(
-                            e.s("webidl-js: nullable return of kind "),
-                            e.v("rk"),
-                            e.s(" is not supported: "),
-                            e.fld(e.v("arg"), "name"),
-                        )
-                    ),
+                _line(
+                    e,
+                    e.s("if (r === null || r === undefined) { return [0, "),
+                    e.if_else(_kind_is(e, e.v("rk"), "i64", "u64"), e.dstr("0n"), e.dstr("0")),
+                    e.s("]; }"),
                 ),
-                _line(e, e.s("const cell = new Uint32Array(instance.exports.memory.buffer, out, 2);")),
-                _line(e, e.s("if (r === null || r === undefined) {")),
-                _line(e, e.s("  cell[0] = 0;")),
-                _line(e, e.s("} else {")),
-                _line(e, e.s("  cell[0] = 1;")),
-                _line(e, e.s("  cell[1] = "), e.fld(e.v("rx"), "v"), e.s(";")),
-                _line(e, e.s("}")),
+                _line(e, e.s("return [1, "), e.fld(e.v("rx"), "v"), e.s("];")),
             ),
             e.if_only(
                 e.not_(e.eq(e.fld(e.v("rx"), "v"), e.s(""))), _line(e, e.s("return "), e.fld(e.v("rx"), "v"), e.s(";"))

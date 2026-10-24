@@ -512,7 +512,6 @@ def _no_frame(e):
     return e.int_of(-1)
 
 
-
 # Each js type's own identity marker: a type that stands in for another (a slot, a global) answers every aspect of
 # the type it holds except these, so it never passes for that type.
 JT_IDENT = [
@@ -1245,7 +1244,11 @@ def _obj_exporter(e, x):
                                 exporter_iface,
                                 "export",
                                 e.fld(e.v("ex"), "value"),
-                                e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", as_object(e, e.fld(e.v("mb"), "ty")))),
+                                e.rec(
+                                    e.p("xx", xx(e)),
+                                    e.p("loc", loc(e)),
+                                    e.p("value", as_object(e, e.fld(e.v("mb"), "ty"))),
+                                ),
                             ),
                             art_t,
                         ),
@@ -1268,9 +1271,10 @@ def _obj_exporter(e, x):
             e.ret(e.call(e.eval_builtin("json_array"), e.v("__arr"))),
         )
 
-    def json_get(entries, key, kind):
+    def json_get(obj, key, kind):
         return e.call(
-            e.mb.must_reinterpret(), e.tup(e.call_m(entries, "get", e.s(key)), e.mb.builtin("types", kind))
+            e.mb.must_reinterpret(),
+            e.tup(e.fld(e.call_m(obj, "get", e.s(key)), "value"), e.mb.builtin("types", kind)),
         )
 
     x.append(
@@ -1285,9 +1289,20 @@ def _obj_exporter(e, x):
                     e.let("known", e.call_m(e.v("o"), "artifact_id", e.tup())),
                     e.if_only(
                         e.fld(e.v("known"), "is_some"),
-                        ret_m(e, e.eresult_ok(art_t, e.call(e.eval_builtin("artifact_ref"), e.fld(e.v("known"), "value")))),
+                        ret_m(
+                            e, e.eresult_ok(art_t, e.call(e.eval_builtin("artifact_ref"), e.fld(e.v("known"), "value")))
+                        ),
                     ),
-                    e.let("id", bim(e, e.eval_builtin("artifacts"), "reserve_id", e.fld(ix, "artifacts"), e.call_m(ix, "compile_id", e.tup()))),
+                    e.let(
+                        "id",
+                        bim(
+                            e,
+                            e.eval_builtin("artifacts"),
+                            "reserve_id",
+                            e.fld(ix, "artifacts"),
+                            e.call_m(ix, "compile_id", e.tup()),
+                        ),
+                    ),
                     e.call_m(e.v("o"), "set_artifact_id", e.v("id")),
                     e.let("fj", member_json("fields")),
                     e.let("mj", member_json("methods")),
@@ -1340,7 +1355,9 @@ def _obj_exporter(e, x):
                     e.let(
                         "bex",
                         e.match_of(
-                            e.call(e.mb.reinterpret(), e.tup(loc(e), e.v("sa"), e.mb.builtin("types", "artifact_inline"))),
+                            e.call(
+                                e.mb.reinterpret(), e.tup(loc(e), e.v("sa"), e.mb.builtin("types", "artifact_inline"))
+                            ),
                             "__i",
                             None,
                             e.p("ok", e.call(e.eval_builtin("artifact_body_exporter_body"), e.fld(e.v("__i"), "body"))),
@@ -1366,7 +1383,13 @@ def _obj_exporter(e, x):
                         e.fld(ix, "artifacts"),
                         e.rec(
                             e.p("id", e.v("id")),
-                            e.p("body", e.call(e.eval_builtin("artifact_body"), e.rec(e.p("data", e.v("data")), e.p("exporter", e.v("bex"))))),
+                            e.p(
+                                "body",
+                                e.call(
+                                    e.eval_builtin("artifact_body"),
+                                    e.rec(e.p("data", e.v("data")), e.p("exporter", e.v("bex"))),
+                                ),
+                            ),
                         ),
                     ),
                     e.ret(e.eresult_ok(art_t, e.call(e.eval_builtin("artifact_ref"), e.v("id")))),
@@ -1376,7 +1399,10 @@ def _obj_exporter(e, x):
                 "import_from_data",
                 body(
                     e,
-                    e.let("entries", e.fld(e.call(e.mb.must_reinterpret(), e.tup(a(e, "data"), e.mb.builtin("types", "json_object"))), "entries")),
+                    e.let(
+                        "entries",
+                        e.call(e.mb.must_reinterpret(), e.tup(a(e, "data"), e.mb.builtin("types", "json_object"))),
+                    ),
                     e.let(
                         "o",
                         mk(
@@ -1388,22 +1414,29 @@ def _obj_exporter(e, x):
                             e.p("artifact_id", a(e, "id")),
                         ),
                     ),
+                    # A declaration's members may refer back to it: it is registered with the running import before
+                    # they are imported (the compiler's early entry for cyclic artifacts).
                     e.if_only(
                         e.fld(a(e, "id"), "is_some"),
-                        e.call_m(
-                            e.fld(ix, "deserialized_artifacts"),
-                            "put",
-                            e.tup(e.fld(a(e, "id"), "value"), as_object(e, e.v("o"))),
+                        e.call(
+                            e.eval_builtin("artifact_import_early"),
+                            e.rec(
+                                e.p("xx", xx(e)),
+                                e.p("id", e.fld(a(e, "id"), "value")),
+                                e.p("value", as_object(e, e.v("o"))),
+                            ),
                         ),
                     ),
                     *[
                         e.foreach(
-                            e.fld(json_get(e.v("entries"), kind, "json_array"), "elements"),
+                            e.call_m(json_get(e.v("entries"), kind, "json_array"), "elements", e.tup()),
                             "el",
                             e.seq(
                                 e.let(
                                     "me",
-                                    e.fld(e.call(e.mb.must_reinterpret(), e.tup(e.v("el"), e.mb.builtin("types", "json_object"))), "entries"),
+                                    e.call(
+                                        e.mb.must_reinterpret(), e.tup(e.v("el"), e.mb.builtin("types", "json_object"))
+                                    ),
                                 ),
                                 e.let(
                                     "mt",
@@ -1414,7 +1447,13 @@ def _obj_exporter(e, x):
                                             e.rec(
                                                 e.p("xx", xx(e)),
                                                 e.p("loc", loc(e)),
-                                                e.p("artifact", e.call(e.eval_builtin("artifact_json_decode"), e.call_m(e.v("me"), "get", e.s("ty")))),
+                                                e.p(
+                                                    "artifact",
+                                                    e.call(
+                                                        e.eval_builtin("artifact_json_decode"),
+                                                        e.fld(e.call_m(e.v("me"), "get", e.s("ty")), "value"),
+                                                    ),
+                                                ),
                                             ),
                                         ),
                                         obj_t,
@@ -1487,7 +1526,9 @@ def _tuple_elems(e, cv, what):
     """Binds `elems` to the elements of the tuple value `cv`, else returns an error."""
     return [
         e.let("tk", lookup(e, xx(e), cve_type(e, cv), asp_iface(e, "tuple"))),
-        e.if_only(e.not_(e.fld(e.v("tk"), "is_some")), ret_m(e, err_cve(e, loc(e), "js: " + what + " must be a tuple"))),
+        e.if_only(
+            e.not_(e.fld(e.v("tk"), "is_some")), ret_m(e, err_cve(e, loc(e), "js: " + what + " must be a tuple"))
+        ),
         e.let("elems", e.list_new(cve_t(e))),
         e.foreach(
             bim(
@@ -1545,7 +1586,14 @@ def _array_type(e, x):
                     push(e, e.v("parts"), _jv_expr(e, e.v("ev"))),
                 ),
             ),
-            e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _jval(e, outer(e), _cat(e, "[", e.join(e.v("parts"), ", "), "]"))))),
+            e.ret(
+                ok_cve(
+                    e,
+                    cv_of(
+                        e, _code_of(e, e.v("out")), _jval(e, outer(e), _cat(e, "[", e.join(e.v("parts"), ", "), "]"))
+                    ),
+                )
+            ),
         ),
         body(
             e,
@@ -1580,7 +1628,13 @@ def _array_type(e, x):
                             cv_of(
                                 e,
                                 _code_of(e, _seq_insts(e, e.v("v"), e.v("i"))),
-                                _jval(e, elem, _cat(e, _jv_expr(e, e.v("v")), "[", _jv_expr(e, e.v("i")), "]"), False, True),
+                                _jval(
+                                    e,
+                                    elem,
+                                    _cat(e, _jv_expr(e, e.v("v")), "[", _jv_expr(e, e.v("i")), "]"),
+                                    False,
+                                    True,
+                                ),
                             ),
                         ),
                     ),
@@ -1709,9 +1763,7 @@ def _method_type(e, x):
         [("name", in_(e, "name")), ("sig", in_(e, "sig"))],
     )
     sig = in_(e, "sig")
-    call = _cat(
-        e, _jv_expr(e, e.v("f")), ".", in_(e, "name"), "(", e.join(e.fld(e.v("args"), "exprs"), ", "), ")"
-    )
+    call = _cat(e, _jv_expr(e, e.v("f")), ".", in_(e, "name"), "(", e.join(e.fld(e.v("args"), "exprs"), ", "), ")")
     x.append(
         e.impl_interface(
             e.v("jt_method"),
@@ -1810,12 +1862,26 @@ def _object_type(e, x):
                 fields,
                 "fd",
                 e.seq(
-                    e.let("fv", _to(e, e.fld(e.v("fd"), "ty"), unwrap_cve_m(e, e.call_m(e.v("rf"), "get", e.fld(e.v("fd"), "name"))))),
+                    e.let(
+                        "fv",
+                        _to(
+                            e,
+                            e.fld(e.v("fd"), "ty"),
+                            unwrap_cve_m(e, e.call_m(e.v("rf"), "get", e.fld(e.v("fd"), "name"))),
+                        ),
+                    ),
                     _append_code(e, e.v("out"), cve_code(e, e.v("fv"))),
                     push(e, e.v("parts"), _cat(e, e.fld(e.v("fd"), "name"), ": ", _jv_expr(e, e.v("fv")))),
                 ),
             ),
-            e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _jval(e, outer(e), _cat(e, "{", e.join(e.v("parts"), ", "), "}"))))),
+            e.ret(
+                ok_cve(
+                    e,
+                    cv_of(
+                        e, _code_of(e, e.v("out")), _jval(e, outer(e), _cat(e, "{", e.join(e.v("parts"), ", "), "}"))
+                    ),
+                )
+            ),
         ),
         body(
             e,
@@ -1829,7 +1895,10 @@ def _object_type(e, x):
         ),
         e.dstr("object"),
         [("name", in_(e, "name"))],
-        e.opt_some(e.eval_builtin("artifact_exporter"), e.mb.as_(mk_arg(e, "jobj_exporter", e.tup()), e.eval_builtin("artifact_exporter"))),
+        e.opt_some(
+            e.eval_builtin("artifact_exporter"),
+            e.mb.as_(mk_arg(e, "jobj_exporter", e.tup()), e.eval_builtin("artifact_exporter")),
+        ),
     )
     _eq_impls(e, x, "jt_obj")
     _field_impl(
@@ -1848,7 +1917,11 @@ def _object_type(e, x):
                     e,
                     ok_cve(
                         e,
-                        cv_of(e, cve_code(e, e.v("v")), _jval(e, e.v("t0"), _cat(e, _jv_expr(e, e.v("v")), ".", e.v("key")), False, True)),
+                        cv_of(
+                            e,
+                            cve_code(e, e.v("v")),
+                            _jval(e, e.v("t0"), _cat(e, _jv_expr(e, e.v("v")), ".", e.v("key")), False, True),
+                        ),
                     ),
                 ),
             ),
@@ -1867,7 +1940,9 @@ def _object_type(e, x):
             "set_artifact_id",
             e.mb.builtin("types", "artifact_id_source"),
             e.option_type_none(),
-            e.stage(e.mb.set(in_(e, "artifact_id"), e.opt_some(e.mb.builtin("types", "artifact_id_source"), e.v("arg")))),
+            e.stage(
+                e.mb.set(in_(e, "artifact_id"), e.opt_some(e.mb.builtin("types", "artifact_id_source"), e.v("arg")))
+            ),
         )
     )
     _obj_exporter(e, x)
@@ -1934,7 +2009,8 @@ def _union_type(e, x):
                 variants,
                 "vr",
                 e.if_only(
-                    type_can_cast_from(e, xx(e), loc(e), e.fld(e.v("vr"), "ty"), src_type(e)), e.incr(e.fld(e.v("n"), "v"))
+                    type_can_cast_from(e, xx(e), loc(e), e.fld(e.v("vr"), "ty"), src_type(e)),
+                    e.incr(e.fld(e.v("n"), "v")),
                 ),
             ),
             e.ret(e.eq(e.fld(e.v("n"), "v"), e.int_of(1))),
@@ -1950,7 +2026,9 @@ def _union_type(e, x):
                     type_can_cast_from(e, xx(e), loc(e), e.fld(e.v("vr"), "ty"), e.v("st")),
                     e.seq(
                         e.let("mv", _to(e, e.fld(e.v("vr"), "ty"), a(e, "cv"))),
-                        ret_m(e, ok_cve(e, cv_of(e, cve_code(e, e.v("mv")), _jval(e, outer(e), _jv_expr(e, e.v("mv")))))),
+                        ret_m(
+                            e, ok_cve(e, cv_of(e, cve_code(e, e.v("mv")), _jval(e, outer(e), _jv_expr(e, e.v("mv")))))
+                        ),
                     ),
                 ),
             ),
@@ -2028,7 +2106,9 @@ def _union_type(e, x):
                                 _jval(
                                     e,
                                     _bool_t(e),
-                                    _union_test(e, _tag(e, xx(e), variant_ty(a(e, "variant_index"))), _jv_expr(e, e.v("b"))),
+                                    _union_test(
+                                        e, _tag(e, xx(e), variant_ty(a(e, "variant_index"))), _jv_expr(e, e.v("b"))
+                                    ),
                                 ),
                             ),
                         )
@@ -2043,7 +2123,11 @@ def _union_type(e, x):
                     e.ret(
                         ok_cve(
                             e,
-                            cv_of(e, cve_code(e, e.v("b")), _jval(e, variant_ty(a(e, "variant_index")), _jv_expr(e, e.v("b")))),
+                            cv_of(
+                                e,
+                                cve_code(e, e.v("b")),
+                                _jval(e, variant_ty(a(e, "variant_index")), _jv_expr(e, e.v("b"))),
+                            ),
                         )
                     ),
                 ),
@@ -2081,7 +2165,9 @@ def _match_hook(e):
                 ),
             ),
         ),
-        e.let("els", e.if_else(e.fld(fb, "is_some"), fb, e.opt_some(cve_t(e), e.call_m(e.v("elsm"), "get", e.s("else"))))),
+        e.let(
+            "els", e.if_else(e.fld(fb, "is_some"), fb, e.opt_some(cve_t(e), e.call_m(e.v("elsm"), "get", e.s("else"))))
+        ),
     )
 
 
@@ -2115,7 +2201,9 @@ def _exc_hooks(e):
             "jump",
             e.eresult_ok(
                 code_t(e),
-                _code_of(e, e.list_new(lt(e, "jinst"), _inst(e, _cat(e, "break ", _lbl(e, a(e, "dest")), ";"), loc(e)))),
+                _code_of(
+                    e, e.list_new(lt(e, "jinst"), _inst(e, _cat(e, "break ", _lbl(e, a(e, "dest")), ";"), loc(e)))
+                ),
             ),
         ),
         e.p(
@@ -2279,7 +2367,9 @@ def _try_hook(e):
             ),
         ),
         push(e, e.v("bo"), _label_inst(e, e.v("join"), loc(e))),
-        e.if_only(e.fld(a(e, "finally_normal"), "is_some"), _append_code(e, e.v("bo"), e.fld(a(e, "finally_normal"), "value"))),
+        e.if_only(
+            e.fld(a(e, "finally_normal"), "is_some"), _append_code(e, e.v("bo"), e.fld(a(e, "finally_normal"), "value"))
+        ),
         e.if_only(
             e.eq(e.fld(e.v("st"), "ended"), num(e, 1)),
             ret_m(e, ok_cve(e, e.call(e.eval_builtin("codevalue_control_ended"), _code_of(e, e.v("bo"))))),
@@ -2341,7 +2431,9 @@ def _raise_types(e, x):
                     e.let("v", _to(e, e.fld(exc, "value"), a(e, "argument"))),
                     e.let(
                         "dest",
-                        unwrap_cve_m(e, e.call(e.eval_builtin("exc_dest"), e.rec(e.p("xx", xx(e)), e.p("loc", loc(e))))),
+                        unwrap_cve_m(
+                            e, e.call(e.eval_builtin("exc_dest"), e.rec(e.p("xx", xx(e)), e.p("loc", loc(e))))
+                        ),
                     ),
                     e.let("out", _insts_new(e)),
                     _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
@@ -2405,7 +2497,14 @@ def module(e):
     for m in ["jnumber_m", "jbigint_m", "jbool_m", "jstring_m", "jnull_m", "jundef_m", "jvoid_m"]:
         def_iface(e, x, m)
     for m in ["jfn_m", "jctor_m"]:
-        def_iface(e, x, m, e.p("params", e.list_type(ty(e))), e.p("ret", ty(e)), e.p("throws", e.call(e.mb.types_option(), ty(e))))
+        def_iface(
+            e,
+            x,
+            m,
+            e.p("params", e.list_type(ty(e))),
+            e.p("ret", ty(e)),
+            e.p("throws", e.call(e.mb.types_option(), ty(e))),
+        )
     def_iface(e, x, "jglobal_m", e.p("ty", ty(e)))
     def_iface(e, x, "jarray_m", e.p("elem", ty(e)))
     def_iface(e, x, "jmethod_m", e.p("name", str_(e)), e.p("sig", ty(e)))
@@ -2456,6 +2555,7 @@ def module(e):
             e.p("func_frames", e.list_type(int_t(e))),
             e.p("stmts", e.list_type(str_(e))),
             e.p("stmt_frames", e.list_type(int_t(e))),
+            e.p("exports", e.list_type(str_(e))),
             e.p("frames", e.fld(e.v("srcmap"), "table_t")),
             e.p("labels", e.list_type(t(e, "jlabel"))),
         ),
@@ -2478,7 +2578,9 @@ def module(e):
             x,
             obj,
             desc,
-            e.rec(e.p("params", e.list_type(ty(e))), e.p("ret", ty(e)), e.p("throws", e.call(e.mb.types_option(), ty(e)))),
+            e.rec(
+                e.p("params", e.list_type(ty(e))), e.p("ret", ty(e)), e.p("throws", e.call(e.mb.types_option(), ty(e)))
+            ),
         )
     def_obj(e, x, "jt_slot", "js slot type", e.rec(e.p("name", str_(e)), e.p("base", ty(e))))
     def_obj(e, x, "jglobal", "js global type", e.rec(e.p("ty", ty(e))))
@@ -2973,7 +3075,9 @@ def module(e):
             ),
             e.let("out", _insts_new(e)),
             # A result converted to the return type carries the body's code; otherwise the body's code is all.
-            e.let("returns", and_b(e, e.not_(cve_ended(e, e.v("r"))), e.not_(has(e, e.v("mxx"), e.v("ret"), "jvoid_m")))),
+            e.let(
+                "returns", and_b(e, e.not_(cve_ended(e, e.v("r"))), e.not_(has(e, e.v("mxx"), e.v("ret"), "jvoid_m")))
+            ),
             e.if_only(e.not_(e.v("returns")), _append_code(e, e.v("out"), cve_code(e, e.v("r")))),
             e.if_only(
                 and_b(e, e.not_(cve_ended(e, e.v("r"))), has(e, e.v("mxx"), e.v("ret"), "jvoid_m")),
@@ -3048,6 +3152,19 @@ def module(e):
             push(e, in_(e, "func_frames"), _no_frame(e)),
             e.ret(e.v("fname")),
         ),
+    )
+    # `export({name, as})`: the module's value `name` (a minted function name, or a declared variable) is exported
+    # as `as`; a module with exports renders as an ES module.
+    x.append(
+        e.method_impl(
+            e.v("jmod"),
+            "export",
+            e.rec(e.p("name", str_(e)), e.p("as", str_(e))),
+            e.option_type_none(),
+            e.stage(
+                push(e, in_(e, "exports"), e.cat(e.s("export { "), a(e, "name"), e.s(" as "), a(e, "as"), e.s(" };")))
+            ),
+        )
     )
     method(
         e,
@@ -3127,10 +3244,15 @@ def module(e):
         e.seq(
             e.let("all", e.list_new(str_(e))),
             e.let("fr", e.list_new(int_t(e))),
+            # A module with exports is an ES module (its scope is private already); otherwise the text is wrapped in
+            # a function so its names stay out of the page's global scope.
+            e.let("es", e.mb.operator_gt(e.fld(in_(e, "exports"), "len"), e.int_of(0))),
             push(e, e.v("all"), e.s('"use strict";')),
             push(e, e.v("fr"), _no_frame(e)),
-            push(e, e.v("all"), e.s("(() => {")),
-            push(e, e.v("fr"), _no_frame(e)),
+            e.if_only(
+                e.not_(e.v("es")),
+                e.seq(push(e, e.v("all"), e.s("(() => {")), push(e, e.v("fr"), _no_frame(e))),
+            ),
             # A panic's error: guarded regions rethrow it, so no catch takes it.
             push(e, e.v("all"), e.s("class Panic$ extends Error {}")),
             push(e, e.v("fr"), _no_frame(e)),
@@ -3138,8 +3260,15 @@ def module(e):
             e.foreach(in_(e, "func_frames"), "f", push(e, e.v("fr"), e.v("f"))),
             e.foreach(in_(e, "stmts"), "s", push(e, e.v("all"), e.v("s"))),
             e.foreach(in_(e, "stmt_frames"), "s", push(e, e.v("fr"), e.v("s"))),
-            push(e, e.v("all"), e.s("})();")),
-            push(e, e.v("fr"), _no_frame(e)),
+            e.if_only(
+                e.not_(e.v("es")),
+                e.seq(push(e, e.v("all"), e.s("})();")), push(e, e.v("fr"), _no_frame(e))),
+            ),
+            e.foreach(
+                in_(e, "exports"),
+                "x",
+                e.seq(push(e, e.v("all"), e.v("x")), push(e, e.v("fr"), _no_frame(e))),
+            ),
             # Source map v3 over one source, the sidecar: every line with a frame is one segment at column 0 whose
             # original line is the frame (the fields are deltas from the previous segment; only the line moves).
             e.let("segs", e.list_new(str_(e))),
@@ -3422,14 +3551,18 @@ def module(e):
                                 or_b(
                                     e,
                                     e.not_(has(e, xx(e), e.v("vt"), "jtype_m")),
-                                    or_b(e, has(e, xx(e), e.v("vt"), "junion_m"), has(e, xx(e), e.v("vt"), "jmethod_m")),
+                                    or_b(
+                                        e, has(e, xx(e), e.v("vt"), "junion_m"), has(e, xx(e), e.v("vt"), "jmethod_m")
+                                    ),
                                 ),
                                 ret_m(
                                     e,
                                     err_cve(
                                         e,
                                         loc(e),
-                                        e.cat(e.s("js union members must be plain js types, not "), ty_desc(e, e.v("vt"))),
+                                        e.cat(
+                                            e.s("js union members must be plain js types, not "), ty_desc(e, e.v("vt"))
+                                        ),
                                     ),
                                 ),
                             ),
@@ -3565,7 +3698,9 @@ def module(e):
                                     err_cve(
                                         e,
                                         loc(e),
-                                        e.cat(e.s("js fn/ctor parameters must be js types, not "), ty_desc(e, e.v("pt"))),
+                                        e.cat(
+                                            e.s("js fn/ctor parameters must be js types, not "), ty_desc(e, e.v("pt"))
+                                        ),
                                     ),
                                 ),
                             ),
@@ -3587,7 +3722,10 @@ def module(e):
                             err_cve(
                                 e,
                                 loc(e),
-                                e.cat(e.s("js fn/ctor ret must be a js type (or void for fn), not "), ty_desc(e, e.v("rt"))),
+                                e.cat(
+                                    e.s("js fn/ctor ret must be a js type (or void for fn), not "),
+                                    ty_desc(e, e.v("rt")),
+                                ),
                             ),
                         ),
                     ),
@@ -3624,11 +3762,23 @@ def module(e):
                         e.if_else(
                             _jgfn_is(e, "fn"),
                             e.mb.as_(
-                                mk(e, "jt_fn", e.p("params", e.v("ptys")), e.p("ret", e.v("rt")), e.p("throws", e.v("thr"))),
+                                mk(
+                                    e,
+                                    "jt_fn",
+                                    e.p("params", e.v("ptys")),
+                                    e.p("ret", e.v("rt")),
+                                    e.p("throws", e.v("thr")),
+                                ),
                                 ty(e),
                             ),
                             e.mb.as_(
-                                mk(e, "jt_ctor", e.p("params", e.v("ptys")), e.p("ret", e.v("rt")), e.p("throws", e.v("thr"))),
+                                mk(
+                                    e,
+                                    "jt_ctor",
+                                    e.p("params", e.v("ptys")),
+                                    e.p("ret", e.v("rt")),
+                                    e.p("throws", e.v("thr")),
+                                ),
                                 ty(e),
                             ),
                         ),
@@ -3643,7 +3793,12 @@ def module(e):
                     *tm.const_type_arg(e, "js array", e.v("ecv"), "el"),
                     e.if_only(
                         e.not_(has(e, xx(e), e.v("el"), "jtype_m")),
-                        ret_m(e, err_cve(e, loc(e), e.cat(e.s("js array elem must be a js type, not "), ty_desc(e, e.v("el"))))),
+                        ret_m(
+                            e,
+                            err_cve(
+                                e, loc(e), e.cat(e.s("js array elem must be a js type, not "), ty_desc(e, e.v("el")))
+                            ),
+                        ),
                     ),
                     e.let("at", mk(e, "jt_array", e.p("elem", e.v("el")))),
                     ret_m(e, ok_cve(e, _jgfn_staged(e, e.lower(e.mb.as_(e.v("at"), ty(e)))))),
@@ -3657,13 +3812,22 @@ def module(e):
                     *tm.const_type_arg(e, "js members", e.v("ocv"), "ot"),
                     e.if_only(
                         e.not_(has(e, xx(e), e.v("ot"), "jobj_m")),
-                        ret_m(e, err_cve(e, loc(e), e.cat(e.s("js members object must be a js.object type, not "), ty_desc(e, e.v("ot"))))),
+                        ret_m(
+                            e,
+                            err_cve(
+                                e,
+                                loc(e),
+                                e.cat(e.s("js members object must be a js.object type, not "), ty_desc(e, e.v("ot"))),
+                            ),
+                        ),
                     ),
                     e.let("oo", reinterpret(e, e.v("ot"), "jt_obj")),
                     *[
                         e.seq(
                             e.let(kind + "_cv", _jgfn_field(e, kind)),
-                            e.let(kind + "_rk", lookup(e, xx(e), cve_type(e, e.v(kind + "_cv")), asp_iface(e, "record"))),
+                            e.let(
+                                kind + "_rk", lookup(e, xx(e), cve_type(e, e.v(kind + "_cv")), asp_iface(e, "record"))
+                            ),
                             e.if_only(
                                 e.not_(e.fld(e.v(kind + "_rk"), "is_some")),
                                 ret_m(e, err_cve(e, loc(e), "js members " + kind + " must be a record of types")),
@@ -3675,7 +3839,11 @@ def module(e):
                                     asp_iface(e, "record"),
                                     "take_fields",
                                     e.fld(e.v(kind + "_rk"), "value"),
-                                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v(kind + "_cv")))),
+                                    e.rec(
+                                        e.p("xx", xx(e)),
+                                        e.p("loc", loc(e)),
+                                        e.p("value", cve_value(e, e.v(kind + "_cv"))),
+                                    ),
                                 ),
                             ),
                             e.foreach(
@@ -3693,13 +3861,21 @@ def module(e):
                                                 e,
                                                 loc(e),
                                                 e.cat(
-                                                    e.s("js members " + kind + " must be " + ("function types" if kind == "methods" else "js types") + ", not "),
+                                                    e.s(
+                                                        "js members "
+                                                        + kind
+                                                        + " must be "
+                                                        + ("function types" if kind == "methods" else "js types")
+                                                        + ", not "
+                                                    ),
                                                     ty_desc(e, e.v("mt")),
                                                 ),
                                             ),
                                         ),
                                     ),
-                                    e.call_m(e.v("oo"), "add_" + kind, e.rec(e.p("name", e.v("mk")), e.p("ty", e.v("mt")))),
+                                    e.call_m(
+                                        e.v("oo"), "add_" + kind, e.rec(e.p("name", e.v("mk")), e.p("ty", e.v("mt")))
+                                    ),
                                 ),
                             ),
                         )
@@ -3840,6 +4016,7 @@ def module(e):
                             e.p("func_frames", e.list_new(int_t(e))),
                             e.p("stmts", e.list_new(str_(e))),
                             e.p("stmt_frames", e.list_new(int_t(e))),
+                            e.p("exports", e.list_new(str_(e))),
                             e.p("frames", e.call(e.lower(e.fld(e.v("srcmap"), "new")), e.tup())),
                             e.p("labels", e.list_new(lt(e, "jlabel"))),
                         ),
@@ -3878,7 +4055,18 @@ def module(e):
     defs = []
     defs.append(e.p("new", e.fld(e.v("js_b"), "func")))
     defs.append(e.p("mod_t", t(e, "jmod")))
-    for obj in ["jthrow", "jpanic", "jt_number", "jt_bigint", "jt_bool", "jt_string", "jt_null", "jt_undefined", "jt_void", "jgfn_t"]:
+    for obj in [
+        "jthrow",
+        "jpanic",
+        "jt_number",
+        "jt_bigint",
+        "jt_bool",
+        "jt_string",
+        "jt_null",
+        "jt_undefined",
+        "jt_void",
+        "jgfn_t",
+    ]:
         defs.append(e.p(obj + "_new", e.fld(e.v(obj), "new")))
     x.append(e.ret(e.rec(*defs)))
 
@@ -3960,6 +4148,15 @@ def module(e):
             e.rec(e.p("name", str_(e)), e.p("params", e.list_type(str_(e))), e.p("lines", e.list_type(str_(e)))),
             e.option_type_some(str_(e)),
             e.stage(e.call_m(in_(e, "m"), "func_text", e.v("arg"))),
+        )
+    )
+    y.append(
+        e.method_impl(
+            e.v("mod_o"),
+            "export",
+            e.rec(e.p("name", str_(e)), e.p("as", str_(e))),
+            e.option_type_none(),
+            e.stage(e.call_m(in_(e, "m"), "export", e.v("arg"))),
         )
     )
     y.append(

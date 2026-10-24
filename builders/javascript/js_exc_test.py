@@ -75,7 +75,9 @@ def module(e):
                     e.stage(
                         e.call(
                             e.lower(e.v("log")),
-                            e.mb.operator_add(e.mb.as_(e.s("drop "), e.lower(string)), e.call(e.lower(e.v("str")), e.v("n"))),
+                            e.mb.operator_add(
+                                e.mb.as_(e.s("drop "), e.lower(string)), e.call(e.lower(e.v("str")), e.v("n"))
+                            ),
                         )
                     ),
                 ),

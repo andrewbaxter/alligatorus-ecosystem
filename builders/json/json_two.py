@@ -113,9 +113,9 @@ def _body(e, docs, write_byte, t_i32):
     parts = []
     for i, (doc_ptr, doc_len) in enumerate(docs):
         parts.append(e.let(f"r{i}", e.call(fn_of(e, _lo(e, "sr_new")), e.tup(doc_ptr, e.n(doc_len)))))
-        parts.append(e.let(f"p{i}", e.mb.as_(e.call(_lo(e, "jp_new"), e.v(f"r{i}")), _lo(e, "jp_own"))))
-        parts.append(e.let(f"v{i}p", e.mb.as_(e.call(_lo(e, "bytes_new"), e.tup()), _lo(e, "bytes_own"))))
-        parts.append(e.let(f"w{i}", e.mb.as_(e.call(_lo(e, "jw_new"), e.v(f"v{i}p")), _lo(e, "jw_own"))))
+        parts.append(e.let(f"p{i}", e.call(_lo(e, "jp_new"), e.v(f"r{i}"))))
+        parts.append(e.let(f"v{i}p", e.call(_lo(e, "bytes_new"), e.tup())))
+        parts.append(e.let(f"w{i}", e.call(_lo(e, "jw_new"), e.v(f"v{i}p"))))
         parts.append(e.let(f"done{i}", e.mb.as_(e.n(0), _lo(e, t_i32))))
     parts.append(
         e.mb.labeled(

@@ -44,7 +44,6 @@ value and never touched again by the caller):
     write_object_begin, write_object_end, write_array_begin, write_array_end   {write, w}
 """
 
-from ..eco_mb import p
 from ..target_mb import (
     a,
     asp_iface,

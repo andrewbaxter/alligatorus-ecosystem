@@ -1,14 +1,16 @@
 """destructor-test.atz / destructor-test-err.atz: llvm apps exercising destructor.atz.
 
-APP prints, via puts as the destroy function: A (reassignment destroys the old value), A2 (a borrow), end, B (the
-moved-into binding drops), A2 (the reassigned binding drops). ERR moves an owned binding in one branch only, which
-must fail to compile.
-"""
+APP prints, via puts as the destroy function: A (reassignment destroys the old value), C (an owned parameter: the
+callee destroys it when it returns), D (an owned value returned by a function and passed on as a temporary), A2 (a
+borrow), end, D2 (the binding of a returned owned value drops), B (the moved-into binding drops), A2 (the reassigned
+binding drops). ERR moves an owned binding in one branch only, which must fail to compile.
+ ERR_LOAN returns a borrow of a local owned binding from a function, which must fail to compile."""
 
 from ..root_mode import APP, root_mode_finish
 from ..target_mb import fn_of
 
 ERR = "err"
+ERR_LOAN = "err_loan"
 
 
 def _lo(e, name):
@@ -42,7 +44,16 @@ def module(e, mode):
             ),
         )
     )
-    exported = ["llvm", "ll", "c", "t_pu8", "main_fn_t", "cond_fn_t"]
+    setup.append(
+        e.let(
+            "leak_fn_t",
+            e.call(
+                e.fld(e.v("llvm"), "fn"),
+                e.rec(e.p("params", e.list_new(e.mb.eval_type())), e.p("ret", e.v("t_pu8"))),
+            ),
+        )
+    )
+    exported = ["llvm", "ll", "c", "t_pu8", "main_fn_t", "cond_fn_t", "leak_fn_t"]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
     top = []
@@ -61,7 +72,15 @@ def module(e, mode):
     )
     top.append(e.let("owned_str", e.fld(e.v("owned_r"), "type")))
     top.append(e.let("own_str", e.fld(e.v("owned_r"), "own")))
-    for name, text in [("s_a", "A"), ("s_a2", "A2"), ("s_b", "B"), ("s_c", "C"), ("s_end", "end")]:
+    for name, text in [
+        ("s_a", "A"),
+        ("s_a2", "A2"),
+        ("s_b", "B"),
+        ("s_c", "C"),
+        ("s_d", "D"),
+        ("s_d2", "D2"),
+        ("s_end", "end"),
+    ]:
         top.append(e.let(name, e.call_m(e.v("ll"), "cstr", e.s(text))))
     # A function taking an owned parameter: the callee owns it and destroys it when it returns (a dependency, so
     # its type, made here from the owned type, needs no lowering boundary).
@@ -88,6 +107,44 @@ def module(e, mode):
             ),
         )
     )
+    # A function returning an owned value: a dependency whose return type is the owned type; its body yields an
+    # owned temporary (the constant `D` or `D2`, by the argument), which the caller owns.
+    top.append(
+        e.let(
+            "make",
+            e.call(
+                e.fld(e.v("llvm"), "func_dep"),
+                e.rec(
+                    e.p("name", e.s("make")),
+                    e.p("params", e.list_new(e.mb.types_string(), e.s("second"))),
+                    e.p(
+                        "ty",
+                        e.call(
+                            e.fld(e.v("llvm"), "fn"),
+                            e.rec(
+                                e.p("params", e.list_new(e.mb.eval_type(), e.fld(e.v("llvm"), "i32"))),
+                                e.p("ret", e.v("owned_str")),
+                            ),
+                        ),
+                    ),
+                    e.p(
+                        "body",
+                        e.stage(
+                            e.seq(
+                                e.ret(
+                                    e.if_else(
+                                        e.eq(e.v("second"), e.n(0)),
+                                        e.mb.as_(_lo(e, "s_d"), _lo(e, "own_str")),
+                                        e.mb.as_(_lo(e, "s_d2"), _lo(e, "own_str")),
+                                    )
+                                )
+                            )
+                        ),
+                    ),
+                ),
+            ),
+        )
+    )
     puts = e.lower(e.fld(e.v("c"), "puts"))
     if mode == APP:
         body = e.seq(
@@ -97,6 +154,8 @@ def module(e, mode):
             e.mb.set(e.v("a"), e.mb.as_(_lo(e, "s_a2"), _lo(e, "own_str"))),
             e.let("c3", e.mb.as_(_lo(e, "s_c"), _lo(e, "own_str"))),
             e.call(fn_of(e, _lo(e, "consume")), e.call(e.fld(e.v("c3"), "move"), e.tup())),
+            e.call(fn_of(e, _lo(e, "consume")), e.call(fn_of(e, _lo(e, "make")), e.n(0))),
+            e.let("d", e.call(fn_of(e, _lo(e, "make")), e.n(1))),
             e.call(puts, e.v("a")),
             e.call(puts, _lo(e, "s_end")),
             e.ret(e.n(0)),
@@ -132,6 +191,25 @@ def module(e, mode):
                         e.p("name", e.s("cond")),
                         e.p("params", e.tup(e.s("x"))),
                         e.p("ty", e.v("cond_fn_t")),
+                        e.p("body", e.stage(body)),
+                    ),
+                ),
+            )
+        )
+        top.append(e.call(e.mb.log(), e.fld(e.call_m0(e.v("ll"), "render"), "ir")))
+    elif mode == ERR_LOAN:
+        # A function returning a borrow of its own owned binding (dangling once the binding drops) must not compile.
+        body = e.seq(e.let("a", e.mb.as_(_lo(e, "s_a"), _lo(e, "own_str"))), e.ret(e.v("a")))
+        top.append(
+            e.let(
+                "leak",
+                e.call(
+                    e.fld(e.v("llvm"), "func_fn"),
+                    e.rec(
+                        e.p("mod", e.v("ll")),
+                        e.p("name", e.s("leak")),
+                        e.p("params", e.tup()),
+                        e.p("ty", e.v("leak_fn_t")),
                         e.p("body", e.stage(body)),
                     ),
                 ),

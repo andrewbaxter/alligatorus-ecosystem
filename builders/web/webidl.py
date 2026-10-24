@@ -6,6 +6,7 @@ callbacks and strings handed over as handles); `ancestor({table, iface, of})` is
 chain, "" above all), which the wasm side turns into handle upcasts."""
 
 from .. import target_mb
+from ..core import values
 from ..target_mb import (
     a,
     accessor,
@@ -34,11 +35,47 @@ from ..target_mb import (
     to_str,
 )
 
+# The member name a callback hook's import carries (`<callback name>.<callback>`): no spec member can be named so.
+CALLBACK_MEMBER = "<callback>"
+
+# Imports beside the spec's members, the `intrinsic` kind: name -> (parameter kinds, result kind). `string_len(h)`
+# is a string handle's UTF-8 length and `string_copy(h, ptr, len)` writes its UTF-8 bytes; `seq_len(h)` is a
+# sequence handle's length and `seq_get(h, i)` an owned handle of its element `i`; `sin`, `cos`, `atan2(y, x)`,
+# `exp`, `log` and `pow(x, y)` are ECMAScript's `Math` functions; `num_format(x)` is a string handle of the shortest
+# text that reads back as `x` (ECMAScript `String(x)`) and `num_parse(ptr, len)` reads a number from UTF-8 text
+# (ECMAScript `Number(text)`); `handle_dup(h)` is a new owned handle of the object `h` names (a holder that must
+# outlive the handle it was given keeps one of its own).
+INTRINSICS = {
+    "handle_dup": (["handle"], "handle"),
+    "string_len": (["handle"], "u32"),
+    "string_copy": (["handle", "str"], "void"),
+    "seq_len": (["handle"], "u32"),
+    "seq_get": (["handle", "u32"], "handle"),
+    "sin": (["f64"], "f64"),
+    "cos": (["f64"], "f64"),
+    "atan2": (["f64", "f64"], "f64"),
+    "exp": (["f64"], "f64"),
+    "log": (["f64"], "f64"),
+    "pow": (["f64", "f64"], "f64"),
+    "num_format": (["f64"], "handle"),
+    "num_parse": (["str"], "f64"),
+}
+
 SPEC_REPO = "https://github.com/w3c/webref"
 
 SPEC_COMMIT = "8a9e087aee12097e86b036b8560b6b0217f784eb"
 
-SPEC_FILES = ["dom.idl", "html.idl", "cssom-view.idl", "webgl1.idl", "webgl2.idl"]
+SPEC_FILES = [
+    "dom.idl",
+    "html.idl",
+    "cssom.idl",
+    "cssom-view.idl",
+    "uievents.idl",
+    "pointerevents.idl",
+    "hr-time.idl",
+    "webgl1.idl",
+    "webgl2.idl",
+]
 
 
 def _fn_def(e, out, name, arg_type, ret):
@@ -113,7 +150,40 @@ def _sig_of(e):
         e.p("ret_out", e.eq(e.fld(e.v("st"), "ret_out"), num(e, 1))),
         e.p("ret_kind", e.fld(e.v("st"), "ret_kind")),
         e.p("ret_iface", e.fld(e.v("st"), "ret_iface")),
+        e.p("cb_args", e.v("cb_args")),
+        e.p("cb_ret", e.fld(e.v("st"), "cb_ret")),
     )
+
+
+def _intrinsic_sigs(e):
+    """In `h_sig`, kind `intrinsic`: the signature of the intrinsic `member` (`INTRINSICS`), handles of any
+    interface."""
+    out = []
+    for name, (params, ret) in INTRINSICS.items():
+        pushes = []
+        for kind in params:
+            pushes.append(
+                push(
+                    e,
+                    e.v("args"),
+                    mk(
+                        e,
+                        "iparam",
+                        e.p("optional", e.b(False)),
+                        e.p("nullable", e.b(False)),
+                        e.p("kind", e.dstr(kind)),
+                        e.p("iface", e.dstr("")),
+                    ),
+                )
+            )
+        out.append(
+            e.if_only(
+                e.eq(a(e, "member"), e.s(name)),
+                e.seq(*pushes, e.mb.set(e.fld(e.v("st"), "ret_kind"), e.dstr(ret)), ret_m(e, _sig_of(e))),
+            )
+        )
+    out.append(_sig_err(e, e.cat(e.s("no intrinsic "), a(e, "member"))))
+    return out
 
 
 def _sig_err(e, message):
@@ -220,6 +290,7 @@ def _push_def(e, def_):
 def module(e):
     x = []
     x.append(e.let("d", e.define()))
+    x.append(e.let("values", e.import_local("values", values.FILE)))
     x.append(e.option_type_let())
     def_obj(e, x, "tok", "webidl token", e.rec(e.p("kind", str_(e)), e.p("text", str_(e))))
     accessor(e, x, "tok", "kind", str_(e))
@@ -347,13 +418,16 @@ def module(e):
             e.p("ret_out", bool_t(e)),
             e.p("ret_kind", str_(e)),
             e.p("ret_iface", str_(e)),
+            e.p("cb_args", e.list_type(t(e, "iparam"))),
+            e.p("cb_ret", str_(e)),
         ),
     )
     for f in ["ok", "self", "ret_out"]:
         accessor(e, x, "isig", f, bool_t(e))
-    for f in ["err", "iface", "member", "base", "kind", "ret_kind", "ret_iface"]:
+    for f in ["err", "iface", "member", "base", "kind", "ret_kind", "ret_iface", "cb_ret"]:
         accessor(e, x, "isig", f, str_(e))
     accessor(e, x, "isig", "args", e.list_type(t(e, "iparam")))
+    accessor(e, x, "isig", "cb_args", e.list_type(t(e, "iparam")))
     for vo in ["tok", "lex", "cur", "itype", "iarg", "imember", "idef", "itable", "ifound", "iparam", "isig"]:
         def_iface(e, x, vo + "_m")
         marker_type(e, x, vo, vo, vo + "_m", e.aspect_dispatch(lv(e, vo + "_m_id")))
@@ -457,6 +531,13 @@ def module(e):
         "h_ancestor",
         e.rec(e.p("table", t(e, "itable")), e.p("iface", str_(e)), e.p("of", str_(e))),
         bool_t(e),
+    )
+    _fn_def(
+        e,
+        x,
+        "h_ancestors",
+        e.rec(e.p("table", t(e, "itable")), e.p("iface", str_(e))),
+        e.list_type(str_(e)),
     )
     _fn_def(
         e,
@@ -1187,7 +1268,19 @@ def module(e):
                             e.v("name"),
                             e.dstr(""),
                             e.b(False),
-                            e.list_new(lt(e, "imember")),
+                            e.list_new(
+                                lt(e, "imember"),
+                                _imember(
+                                    e,
+                                    e.dstr("op"),
+                                    e.dstr(""),
+                                    e.v("ty"),
+                                    e.v("cargs"),
+                                    e.b(False),
+                                    e.b(False),
+                                    e.dstr(""),
+                                ),
+                            ),
                             e.v("ty"),
                         ),
                     ),
@@ -1438,6 +1531,38 @@ def module(e):
                 ret_m(e, e.dstr("")),
             ),
             e.ret(a(e, "name")),
+        ),
+    )
+    # The interface `iface` and the ones it inherits from (along `parent`), nearest first.
+    fn_impl(
+        e,
+        x,
+        "h_ancestors",
+        body(
+            e,
+            e.let("out", e.list_new(str_(e), a(e, "iface"))),
+            e.let("defs", e.call_m(a(e, "table"), "defs", e.tup())),
+            e.let("cur", e.rec(e.p("v", a(e, "iface")))),
+            e.mb.labeled(
+                "walk",
+                e.mb.loop(
+                    e.seq(
+                        e.if_only(
+                            e.not_(
+                                hf(e, "h_has", e.rec(e.p("defs", e.v("defs")), e.p("name", e.fld(e.v("cur"), "v"))))
+                            ),
+                            e.mb.return_label("walk"),
+                        ),
+                        e.let(
+                            "parent", e.call_m(e.call_m(e.v("defs"), "get", e.fld(e.v("cur"), "v")), "parent", e.tup())
+                        ),
+                        e.if_only(e.eq(e.v("parent"), e.s("")), e.mb.return_label("walk")),
+                        push(e, e.v("out"), e.v("parent")),
+                        e.mb.set(e.fld(e.v("cur"), "v"), e.v("parent")),
+                    ),
+                ),
+            ),
+            e.ret(e.v("out")),
         ),
     )
     # Whether the interface `iface` is `of` or inherits from it (along `parent`); "" (any handle) is above every
@@ -1698,6 +1823,7 @@ def module(e):
         body(
             e,
             e.let("args", e.list_new(lt(e, "iparam"))),
+            e.let("cb_args", e.list_new(lt(e, "iparam"))),
             e.let("sp", hf(e, "h_split_overload", a(e, "member"))),
             e.let(
                 "st",
@@ -1711,6 +1837,7 @@ def module(e):
                     e.p("ret_out", e.int_of(0)),
                     e.p("ret_kind", e.dstr("void")),
                     e.p("ret_iface", e.dstr("")),
+                    e.p("cb_ret", e.dstr("void")),
                 ),
             ),
             e.if_only(
@@ -1722,21 +1849,104 @@ def module(e):
                 ),
             ),
             e.if_only(
+                e.eq(a(e, "kind"), e.s("intrinsic")),
+                e.seq(*_intrinsic_sigs(e)),
+            ),
+            # A callback: `iface` names a callback function or a single-operation callback interface; the hook takes
+            # a callable (closure-wasm.atz: the reference to its `call` function and its object pointer, two i32s at
+            # the boundary) and returns the function's handle, typed as the callback; the function's parameters after
+            # the object and its result are the callback's (`cb_args`, `cb_ret`).
+            e.if_only(
                 e.eq(a(e, "kind"), e.s("callback")),
                 e.seq(
+                    e.mb.set(e.fld(e.v("st"), "member"), e.dstr(CALLBACK_MEMBER)),
+                    e.mb.set(e.fld(e.v("st"), "base"), e.dstr(CALLBACK_MEMBER)),
                     e.mb.set(e.fld(e.v("st"), "ret_kind"), e.dstr("handle")),
-                    push(
-                        e,
-                        e.v("args"),
-                        mk(
+                    e.mb.set(e.fld(e.v("st"), "ret_iface"), a(e, "iface")),
+                    *[
+                        push(
                             e,
-                            "iparam",
-                            e.p("optional", e.b(False)),
-                            e.p("nullable", e.b(False)),
-                            e.p("kind", e.dstr("str")),
-                            e.p("iface", e.dstr("")),
+                            e.v("args"),
+                            mk(
+                                e,
+                                "iparam",
+                                e.p("optional", e.b(False)),
+                                e.p("nullable", e.b(False)),
+                                e.p("kind", e.dstr("i32")),
+                                e.p("iface", e.dstr("")),
+                            ),
+                        )
+                        for _ in range(2)
+                    ],
+                    e.let("cdefs", e.call_m(a(e, "table"), "defs", e.tup())),
+                    e.if_only(
+                        e.not_(hf(e, "h_has", e.rec(e.p("defs", e.v("cdefs")), e.p("name", a(e, "iface"))))),
+                        _sig_err(e, e.cat(e.s("no callback "), a(e, "iface"))),
+                    ),
+                    e.let("cdef", e.call_m(e.v("cdefs"), "get", a(e, "iface"))),
+                    e.let("ckind", e.call_m(e.v("cdef"), "kind", e.tup())),
+                    e.if_only(
+                        e.not_(
+                            or_b(
+                                e,
+                                e.eq(e.v("ckind"), e.s("callback")),
+                                e.eq(e.v("ckind"), e.s("callback_interface")),
+                            )
+                        ),
+                        _sig_err(e, e.cat(a(e, "iface"), e.s(" is not a callback"))),
+                    ),
+                    e.let("cops", e.list_new(lt(e, "imember"))),
+                    e.foreach(
+                        e.call_m(e.v("cdef"), "members", e.tup()),
+                        "cm",
+                        e.if_only(
+                            e.eq(e.call_m(e.v("cm"), "kind", e.tup()), e.s("op")), push(e, e.v("cops"), e.v("cm"))
                         ),
                     ),
+                    e.if_only(
+                        e.not_(e.eq(e.fld(e.v("cops"), "len"), num(e, 1))),
+                        _sig_err(e, e.cat(e.s("callback "), a(e, "iface"), e.s(" must have exactly one operation"))),
+                    ),
+                    e.let("cop", e.call_m(e.v("cops"), "get", e.int_of(0))),
+                    e.foreach(
+                        e.call_m(e.v("cop"), "args", e.tup()),
+                        "ar",
+                        e.seq(
+                            e.if_only(
+                                e.call_m(e.v("ar"), "variadic", e.tup()),
+                                _sig_err(
+                                    e,
+                                    e.cat(
+                                        e.s("variadic callback argument "),
+                                        e.call_m(e.v("ar"), "name", e.tup()),
+                                        e.s(" is not supported"),
+                                    ),
+                                ),
+                            ),
+                            push(
+                                e,
+                                e.v("cb_args"),
+                                hf(
+                                    e,
+                                    "h_param",
+                                    e.rec(
+                                        e.p("table", a(e, "table")),
+                                        e.p("ty", e.call_m(e.v("ar"), "ty", e.tup())),
+                                        e.p("optional", e.call_m(e.v("ar"), "optional", e.tup())),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.let(
+                        "car",
+                        hf(
+                            e,
+                            "h_abi_ret",
+                            e.rec(e.p("table", a(e, "table")), e.p("ty", e.call_m(e.v("cop"), "ty", e.tup()))),
+                        ),
+                    ),
+                    e.mb.set(e.fld(e.v("st"), "cb_ret"), e.fld(e.v("car"), "kind")),
                     ret_m(e, _sig_of(e)),
                 ),
             ),
@@ -1892,7 +2102,10 @@ def module(e):
         body(
             e,
             e.if_only(e.eq(a(e, "name"), e.s("global")), ret_m(e, _sig_call(e, e.dstr(""), e.dstr(""), "global"))),
-            e.if_only(e.eq(a(e, "name"), e.s("callback")), ret_m(e, _sig_call(e, e.dstr(""), e.dstr(""), "callback"))),
+            *[
+                e.if_only(e.eq(a(e, "name"), e.s(name)), ret_m(e, _sig_call(e, e.dstr(""), e.dstr(name), "intrinsic")))
+                for name in INTRINSICS
+            ],
             e.let(
                 "st",
                 e.rec(
@@ -1953,6 +2166,10 @@ def module(e):
             e.if_only(
                 e.eq(e.v("member"), e.s("constructor")), ret_m(e, _sig_call(e, e.v("iface"), e.v("member"), "ctor"))
             ),
+            e.if_only(
+                e.eq(e.v("member"), e.s(CALLBACK_MEMBER)),
+                ret_m(e, _sig_call(e, e.v("iface"), e.v("member"), "callback")),
+            ),
             e.let("op", _sig_call(e, e.v("iface"), e.v("member"), "op")),
             e.if_only(e.call_m(e.v("op"), "ok", e.tup()), ret_m(e, e.v("op"))),
             e.ret(_sig_call(e, e.v("iface"), e.v("member"), "get")),
@@ -1964,6 +2181,7 @@ def module(e):
         "h_mangle",
         body(
             e,
+            e.if_only(e.eq(a(e, "kind"), e.s("intrinsic")), ret_m(e, a(e, "member"))),
             e.ret(
                 e.cat(
                     a(e, "iface"),
@@ -2080,7 +2298,19 @@ def module(e):
     defs = []
     defs.append(e.p("parse", e.v("h_parse")))
     defs.append(e.p("table", e.v("h_table")))
-    for fn in ["has", "resolve", "kind", "abi_ret", "find", "mangle", "sig", "sig_name", "const_value", "ancestor"]:
+    for fn in [
+        "has",
+        "resolve",
+        "kind",
+        "abi_ret",
+        "find",
+        "mangle",
+        "sig",
+        "sig_name",
+        "const_value",
+        "ancestor",
+        "ancestors",
+    ]:
         defs.append(e.p(fn, e.v("h_" + fn)))
     for obj in ["itype", "iarg", "imember", "idef", "itable", "ifound", "iparam", "isig"]:
         defs.append(e.p(obj + "_t", t(e, obj)))
@@ -2123,6 +2353,7 @@ def module(e):
         "sig_name",
         "const_value",
         "ancestor",
+        "ancestors",
         "itype_t",
         "iarg_t",
         "imember_t",

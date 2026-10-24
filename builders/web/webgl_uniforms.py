@@ -1,6 +1,7 @@
 """webgl-uniforms.atz: std140 uniform blocks laid out in wasm memory and declared in glsl."""
 
 from .. import target_mb as tm
+from ..core import values
 from ..target_mb import (
     a,
     acc,
@@ -13,7 +14,6 @@ from ..target_mb import (
     can_cast_from_self,
     cast_from_self,
     cast_to_panic,
-    cast_value,
     code_t,
     const_eval_in,
     count_let,
@@ -161,6 +161,7 @@ def module(e):
     x = []
     x.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
     x.append(e.let("glsl", e.import_local("glsl", "glsl-es-3.00.atz")))
+    x.append(e.let("values", e.import_local("values", values.FILE)))
     for t_ in ["f32", "i32", "u32", "void"]:
         x.append(e.let("t_" + t_, e.fld(e.v("wasm"), t_)))
     x.append(e.let("c_ptr", e.fld(e.v("wasm"), "ptr")))

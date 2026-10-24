@@ -214,8 +214,14 @@ def _wrapper_casts(e, under):
             e.let("v", unwrap_m(e, cast_value(e, xx(e), loc(e), under(), a(e, "cv")), cve_t(e))),
             e.ret(ok_cve(e, _retag_m(e, e.v("v"), outer(e), cve_t(e)))),
         ),
+        # A wrapped value converts to `under` itself (unwrapping it: the wrapper's identity is its own, so the under
+        # type does not take the wrapped value for its own) and to whatever `under` converts to.
         e.if_else(
-            is_equal(e, xx(e), outer(e), a(e, "dest_type")),
+            or_b(
+                e,
+                is_equal(e, xx(e), outer(e), a(e, "dest_type")),
+                is_equal(e, xx(e), under(), a(e, "dest_type")),
+            ),
             e.mb.as_(e.b(True), bool_t(e)),
             bim(e, e.mb.eval_type(), "can_cast_to", under(), _rec_xl(e, p("dest_type", a(e, "dest_type")))),
         ),
@@ -223,6 +229,7 @@ def _wrapper_casts(e, under):
             e,
             e.if_only(is_equal(e, xx(e), outer(e), a(e, "dest_type")), ret_m(e, ok_cve(e, a(e, "cv")))),
             e.let("v", _retag_m(e, a(e, "cv"), under(), cve_t(e))),
+            e.if_only(is_equal(e, xx(e), under(), a(e, "dest_type")), ret_m(e, ok_cve(e, e.v("v")))),
             e.ret(
                 bim(
                     e,

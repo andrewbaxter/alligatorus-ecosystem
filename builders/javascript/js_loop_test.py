@@ -46,9 +46,7 @@ def module(e):
         ("log", "console.log", _fn(e, [string], e.fld(e.v("js"), "void"))),
         ("str", "String", _fn(e, [number], string)),
     ]:
-        top.append(
-            e.let(name, e.call(e.fld(e.v("js"), "global_fn"), e.rec(e.p("name", e.s(js_name)), e.p("ty", ty_))))
-        )
+        top.append(e.let(name, e.call(e.fld(e.v("js"), "global_fn"), e.rec(e.p("name", e.s(js_name)), e.p("ty", ty_)))))
     for var in ["cnt", "o"]:
         top.append(
             e.let(

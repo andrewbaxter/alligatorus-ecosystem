@@ -11,8 +11,10 @@ through `mod.siphash_key()`."""
 from ..core import meta, srcmap, values
 from .. import target_mb as tm
 from ..target_mb import (
+    lty,
     panic_errs,
     a,
+    aggregate_layout_impls,
     acc,
     accessor,
     and_b,
@@ -65,6 +67,7 @@ from ..target_mb import (
     loc_t,
     lookup,
     lookup_v,
+    retag_values,
     lt,
     lv,
     marker_type,
@@ -88,6 +91,7 @@ from ..target_mb import (
     rt_lift_impl,
     rt_use_impl,
     self_type,
+    short_circuit_body,
     src_bits,
     src_type,
     str_,
@@ -102,6 +106,7 @@ from ..target_mb import (
     ty_desc,
     type_aspect,
     type_can_cast_from,
+    type_can_convert,
     unwrap_cve_m,
     unwrap_cve_t,
     unwrap_m,
@@ -335,14 +340,119 @@ def _conv_methods(e, x):
             e.p("exception_type", e.option_type_lowered_none()),
         )
     )
-    tm.method_fields(e, x, "wt_int", "wconv", ["wrap", "to_float"])
-    tm.method_fields(e, x, "wt_float", "wconv", ["trunc", "to_float"])
+    tm.method_fields(e, x, "wt_int", [("wconv", ["wrap", "to_float"])])
 
 
-def _value_aspects(e, x, obj, size_expr, hash_stage):
-    """Implements values.atz's `size_i`, `eq_i` and (when `hash_stage` is given) `hash_i` for a type object: eq
-    stages the type's own `==`; hash stages a 32-bit hash of the value `cv`."""
+FMATH_UNARY = ["sqrt", "abs", "floor", "ceil", "nearest"]
+FMATH_BINARY = ["min", "max", "copysign"]
+
+
+def _fmath_methods(e, x):
+    """Float math as methods on float values, each one wasm instruction of the value's type: `sqrt()`, `abs()`,
+    `floor()`, `ceil()` and `nearest()` (round to nearest, ties to even) take `()`; `min(o)`, `max(o)` and
+    `copysign(o)` take a value of the receiver's type."""
+    tm.method_type(e, x, "wfmath", "wasm float math")
+    v = e.v("v")
+    st = e.v("st")
+
+    def is_unary():
+        out = e.eq(in_(e, "op"), e.s(FMATH_UNARY[0]))
+        for name in FMATH_UNARY[1:]:
+            out = or_b(e, e.eq(in_(e, "op"), e.s(name)), out)
+        return out
+
+    x.append(
+        e.impl_interface(
+            e.v("wfmath"),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    e.let(
+                        "v",
+                        unwrap_cve_m(
+                            e,
+                            try_er(
+                                e,
+                                _ssa(
+                                    e,
+                                    xx(e),
+                                    loc(e),
+                                    _xmod(e),
+                                    cv_of(e, cve_code(e, a(e, "function")), cve_value(e, recv_of(e))),
+                                ),
+                                cve_t(e),
+                            ),
+                        ),
+                    ),
+                    e.let("st", cve_type(e, v)),
+                    e.if_only(
+                        is_unary(),
+                        e.seq(
+                            e.if_only(
+                                e.not_(is_equal(e, xx(e), tm.unit_t(e), cve_type(e, a(e, "argument")))),
+                                ret_m(e, err_cve(e, loc(e), e.cat(e.s("wasm: "), in_(e, "op"), e.s(" takes ()")))),
+                            ),
+                            ret_m(
+                                e,
+                                try_er(
+                                    e,
+                                    hf_rec(
+                                        e,
+                                        "h_unop",
+                                        e.p("xx", xx(e)),
+                                        e.p("loc", loc(e)),
+                                        e.p("mod", _xmod(e)),
+                                        e.p("ty", st),
+                                        e.p("op", in_(e, "op")),
+                                        e.p("a", v),
+                                    ),
+                                    cve_t(e),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.ret(
+                        try_er(
+                            e,
+                            hf_rec(
+                                e,
+                                "h_binop",
+                                e.p("xx", xx(e)),
+                                e.p("loc", loc(e)),
+                                e.p("mod", _xmod(e)),
+                                e.p("ty", st),
+                                e.p("op", in_(e, "op")),
+                                e.p("a", v),
+                                e.p("b", a(e, "argument")),
+                                e.p("res", st),
+                            ),
+                            cve_t(e),
+                        )
+                    ),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+    tm.method_fields(e, x, "wt_float", [("wconv", ["trunc", "to_float"]), ("wfmath", FMATH_UNARY + FMATH_BINARY)])
+
+
+def _value_aspects(e, x, obj, size_expr, hash_stage, zero_text):
+    """Implements values.atz's `size_i`, `eq_i`, `zero_i` (the constant `zero_text`, when given) and (when
+    `hash_stage` is given) `hash_i` for a type object: eq stages the type's own `==`; hash stages a 32-bit hash of
+    the value `cv`."""
     x.append(e.impl_interface(e.v(obj), e.fld(e.v("values"), "size_i"), e.p("size", size_expr)))
+    x.append(e.impl_interface(e.v(obj), e.fld(e.v("values"), "align_i"), e.p("align", size_expr)))
+    if zero_text is not None:
+        x.append(
+            e.impl_interface(
+                e.v(obj),
+                e.fld(e.v("values"), "zero_i"),
+                e.p("zero", ok_cve(e, cv_of(e, code_none(e, a(e, "loc")), _wval_konst(e, outer(e), e.s(zero_text))))),
+            )
+        )
     x.append(
         e.impl_interface(
             e.v(obj),
@@ -555,10 +665,6 @@ def _sip_hash(e, to_i64, key_arg):
     )
 
 
-def _lty(e, obj, arg):
-    return e.mb.as_(e.call(e.fld(e.v("k"), obj + "_new"), arg), ty(e))
-
-
 def _wval_of(e, cve_tp):
     return reinterpret(e, cve_value(e, cve_tp), "wval")
 
@@ -671,6 +777,16 @@ def _reversed_names(e, names, var, *body_):
             ),
         ),
     )
+
+
+def _round_up(e, n, al):
+    """`n` rounded up to a multiple of `al` (ints)."""
+    return e.mb.operator_mul(e.mb.operator_div(e.mb.operator_add(n, e.mb.operator_sub(al, e.int_of(1))), al), al)
+
+
+def _mem_val(e, mod, ty_, addr, offset):
+    """The memory place of `ty_` at the local `addr` plus `offset`: a tuple's is its components' places."""
+    return hf_rec(e, "h_mem_val", e.p("mod", mod), e.p("ty", ty_), e.p("addr", addr), e.p("offset", offset))
 
 
 def _wv_mem(e, wval_tp):
@@ -1190,6 +1306,26 @@ def _tuple_type(e, x):
             e.ret(e.not_(dfalse(e))),
         )
 
+    def _any_elem_drops(e_):
+        """Whether a component type of the tuple has the drop aspect (in the type's own aspect dispatch)."""
+        return e_.mb.labeled(
+            "d",
+            e_.seq(
+                e_.foreach(
+                    in_(e_, "elems"),
+                    "et",
+                    e_.if_only(
+                        e_.fld(
+                            lookup(e_, e_.fld(e_.v("arg"), "xx"), e_.v("et"), e_.mb.eval_aspect_drop_dynamic()),
+                            "is_some",
+                        ),
+                        e_.mb.return_to("d", e_.mb.as_(e_.b(True), bool_t(e_))),
+                    ),
+                ),
+                e_.mb.return_to("d", e_.mb.as_(e_.b(False), bool_t(e_))),
+            ),
+        )
+
     self_type(
         e,
         x,
@@ -1200,14 +1336,29 @@ def _tuple_type(e, x):
             e.foreach(in_(e, "elems"), "et", push(e, e.v("ds"), bim0(e, ty(e), "desc", e.v("et")))),
             e.ret(e.cat(e.s("("), e.join(e.v("ds"), ", "), e.s(")"))),
         ),
-        e.aspect_dispatch(
-            lv(e, "wtype_id"),
-            asp_id(e, "initial_bind"),
-            asp_id(e, "bind"),
-            asp_id(e, "set"),
-            asp_id(e, "field"),
-            e.mb.eval_aspect_drop_dynamic_id(),
-            lv(e, "wtuple_id"),
+        # A tuple drops (its components) only when a component does.
+        e.mb.if_of(
+            [
+                (
+                    e.eq(a(e, "key"), e.mb.eval_aspect_drop_dynamic_id()),
+                    e.if_else(
+                        _any_elem_drops(e),
+                        e.opt_some(e.mb.types_aspect(), outer(e)),
+                        e.opt_none(e.mb.types_aspect()),
+                    ),
+                )
+            ],
+            e.aspect_dispatch(
+                lv(e, "wtype_id"),
+                asp_id(e, "initial_bind"),
+                asp_id(e, "bind"),
+                asp_id(e, "set"),
+                asp_id(e, "field"),
+                lv(e, "wtuple_id"),
+                lv(e, "zero_id"),
+                lv(e, "size_id"),
+                lv(e, "align_id"),
+            ),
         ),
         body(
             e,
@@ -1227,7 +1378,7 @@ def _tuple_type(e, x):
                 "ea",
                 "eb",
                 ty(e),
-                e.if_only(e.not_(type_can_cast_from(e, xx(e), loc(e), e.v("ea"), e.v("eb"))), ret_m(e, dfalse(e))),
+                e.if_only(e.not_(type_can_convert(e, xx(e), loc(e), e.v("eb"), e.v("ea"))), ret_m(e, dfalse(e))),
             ),
             e.ret(e.not_(dfalse(e))),
         ),
@@ -1290,6 +1441,61 @@ def _tuple_type(e, x):
         )
     )
     x.append(e.impl_interface(e.v("wt_tuple"), t(e, "wtuple"), e.p("elems", in_(e, "elems"))))
+    aggregate_layout_impls(e, x, "wt_tuple", in_(e, "elems"))
+    # The zero tuple: its components' zeros (every component type must have one).
+    x.append(
+        e.impl_interface(
+            e.v("wt_tuple"),
+            e.fld(e.v("values"), "zero_i"),
+            e.p(
+                "zero",
+                body(
+                    e,
+                    e.let("parts", e.list_new(lt(e, "wval"))),
+                    e.foreach(
+                        in_(e, "elems"),
+                        "et",
+                        e.seq(
+                            e.let("zk", lookup(e, a(e, "xx"), e.v("et"), e.lower(e.fld(e.v("values"), "zero_i")))),
+                            e.if_only(
+                                e.not_(e.fld(e.v("zk"), "is_some")),
+                                ret_m(
+                                    e,
+                                    err_cve(
+                                        e,
+                                        a(e, "loc"),
+                                        e.cat(
+                                            e.s("tuple component "),
+                                            bim0(e, ty(e), "desc", e.v("et")),
+                                            e.s(" has no zero"),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                            push(
+                                e,
+                                e.v("parts"),
+                                _wval_of(
+                                    e,
+                                    unwrap_cve_m(
+                                        e,
+                                        bim(
+                                            e,
+                                            e.lower(e.fld(e.v("values"), "zero_i")),
+                                            "zero",
+                                            e.fld(e.v("zk"), "value"),
+                                            e.rec(e.p("xx", a(e, "xx")), e.p("loc", a(e, "loc"))),
+                                        ),
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ),
+                    e.ret(ok_cve(e, cv_of(e, code_none(e, a(e, "loc")), _wval_multi(e, outer(e), e.v("parts"))))),
+                ),
+            ),
+        )
+    )
     # A parameter: the flat slots, shaped by the parameter's type.
     x.append(
         e.impl_interface(
@@ -1578,7 +1784,26 @@ def _val_shape_impls(e, x):
             "vq",
             "tq",
             lt(e, "wval"),
-            push(e, a(e, "out"), _store_inst(e, loc(e), e.v("vq"), _wv_mem(e, e.v("tq")))),
+            e.if_else(
+                _wv_is_addr(e, e.v("tq")),
+                e.seq(
+                    e.let("tplace", e.call_m(e.v("tq"), "addr", e.tup())),
+                    push(
+                        e,
+                        a(e, "out"),
+                        _inst(
+                            e,
+                            loc(e),
+                            "mstore",
+                            e.p("val", e.v("vq")),
+                            e.p("ty", _wv_ty(e, e.v("tq"))),
+                            e.p("addr", e.fld(e.v("tplace"), "addr")),
+                            e.p("offset", e.fld(e.v("tplace"), "offset")),
+                        ),
+                    ),
+                ),
+                push(e, a(e, "out"), _store_inst(e, loc(e), e.v("vq"), _wv_mem(e, e.v("tq")))),
+            ),
         ),
     )
     fn_impl(
@@ -1595,7 +1820,9 @@ def _val_shape_impls(e, x):
 
 
 # The named unsafe conversions (const functions `{value, to}`), exported beside the type factories.
-CONV_NAMES = ["ptr_cast", "ptr_to_int", "int_to_ptr"]
+CONV_NAMES = ["ptr_cast", "ptr_to_int", "int_to_ptr", "fnref_to_int", "int_to_fnref"]
+# The kinds of a function key (`wfkey.kind`): a module symbol, an import, a function dependency.
+KEY_SYM, KEY_IMPORT, KEY_DEP = 0, 1, 2
 
 WGFN_KINDS = [
     "import_fn",
@@ -1874,7 +2101,7 @@ def _def_render_state(e, x):
         x,
         "wregion",
         "wasm structured region",
-        e.rec(e.p("depth", int_t(e)), e.p("start", int_t(e)), e.p("valued", bool_t(e)), e.p("closed", int_t(e))),
+        e.rec(e.p("depth", int_t(e)), e.p("start", int_t(e)), e.p("results", int_t(e)), e.p("closed", int_t(e))),
     )
     def_obj(
         e,
@@ -1913,7 +2140,7 @@ def _def_render_state(e, x):
     _vmethod(e, x, "wpend", "set_active", int_t(e), e.mb.set(in_(e, "active"), e.v("arg")))
     accessor(e, x, "wregion", "depth", int_t(e))
     accessor(e, x, "wregion", "start", int_t(e))
-    accessor(e, x, "wregion", "valued", bool_t(e))
+    accessor(e, x, "wregion", "results", int_t(e))
     accessor(e, x, "wregion", "closed", int_t(e))
     _vmethod(e, x, "wregion", "set_start", int_t(e), e.mb.set(in_(e, "start"), e.v("arg")))
     _vmethod(e, x, "wregion", "set_closed", e.tup(), e.mb.set(in_(e, "closed"), e.int_of(1)))
@@ -2002,27 +2229,41 @@ def _def_render_state(e, x):
         t(e, "wpend"),
         e.seq(
             e.let("fpos", _pend_pos(e, e.v("arg"))),
-            push(
-                e,
-                in_(e, "sets"),
-                mk(
-                    e,
-                    "wblock",
-                    e.p("at", e.call_m(e.v("arg"), "at", e.tup())),
-                    e.p("name", e.cat(e.s("local.set "), e.call_m(e.v("arg"), "name", e.tup()))),
-                ),
-            ),
-            push(e, in_(e, "used"), e.call_m(e.v("arg"), "name", e.tup())),
-            e.call_m(e.v("arg"), "set_active", e.int_of(0)),
+            # The pending values above this one are set first (each set pops the top of the stack).
             e.foreach(
                 in_(e, "pn"),
-                "q",
+                "q0",
                 e.if_only(
-                    and_b(e, _pend_active(e, e.v("q")), e.mb.operator_gt(_pend_pos(e, e.v("q")), e.v("fpos"))),
-                    e.call_m(e.v("q"), "set_pos", e.mb.operator_sub(_pend_pos(e, e.v("q")), num(e, 1))),
+                    and_b(e, _pend_active(e, e.v("q0")), e.mb.operator_gt(_pend_pos(e, e.v("q0")), e.v("fpos"))),
+                    e.call_m(outer(e), "flush_one", e.v("q0")),
                 ),
             ),
-            e.mb.set(in_(e, "h"), e.mb.operator_sub(in_(e, "h"), num(e, 1))),
+            e.if_only(
+                _pend_active(e, e.v("arg")),
+                e.seq(
+                    push(
+                        e,
+                        in_(e, "sets"),
+                        mk(
+                            e,
+                            "wblock",
+                            e.p("at", e.call_m(e.v("arg"), "at", e.tup())),
+                            e.p("name", e.cat(e.s("local.set "), e.call_m(e.v("arg"), "name", e.tup()))),
+                        ),
+                    ),
+                    push(e, in_(e, "used"), e.call_m(e.v("arg"), "name", e.tup())),
+                    e.call_m(e.v("arg"), "set_active", e.int_of(0)),
+                    e.foreach(
+                        in_(e, "pn"),
+                        "q",
+                        e.if_only(
+                            and_b(e, _pend_active(e, e.v("q")), e.mb.operator_gt(_pend_pos(e, e.v("q")), e.v("fpos"))),
+                            e.call_m(e.v("q"), "set_pos", e.mb.operator_sub(_pend_pos(e, e.v("q")), num(e, 1))),
+                        ),
+                    ),
+                    e.mb.set(in_(e, "h"), e.mb.operator_sub(in_(e, "h"), num(e, 1))),
+                ),
+            ),
         ),
     )
     _vmethod(
@@ -2071,18 +2312,55 @@ def _def_render_state(e, x):
                 e.eq(e.v("nuses"), num(e, 0)),
                 e.call_m(outer(e), "line", e.rec(e.p("delta", e.int_of(-1)), e.p("text", e.s("drop")))),
             ),
+            # A deferred set: the value stays on the stack. It is the top value not already pending (a call's results
+            # are set last first, so the earlier pending ones sit above it).
             e.if_only(
                 e.eq(e.v("nuses"), num(e, 1)),
-                push(
-                    e,
-                    in_(e, "pn"),
-                    mk(
+                e.seq(
+                    count_let(e, "pk"),
+                    e.mb.labeled(
+                        "scan",
+                        e.foreach(
+                            in_(e, "pn"),
+                            "_",
+                            e.seq(
+                                count_let(e, "hit"),
+                                e.foreach(
+                                    in_(e, "pn"),
+                                    "q",
+                                    e.if_only(
+                                        and_b(
+                                            e,
+                                            _pend_active(e, e.v("q")),
+                                            e.eq(
+                                                _pend_pos(e, e.v("q")),
+                                                e.mb.operator_sub(
+                                                    e.mb.operator_sub(in_(e, "h"), num(e, 1)), e.fld(e.v("pk"), "v")
+                                                ),
+                                            ),
+                                        ),
+                                        e.incr(e.fld(e.v("hit"), "v")),
+                                    ),
+                                ),
+                                e.if_only(e.eq(e.fld(e.v("hit"), "v"), num(e, 0)), e.mb.return_label("scan")),
+                                e.incr(e.fld(e.v("pk"), "v")),
+                            ),
+                        ),
+                    ),
+                    push(
                         e,
-                        "wpend",
-                        e.p("name", e.v("arg")),
-                        e.p("pos", e.mb.operator_sub(in_(e, "h"), num(e, 1))),
-                        e.p("at", in_(e, "n")),
-                        e.p("active", e.int_of(1)),
+                        in_(e, "pn"),
+                        mk(
+                            e,
+                            "wpend",
+                            e.p("name", e.v("arg")),
+                            e.p(
+                                "pos",
+                                e.mb.operator_sub(e.mb.operator_sub(in_(e, "h"), num(e, 1)), e.fld(e.v("pk"), "v")),
+                            ),
+                            e.p("at", in_(e, "n")),
+                            e.p("active", e.int_of(1)),
+                        ),
                     ),
                 ),
             ),
@@ -2136,13 +2414,55 @@ def _def_render_state(e, x):
                     e.incr(e.fld(e.v("no"), "v")),
                 ),
             ),
+            # The active pending values in stack order (by position, which is distinct per active one), not in the
+            # order they were deferred: a call's results are deferred last first.
             e.let("act", e.list_new(lt(e, "wpend"))),
             count_let(e, "na"),
+            e.foreach(in_(e, "pn"), "q", e.if_only(_pend_active(e, e.v("q")), e.incr(e.fld(e.v("na"), "v")))),
+            e.let("last", e.rec(e.p("v", e.int_of(-1)))),
             e.foreach(
                 in_(e, "pn"),
-                "q",
-                e.if_only(
-                    _pend_active(e, e.v("q")), e.seq(push(e, e.v("act"), e.v("q")), e.incr(e.fld(e.v("na"), "v")))
+                "_",
+                e.seq(
+                    e.let("best", e.rec(e.p("v", e.int_of(-1)))),
+                    e.foreach(
+                        in_(e, "pn"),
+                        "q",
+                        e.if_only(
+                            and_b(
+                                e,
+                                _pend_active(e, e.v("q")),
+                                and_b(
+                                    e,
+                                    e.mb.operator_gt(_pend_pos(e, e.v("q")), e.fld(e.v("last"), "v")),
+                                    or_b(
+                                        e,
+                                        e.eq(e.fld(e.v("best"), "v"), e.int_of(-1)),
+                                        e.mb.operator_lt(_pend_pos(e, e.v("q")), e.fld(e.v("best"), "v")),
+                                    ),
+                                ),
+                            ),
+                            e.mb.set(e.fld(e.v("best"), "v"), _pend_pos(e, e.v("q"))),
+                        ),
+                    ),
+                    e.if_only(
+                        e.not_(e.eq(e.fld(e.v("best"), "v"), e.int_of(-1))),
+                        e.seq(
+                            e.foreach(
+                                in_(e, "pn"),
+                                "q",
+                                e.if_only(
+                                    and_b(
+                                        e,
+                                        _pend_active(e, e.v("q")),
+                                        e.eq(_pend_pos(e, e.v("q")), e.fld(e.v("best"), "v")),
+                                    ),
+                                    push(e, e.v("act"), e.v("q")),
+                                ),
+                            ),
+                            e.mb.set(e.fld(e.v("last"), "v"), e.fld(e.v("best"), "v")),
+                        ),
+                    ),
                 ),
             ),
             e.let("jj", e.rec(e.p("v", e.int_of(0)))),
@@ -2311,7 +2631,7 @@ def _def_render_state(e, x):
         x,
         "wrs",
         "open_if",
-        e.rec(e.p("text", str_(e)), e.p("valued", bool_t(e))),
+        e.rec(e.p("text", str_(e)), e.p("results", int_t(e))),
         e.seq(
             e.call_m(outer(e), "control", e.rec(e.p("delta", e.int_of(-1)), e.p("text", a(e, "text")))),
             e.incr(in_(e, "depth")),
@@ -2323,7 +2643,7 @@ def _def_render_state(e, x):
                     "wregion",
                     e.p("depth", in_(e, "depth")),
                     e.p("start", in_(e, "n")),
-                    e.p("valued", a(e, "valued")),
+                    e.p("results", a(e, "results")),
                     e.p("closed", e.int_of(0)),
                 ),
             ),
@@ -2349,7 +2669,7 @@ def _def_render_state(e, x):
                     "wregion",
                     e.p("depth", in_(e, "depth")),
                     e.p("start", in_(e, "n")),
-                    e.p("valued", e.b(False)),
+                    e.p("results", e.int_of(0)),
                     e.p("closed", e.int_of(0)),
                 ),
             ),
@@ -2377,8 +2697,28 @@ def _def_render_state(e, x):
             e.call_m(outer(e), "control", e.rec(e.p("delta", e.int_of(0)), e.p("text", e.s("end")))),
             e.let("reg", _region_of(e, in_(e, "depth"))),
             e.call_m(e.v("reg"), "set_closed", e.tup()),
-            e.mb.set(in_(e, "h"), e.if_else(e.call_m(e.v("reg"), "valued", e.tup()), e.int_of(1), e.int_of(0))),
+            # The block's results (the flat values of its type) are on the stack after `end`.
+            e.mb.set(in_(e, "h"), e.call_m(e.v("reg"), "results", e.tup())),
             e.mb.set(in_(e, "depth"), e.mb.operator_sub(in_(e, "depth"), num(e, 1))),
+        ),
+    )
+    _vmethod(
+        e,
+        x,
+        "wrs",
+        "call_indirect",
+        e.rec(e.p("sig", str_(e)), e.p("nargs", int_t(e)), e.p("res", e.list_type(str_(e)))),
+        e.seq(
+            e.call_m(
+                outer(e),
+                "line",
+                e.rec(
+                    e.p("delta", e.mb.operator_sub(e.int_of(0), a(e, "nargs"))),
+                    e.p("text", e.cat(e.s("call_indirect"), a(e, "sig"))),
+                ),
+            ),
+            e.foreach(a(e, "res"), "_", e.incr(in_(e, "h"))),
+            _reversed_names(e, a(e, "res"), "rname", e.call_m(outer(e), "set_local", e.v("rname"))),
         ),
     )
     _vmethod(
@@ -2486,6 +2826,680 @@ def _count_name(e, name):
     return e.call_m(e.call_m(e.v("r"), "use_of", name), "inc", e.tup())
 
 
+def _fn_call_impl(e, x, obj, params, ret, make_inst, loaded):
+    """The `function` aspect of a callable wasm type: the call's argument (one element, or a tuple of them) converted
+    to `params` and pushed, then `make_inst(res)` (the call instruction with the result locals `res`, over the
+    callee `fnv` and the arguments `args`), yielding a value of `ret`. `loaded`: the callee is a runtime value (a
+    reference), loaded as an operand of this type; else it is a symbol."""
+    if loaded:
+        callee = [
+            e.let(
+                "fcv",
+                unwrap_cve_m(e, try_er(e, _operand(e, xx(e), loc(e), _xmod(e), outer(e), a(e, "function")), cve_t(e))),
+            ),
+            _append_code(e, e.v("out"), cve_code(e, e.v("fcv"))),
+            e.let("fnv", _wval_of(e, e.v("fcv"))),
+        ]
+    else:
+        callee = [
+            _append_code(e, e.v("out"), cve_code(e, a(e, "function"))),
+            e.let("fnv", _wval_of(e, a(e, "function"))),
+        ]
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            asp_iface(e, "function"),
+            e.p(
+                "call",
+                body(
+                    e,
+                    e.let("out", _insts_new(e)),
+                    *callee,
+                    e.let("args", e.list_new(lt(e, "wval"))),
+                    e.let("pmap", e.map_new(str_(e), ty(e))),
+                    e.let("pn", e.rec(e.p("v", e.int_of(0)))),
+                    e.foreach(
+                        params,
+                        "p",
+                        e.seq(
+                            e.call_m(e.v("pmap"), "put", e.tup(to_str(e, e.fld(e.v("pn"), "v")), e.v("p"))),
+                            e.incr(e.fld(e.v("pn"), "v")),
+                        ),
+                    ),
+                    e.let("elems", e.list_new(e.mb.types_cve())),
+                    e.let("argv", a(e, "argument")),
+                    e.let("single", e.eq(e.fld(e.v("pn"), "v"), num(e, 1))),
+                    e.if_only(e.v("single"), push(e, e.v("elems"), e.v("argv"))),
+                    e.if_only(
+                        e.not_(e.v("single")),
+                        e.seq(
+                            e.if_only(
+                                e.not_(cve_has(e, e.v("argv"))),
+                                ret_m(e, err_cve(e, loc(e), "call argument has no value")),
+                            ),
+                            e.let("tk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "tuple"))),
+                            e.if_only(
+                                e.not_(e.fld(e.v("tk"), "is_some")),
+                                ret_m(e, err_cve(e, loc(e), "call arguments must be a tuple")),
+                            ),
+                            e.foreach(
+                                bim(
+                                    e,
+                                    asp_iface(e, "tuple"),
+                                    "take_elements",
+                                    e.fld(e.v("tk"), "value"),
+                                    e.rec(
+                                        e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))
+                                    ),
+                                ),
+                                "er",
+                                e.seq(e.let("ec0", unwrap_cve_m(e, e.v("er"))), push(e, e.v("elems"), e.v("ec0"))),
+                            ),
+                        ),
+                    ),
+                    e.let("st", e.rec(e.p("i", e.int_of(0)))),
+                    e.foreach(
+                        e.v("elems"),
+                        "ec",
+                        e.seq(
+                            e.if_only(
+                                e.mb.operator_ge(e.fld(e.v("st"), "i"), e.fld(e.v("pn"), "v")),
+                                ret_m(e, err_cve(e, loc(e), "too many call arguments")),
+                            ),
+                            e.let(
+                                "v",
+                                unwrap_cve_m(
+                                    e,
+                                    try_er(
+                                        e,
+                                        _operand(
+                                            e,
+                                            xx(e),
+                                            loc(e),
+                                            _xmod(e),
+                                            e.call_m(e.v("pmap"), "get", to_str(e, e.fld(e.v("st"), "i"))),
+                                            e.v("ec"),
+                                        ),
+                                        cve_t(e),
+                                    ),
+                                ),
+                            ),
+                            _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
+                            push(e, e.v("args"), _wval_of(e, e.v("v"))),
+                            e.incr(e.fld(e.v("st"), "i")),
+                        ),
+                    ),
+                    e.if_only(
+                        e.mb.operator_lt(e.fld(e.v("st"), "i"), e.fld(e.v("pn"), "v")),
+                        ret_m(e, err_cve(e, loc(e), "too few call arguments")),
+                    ),
+                    e.if_only(
+                        has(e, xx(e), ret, "wvoid"),
+                        e.seq(
+                            push(e, e.v("out"), make_inst(e.list_new(str_(e)))),
+                            ret_m(e, ok_cve(e, cv_no(e, _code_of(e, e.v("out"))))),
+                        ),
+                    ),
+                    e.let("rv", _fresh_val(e, _xmod(e), ret)),
+                    push(e, e.v("out"), make_inst(_names_of(e, e.v("rv")))),
+                    e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), e.v("rv")))),
+                ),
+            ),
+            e.p("exception_type", e.option_type_lowered_none()),
+        )
+    )
+
+
+def _fnref_type(e, x):
+    """`wt_fnref{fn}`: a reference to a function of type `fn`, an i32 (its index in the module's table) that binds and
+    stores like one and is called with `call_indirect`. Made by `wasm.fn_ref`; converts to and from an i32 only
+    through `fnref_to_int` and `int_to_fnref`."""
+    self_type(
+        e,
+        x,
+        "wt_fnref",
+        e.cat(e.s("fnref("), bim0(e, ty(e), "desc", in_(e, "fn")), e.s(")")),
+        e.aspect_dispatch(
+            lv(e, "wtype_id"),
+            asp_id(e, "initial_bind"),
+            lv(e, "wfnref_id"),
+            lv(e, "size_id"),
+            lv(e, "align_id"),
+            lv(e, "eq_id"),
+            op_id(e, "eq"),
+            op_id(e, "ne"),
+            asp_id(e, "bind"),
+            asp_id(e, "set"),
+            asp_id(e, "function"),
+        ),
+        body(e, e.ret(is_equal(e, xx(e), outer(e), src_type(e)))),
+        body(e, e.ret(ok_cve(e, a(e, "cv")))),
+        no_cast_to(e),
+        cast_to_panic(e),
+        body(
+            e,
+            e.ret(
+                and_b(
+                    e,
+                    has(e, xx(e), a(e, "other"), "wfnref"),
+                    is_equal(e, xx(e), in_(e, "fn"), acc(e, xx(e), a(e, "other"), "wfnref", "fn")),
+                )
+            ),
+        ),
+    )
+    x.append(e.impl_interface(e.v("wt_fnref"), t(e, "wtype"), e.p("ir", e.s("i32")), e.p("ssa", outer(e))))
+    x.append(e.impl_interface(e.v("wt_fnref"), t(e, "wfnref"), e.p("fn", in_(e, "fn"))))
+    op(e, x, "wt_fnref", "eq", try_er(e, _cmp_body(e, e.s("eq")), cve_t(e)))
+    op(e, x, "wt_fnref", "ne", try_er(e, _cmp_body(e, e.s("ne")), cve_t(e)))
+    _bind_impl(e, x, "wt_fnref")
+    _set_impl(e, x, "wt_fnref")
+    _fn_call_impl(
+        e,
+        x,
+        "wt_fnref",
+        im0(e, "wfn", "params", asp(e, xx(e), in_(e, "fn"), "wfn")),
+        im0(e, "wfn", "ret", asp(e, xx(e), in_(e, "fn"), "wfn")),
+        lambda res: _inst(
+            e,
+            loc(e),
+            "call_indirect",
+            e.p("res", res),
+            e.p("sig", e.call_m(_xmod(e), "sig_ir", in_(e, "fn"))),
+            e.p("index", e.v("fnv")),
+            e.p("args", e.v("args")),
+        ),
+        True,
+    )
+
+
+def _fn_index_fn(e, x):
+    """Function references by identity. `h_fn_key{xx, loc, cv}` is the key of the function `cv` holds: a function value
+    (`func_fn`/`export_fn`), an import or a function dependency (its callable type; `h_dep_key{xx, dep}` keys the type
+    itself, for host code holding one), as `wfkey{kind, sym, fn, dep, module, name}` (`KEY_SYM` a symbol, `KEY_IMPORT`
+    an import, `KEY_DEP` a dependency; what the kind needs filled, the rest empty). `h_key_index{xx, loc, key}` is the
+    key's index in the current module's table, registered when new: an import is declared in the module, a dependency
+    defined in it (`h_funcdep_define`, as a call defines it). `h_fn_index{xx, loc, cv}` is both: `{index, fn}`. All
+    throw their errors."""
+    def_obj(
+        e,
+        x,
+        "wfkey",
+        "wasm function key",
+        e.rec(
+            e.p("kind", int_t(e)),
+            e.p("sym", str_(e)),
+            e.p("fn", ty(e)),
+            e.p("dep", e.call(e.mb.types_option(), ty(e))),
+            e.p("module", str_(e)),
+            e.p("name", str_(e)),
+        ),
+    )
+    for f, ft in [
+        ("kind", int_t(e)),
+        ("sym", str_(e)),
+        ("fn", ty(e)),
+        ("dep", e.call(e.mb.types_option(), ty(e))),
+        ("module", str_(e)),
+        ("name", str_(e)),
+    ]:
+        accessor(e, x, "wfkey", f, ft)
+    _fn_def(e, x, "h_fn_key", e.rec(e.p("xx", xx_t(e)), e.p("loc", loc_t(e)), e.p("cv", cve_t(e))), t(e, "wfkey"))
+    fn_throws(e, "h_fn_key", errs_t(e))
+    _fn_def(e, x, "h_key_index", e.rec(e.p("xx", xx_t(e)), e.p("loc", loc_t(e)), e.p("key", t(e, "wfkey"))), int_t(e))
+    fn_throws(e, "h_key_index", errs_t(e))
+    rec_t = e.rec(e.p("index", int_t(e)), e.p("fn", ty(e)))
+    _fn_def(e, x, "h_fn_index", e.rec(e.p("xx", xx_t(e)), e.p("loc", loc_t(e)), e.p("cv", cve_t(e))), rec_t)
+    fn_throws(e, "h_fn_index", errs_t(e))
+
+    def key(kind, sym, fnt, dep, module, name):
+        return ret_m(
+            e,
+            mk(
+                e,
+                "wfkey",
+                e.p("kind", e.int_of(kind)),
+                e.p("sym", sym),
+                e.p("fn", fnt),
+                e.p("dep", dep),
+                e.p("module", module),
+                e.p("name", name),
+            ),
+        )
+
+    st = e.v("st")
+    # `h_dep_key{xx, dep}`: the key of a function dependency held as a type (host code: the fnref segments of
+    # dependency types, closure.of).
+    _fn_def(e, x, "h_dep_key", e.rec(e.p("xx", xx_t(e)), e.p("dep", ty(e))), t(e, "wfkey"))
+    fn_impl(
+        e,
+        x,
+        "h_dep_key",
+        body(
+            e,
+            key(
+                KEY_DEP,
+                e.s(""),
+                acc(e, xx(e), a(e, "dep"), "wfdep_m", "ty"),
+                e.opt_some(ty(e), a(e, "dep")),
+                e.s(""),
+                e.s(""),
+            ),
+        ),
+    )
+    fn_impl(
+        e,
+        x,
+        "h_fn_key",
+        body(
+            e,
+            e.let("cv", a(e, "cv")),
+            e.if_only(e.not_(cve_has(e, e.v("cv"))), throw_err(e, loc(e), "wasm: function reference of no value")),
+            e.let("st", cve_type(e, e.v("cv"))),
+            e.if_only(
+                has(e, xx(e), st, "wgtype_m"),
+                e.if_only(
+                    has(e, xx(e), acc(e, xx(e), st, "wgtype_m", "base"), "wfn"),
+                    key(
+                        KEY_SYM,
+                        hf(e, "h_gref", e.v("cv")),
+                        acc(e, xx(e), st, "wgtype_m", "base"),
+                        e.opt_none(ty(e)),
+                        e.s(""),
+                        e.s(""),
+                    ),
+                ),
+            ),
+            e.if_only(
+                has(e, xx(e), st, "wimport_m"),
+                key(
+                    KEY_IMPORT,
+                    hf(e, "h_gref", e.v("cv")),
+                    acc(e, xx(e), st, "wimport_m", "base"),
+                    e.opt_none(ty(e)),
+                    acc(e, xx(e), st, "wimport_m", "module"),
+                    acc(e, xx(e), st, "wimport_m", "name"),
+                ),
+            ),
+            # A function dependency is a callable type, given as that type (the value holds it).
+            e.let("tk", lookup(e, xx(e), st, asp_iface(e, "type"))),
+            e.let(
+                "dt",
+                e.if_else(
+                    e.fld(e.v("tk"), "is_some"),
+                    bim(e, asp_iface(e, "type"), "type", e.fld(e.v("tk"), "value"), cve_value(e, e.v("cv"))),
+                    e.if_else(
+                        is_equal(e, xx(e), st, e.mb.eval_type()),
+                        e.call(e.mb.must_reinterpret(), e.tup(cve_value(e, e.v("cv")), e.mb.eval_type())),
+                        st,
+                    ),
+                ),
+            ),
+            e.if_only(
+                has(e, xx(e), e.v("dt"), "wfdep_m"),
+                ret_m(e, hf_rec(e, "h_dep_key", e.p("xx", xx(e)), e.p("dep", e.v("dt")))),
+            ),
+            throw_err(e, loc(e), e.cat(e.s("wasm: not a function, import or function dependency: "), ty_desc(e, st))),
+        ),
+    )
+    k = e.v("key")
+
+    def kf(name):
+        return e.call_m(k, name, e.tup())
+
+    dept = e.fld(kf("dep"), "value")
+    import_dep = mk(
+        e,
+        "wdep",
+        e.p(
+            "k",
+            e.call(
+                e.lower_v("wd_import"),
+                e.rec(e.p("module", kf("module")), e.p("name", kf("name")), e.p("ty", kf("fn"))),
+            ),
+        ),
+    )
+    import_meta = mk(e, "wmeta", e.p("k", e.call(e.lower_v("wm_dep"), e.rec(e.p("dep", import_dep)))))
+    fn_impl(
+        e,
+        x,
+        "h_key_index",
+        body(
+            e,
+            e.let("key", a(e, "key")),
+            e.let("mod", _xmod_must(e)),
+            e.if_only(e.eq(kf("kind"), num(e, KEY_IMPORT)), e.call_m(e.v("mod"), "meta", import_meta)),
+            e.let(
+                "sym",
+                e.if_else(
+                    e.eq(kf("kind"), num(e, KEY_DEP)),
+                    hf_rec(
+                        e,
+                        "h_funcdep_define",
+                        e.p("xx", xx(e)),
+                        e.p("loc", loc(e)),
+                        *[e.p(f, acc(e, xx(e), dept, "wfdep_m", f)) for f in ["id", "name", "params", "ty", "body"]],
+                    ),
+                    e.if_else(
+                        or_b(e, e.eq(kf("kind"), num(e, KEY_SYM)), e.eq(kf("kind"), num(e, KEY_IMPORT))),
+                        kf("sym"),
+                        e.mb.panic(e.s("wasm: function key of an unknown kind")),
+                    ),
+                ),
+            ),
+            e.ret(e.call_m(e.v("mod"), "table_index", e.v("sym"))),
+        ),
+    )
+    fn_impl(
+        e,
+        x,
+        "h_fn_index",
+        body(
+            e,
+            e.let("key", hf_rec(e, "h_fn_key", e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("cv", a(e, "cv")))),
+            e.ret(
+                e.rec(
+                    e.p(
+                        "index",
+                        hf_rec(e, "h_key_index", e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("key", e.v("key"))),
+                    ),
+                    e.p("fn", kf("fn")),
+                )
+            ),
+        ),
+    )
+    return rec_t
+
+
+def _fn_ref_fn(e, x):
+    """`wasm.fn_ref(f)`: the reference to the function `f` (`h_fn_key`'s cases), an `fnref` constant."""
+    rec_t = _fn_index_fn(e, x)
+    tm.const_fn(
+        e,
+        x,
+        "fn_ref_b",
+        "wasm.fn_ref",
+        body(
+            e,
+            e.let("argv", a(e, "argument")),
+            e.let(
+                "r",
+                unwrap_cve_m(
+                    e,
+                    try_er(
+                        e,
+                        hf_rec(e, "h_fn_index", e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("cv", e.v("argv"))),
+                        rec_t,
+                    ),
+                ),
+            ),
+            e.let("fr", mk(e, "wt_fnref", e.p("fn", e.fld(e.v("r"), "fn")))),
+            e.ret(
+                ok_cve(
+                    e,
+                    cv_of(e, cve_code(e, e.v("argv")), _wval_konst(e, e.v("fr"), to_str(e, e.fld(e.v("r"), "index")))),
+                )
+            ),
+        ),
+    )
+    # `wasm.fnref_dep({name, fns})`: a data dependency holding the references of the functions `fns` (a tuple) as
+    # i32s in order, resolved in each module that uses it; its function value yields `global(ptr(i32))`.
+    _fn_def(
+        e,
+        x,
+        "h_fnrefdep_call",
+        e.rec(
+            e.p("xx", xx_t(e)),
+            e.p("loc", loc_t(e)),
+            e.p("id", tm.unique_t(e)),
+            e.p("name", str_(e)),
+            e.p("keys", e.list_type(t(e, "wfkey"))),
+        ),
+        cve_t(e),
+    )
+    fn_throws(e, "h_fnrefdep_call", errs_t(e))
+    fn_impl(
+        e,
+        x,
+        "h_fnrefdep_call",
+        body(
+            e,
+            e.let("mod", _xmod_must(e)),
+            e.let("bytes", e.list_new(int_t(e))),
+            e.foreach(
+                a(e, "keys"),
+                "k0",
+                e.seq(
+                    e.let("ix", hf_rec(e, "h_key_index", e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("key", e.v("k0")))),
+                    *[
+                        push(
+                            e,
+                            e.v("bytes"),
+                            e.mb.operator_and(e.mb.operator_shr(e.v("ix"), e.int_of(8 * k)), e.int_of(255)),
+                        )
+                        for k in range(4)
+                    ],
+                ),
+            ),
+            e.let(
+                "ref",
+                e.call_m(
+                    e.v("mod"),
+                    "data_once",
+                    e.rec(e.p("id", a(e, "id")), e.p("name", a(e, "name")), e.p("bytes", e.v("bytes"))),
+                ),
+            ),
+            e.ret(
+                cv_of(
+                    e,
+                    code_none(e, loc(e)),
+                    e.call(
+                        e.eval_builtin("value_object_const"),
+                        e.rec(
+                            e.p("type", _wgfn_global_t(e, mk(e, "wt_ptr", e.p("pointee", _int_ty(e, "i32"))))),
+                            e.p(
+                                "data",
+                                e.call(e.mb.must_reinterpret(), e.tup(e.v("ref"), e.mb.builtin("types", "object"))),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+        ),
+    )
+    tm.dep_type(
+        e,
+        x,
+        "wrdep",
+        "wasm function reference data dependency",
+        [("name", str_(e)), ("keys", e.list_type(t(e, "wfkey")))],
+        "h_fnrefdep_call",
+        False,
+        "webinding",
+    )
+    # For libraries' host code: the segment from keys made with `fn_key` (both exported).
+    _fn_def(e, x, "c_fnref_dep_keys", e.rec(e.p("name", str_(e)), e.p("keys", e.list_type(t(e, "wfkey")))), ty(e))
+    fn_impl(
+        e,
+        x,
+        "c_fnref_dep_keys",
+        body(
+            e,
+            e.ret(
+                e.mb.as_(
+                    mk(
+                        e,
+                        "wrdep",
+                        e.p("id", tm.fresh_unique(e)),
+                        e.p("name", a(e, "name")),
+                        e.p("keys", a(e, "keys")),
+                    ),
+                    ty(e),
+                )
+            ),
+        ),
+    )
+    # A segment of references to dependencies given as types (`fnref_dep_types`), keyed when a module indexes it
+    # (that call's context resolves the keys): for code with no expression context, as a const function's staged
+    # result.
+    _fn_def(
+        e,
+        x,
+        "h_fnreftdep_call",
+        e.rec(
+            e.p("xx", xx_t(e)),
+            e.p("loc", loc_t(e)),
+            e.p("id", tm.unique_t(e)),
+            e.p("name", str_(e)),
+            e.p("deps", e.list_type(ty(e))),
+        ),
+        cve_t(e),
+    )
+    fn_throws(e, "h_fnreftdep_call", errs_t(e))
+    fn_impl(
+        e,
+        x,
+        "h_fnreftdep_call",
+        body(
+            e,
+            e.let("keys", e.list_new(lt(e, "wfkey"))),
+            e.foreach(
+                a(e, "deps"),
+                "d0",
+                push(e, e.v("keys"), hf_rec(e, "h_dep_key", e.p("xx", xx(e)), e.p("dep", e.v("d0")))),
+            ),
+            e.ret(
+                hf_rec(
+                    e,
+                    "h_fnrefdep_call",
+                    e.p("xx", xx(e)),
+                    e.p("loc", loc(e)),
+                    e.p("id", a(e, "id")),
+                    e.p("name", a(e, "name")),
+                    e.p("keys", e.v("keys")),
+                )
+            ),
+        ),
+    )
+    tm.dep_type(
+        e,
+        x,
+        "wrtdep",
+        "wasm function reference data dependency",
+        [("name", str_(e)), ("deps", e.list_type(ty(e)))],
+        "h_fnreftdep_call",
+        False,
+        "webinding",
+    )
+    _fn_def(e, x, "c_fnref_dep_types", e.rec(e.p("name", str_(e)), e.p("deps", e.list_type(ty(e)))), ty(e))
+    fn_impl(
+        e,
+        x,
+        "c_fnref_dep_types",
+        body(
+            e,
+            e.ret(
+                e.mb.as_(
+                    mk(
+                        e, "wrtdep", e.p("id", tm.fresh_unique(e)), e.p("name", a(e, "name")), e.p("deps", a(e, "deps"))
+                    ),
+                    ty(e),
+                )
+            ),
+        ),
+    )
+    tm.const_fn(
+        e,
+        x,
+        "fnref_dep_b",
+        "wasm.fnref_dep",
+        body(
+            e,
+            e.let("argv", a(e, "argument")),
+            e.if_only(
+                e.not_(cve_has(e, e.v("argv"))), ret_m(e, err_cve(e, loc(e), "wasm.fnref_dep: argument has no value"))
+            ),
+            e.let("rk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "record"))),
+            e.if_only(
+                e.not_(e.fld(e.v("rk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), "wasm.fnref_dep: argument must be {name, fns}")),
+            ),
+            e.let(
+                "fields",
+                bim(
+                    e,
+                    asp_iface(e, "record"),
+                    "take_fields",
+                    e.fld(e.v("rk"), "value"),
+                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))),
+                ),
+            ),
+            e.let("namecv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("name")))),
+            e.let("nsk", lookup(e, xx(e), cve_type(e, e.v("namecv")), e.mb.eval_aspect_string_const())),
+            e.if_only(
+                e.not_(e.fld(e.v("nsk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), "wasm.fnref_dep: name must be a constant string")),
+            ),
+            e.let(
+                "name",
+                bim(e, e.mb.eval_aspect_string_const(), "get", e.fld(e.v("nsk"), "value"), cve_value(e, e.v("namecv"))),
+            ),
+            e.let("fnscv", unwrap_cve_m(e, e.call_m(e.v("fields"), "get", e.s("fns")))),
+            e.let("tk", lookup(e, xx(e), cve_type(e, e.v("fnscv")), asp_iface(e, "tuple"))),
+            e.if_only(
+                e.not_(e.fld(e.v("tk"), "is_some")),
+                ret_m(e, err_cve(e, loc(e), "wasm.fnref_dep: fns must be a tuple of functions")),
+            ),
+            e.let("keys", e.list_new(lt(e, "wfkey"))),
+            e.foreach(
+                bim(
+                    e,
+                    asp_iface(e, "tuple"),
+                    "take_elements",
+                    e.fld(e.v("tk"), "value"),
+                    e.rec(e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("fnscv")))),
+                ),
+                "er",
+                e.seq(
+                    e.let("fcv", unwrap_cve_m(e, e.v("er"))),
+                    push(
+                        e,
+                        e.v("keys"),
+                        unwrap_cve_m(
+                            e,
+                            try_er(
+                                e,
+                                hf_rec(e, "h_fn_key", e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("cv", e.v("fcv"))),
+                                lt(e, "wfkey"),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            e.ret(
+                const_eval_in(
+                    e,
+                    xx(e),
+                    loc(e),
+                    e.stage(
+                        # Two stages below the module level: the setup's `wrdep` is lowered twice.
+                        e.mb.as_(
+                            e.call(
+                                e.lower(e.lower(e.fld(e.v("wrdep"), "new"))),
+                                e.rec(
+                                    e.p("id", tm.fresh_unique(e)),
+                                    e.p("name", e.lower(e.v("name"))),
+                                    e.p("keys", e.lower(e.v("keys"))),
+                                ),
+                            ),
+                            ty(e),
+                        )
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 def bind_types(e, out):
     for prim in ["i8", "i32", "i64", "u8", "u32", "u64", "f32", "f64", "void"]:
         out.append(e.let("t_" + prim, e.fld(e.v("wasm"), prim)))
@@ -2505,7 +3519,7 @@ def module(e):
     x.append(e.let("meta", e.import_local("meta", meta.FILE)))
     x.append(e.let("values", e.import_local("values", values.FILE)))
     x.append(e.let("srcmap", e.import_local("srcmap", srcmap.FILE)))
-    for vid in ["size_id", "hash_id", "eq_id"]:
+    for vid in ["size_id", "align_id", "hash_id", "eq_id", "zero_id"]:
         x.append(e.let(vid, e.fld(e.v("values"), vid)))
     x.append(e.let("d", e.define()))
     x.append(e.option_type_let())
@@ -2531,6 +3545,7 @@ def module(e):
     def_iface(e, x, "wgtype_m", e.p("base", ty(e)))
     def_iface(e, x, "wgfn_m", e.p("kind", int_t(e)))
     def_iface(e, x, "wfn", e.p("params", e.list_type(ty(e))), e.p("ret", ty(e)))
+    def_iface(e, x, "wfnref", e.p("fn", ty(e)))
     def_iface(e, x, "wtuple", e.p("elems", e.list_type(ty(e))))
 
     x.append(e.let("wsrc_u", e.call_m0(e.v("d"), "union")))
@@ -2855,6 +3870,27 @@ def module(e):
     )
     x.append(
         e.let(
+            "wi_call_indirect",
+            e.call_m(
+                e.v("winst_u"),
+                "variant",
+                e.rec(
+                    e.p("tag", e.s("call_indirect")),
+                    e.p(
+                        "type_ref",
+                        e.rec(
+                            e.p("res", e.list_type(str_(e))),
+                            e.p("sig", str_(e)),
+                            e.p("index", _wval_t(e)),
+                            e.p("args", e.list_type(_wval_t(e))),
+                        ),
+                    ),
+                ),
+            ),
+        )
+    )
+    x.append(
+        e.let(
             "wi_ret",
             e.call_m(
                 e.v("winst_u"),
@@ -2898,6 +3934,8 @@ def module(e):
             e.p("sip_key_id", tm.unique_t(e)),
             e.p("sip_fn_id", tm.unique_t(e)),
             e.p("exports", e.list_type(str_(e))),
+            # The function table: the symbols registered by `fn_ref`, a symbol's index being its position.
+            e.p("table", e.list_type(str_(e))),
             e.p("labels", e.list_type(t(e, "wlabel"))),
             e.p("locals", e.list_type(t(e, "wlocal"))),
             # The frame table behind the `;;@ frames.json:<frame + 1>:0` annotations of the rendered text.
@@ -2957,6 +3995,7 @@ def module(e):
     def_obj(e, x, "wt_float", "wasm float type", e.rec(e.p("bits", int_t(e))))
     def_obj(e, x, "wt_ptr", "wasm pointer type", e.rec(e.p("pointee", ty(e))))
     def_obj(e, x, "wt_fn", "wasm function type", e.rec(e.p("params", e.list_type(ty(e))), e.p("ret", ty(e))))
+    def_obj(e, x, "wt_fnref", "wasm function reference type", e.rec(e.p("fn", ty(e))))
     def_obj(e, x, "wt_void", "wasm void type", e.tup())
     def_obj(e, x, "wt_tuple", "wasm tuple type", e.rec(e.p("elems", e.list_type(ty(e)))))
     def_obj(e, x, "wt_slot", "wasm slot type", e.rec(e.p("base", ty(e)), e.p("slot", _wval_t(e))))
@@ -3005,6 +4044,7 @@ def module(e):
     )
     fn_throws(e, "h_ssa", errs_t(e))
     _fn_def(e, x, "h_mat", e.rec(e.p("loc", loc_t(e)), e.p("mod", _wmod_t(e)), e.p("cv", cve_t(e))), cve_t(e))
+    _fn_def(e, x, "h_ssa_type", e.rec(e.p("xx", xx_t(e)), e.p("ty", ty(e))), ty(e))
     _fn_def(
         e,
         x,
@@ -3092,6 +4132,63 @@ def module(e):
     )
     fn_throws(e, "h_store_new", errs_t(e))
     _fn_def(e, x, "h_fresh_val", e.rec(e.p("mod", _wmod_t(e)), e.p("ty", ty(e))), _wval_t(e))
+    _fn_def(
+        e,
+        x,
+        "h_mem_val",
+        e.rec(e.p("mod", _wmod_t(e)), e.p("ty", ty(e)), e.p("addr", str_(e)), e.p("offset", int_t(e))),
+        _wval_t(e),
+    )
+    fn_impl(
+        e,
+        x,
+        "h_mem_val",
+        body(
+            e,
+            e.ret(
+                e.if_else(
+                    has(e, e.call_m(a(e, "mod"), "xx", e.tup()), a(e, "ty"), "wtuple"),
+                    e.seq(
+                        e.let("parts", e.list_new(lt(e, "wval"))),
+                        e.let("off", e.rec(e.p("v", a(e, "offset")))),
+                        e.foreach(
+                            acc(e, e.call_m(a(e, "mod"), "xx", e.tup()), a(e, "ty"), "wtuple", "elems"),
+                            "et",
+                            e.seq(
+                                e.mb.set(
+                                    e.fld(e.v("off"), "v"),
+                                    _round_up(e, e.fld(e.v("off"), "v"), e.call_m(a(e, "mod"), "align", e.v("et"))),
+                                ),
+                                push(
+                                    e,
+                                    e.v("parts"),
+                                    _mem_val(e, a(e, "mod"), e.v("et"), a(e, "addr"), e.fld(e.v("off"), "v")),
+                                ),
+                                e.mb.set(
+                                    e.fld(e.v("off"), "v"),
+                                    e.mb.operator_add(
+                                        e.fld(e.v("off"), "v"), e.call_m(a(e, "mod"), "width", e.v("et"))
+                                    ),
+                                ),
+                            ),
+                        ),
+                        e.ret(_wval_multi(e, a(e, "ty"), e.v("parts"))),
+                    ),
+                    mk(
+                        e,
+                        "wval",
+                        e.p("ty", a(e, "ty")),
+                        e.p(
+                            "source",
+                            e.call(
+                                e.lower_v("ws_mem"), e.rec(e.p("addr", a(e, "addr")), e.p("offset", a(e, "offset")))
+                            ),
+                        ),
+                    ),
+                )
+            ),
+        ),
+    )
     _fn_def(e, x, "h_slot_val", e.rec(e.p("mod", _wmod_t(e)), e.p("ty", ty(e))), _wval_t(e))
     _fn_def(e, x, "h_flat_types", e.rec(e.p("xx", xx_t(e)), e.p("ty", ty(e))), e.list_type(ty(e)))
     _fn_def(e, x, "h_names", _wval_t(e), e.list_type(str_(e)))
@@ -3250,8 +4347,39 @@ def module(e):
             e.let("lk", lookup(e, xx(e), cve_type(e, a(e, "cv")), lt(e, "wtype"))),
             e.if_only(e.not_(e.fld(e.v("lk"), "is_some")), throw_err(e, loc(e), "not a wasm value")),
             e.let("st", im0(e, "wtype", "ssa", e.fld(e.v("lk"), "value"))),
-            e.let("c", unwrap_cve_t(e, cast_value(e, xx(e), loc(e), e.v("st"), a(e, "cv")))),
-            e.ret(hf_rec(e, "h_mat", e.p("loc", loc(e)), e.p("mod", a(e, "mod")), e.p("cv", e.v("c")))),
+            # The value viewed as its ssa type: the target's own view, not a conversion (an owned value refuses to be
+            # cast to its pointer, and keeps its ownership here: it comes back typed as itself).
+            e.let("c", retag_values(e, a(e, "cv"), e.v("st"))),
+            # The materialized value keeps the value's own type (a handle over the ssa type comes back a handle),
+            # less the slot wrappers of the bindings it was read through.
+            e.let("mv", hf_rec(e, "h_mat", e.p("loc", loc(e)), e.p("mod", a(e, "mod")), e.p("cv", e.v("c")))),
+            e.ret(
+                retag_values(
+                    e, e.v("mv"), hf_rec(e, "h_ssa_type", e.p("xx", xx(e)), e.p("ty", cve_type(e, a(e, "cv"))))
+                )
+            ),
+        ),
+    )
+    fn_impl(
+        e,
+        x,
+        "h_ssa_type",
+        body(
+            e,
+            # The type an ssa value of `ty` keeps: `ty` without the parameter slots it was read through.
+            e.if_only(
+                has(e, a(e, "xx"), a(e, "ty"), "wslot"),
+                ret_m(
+                    e,
+                    hf_rec(
+                        e,
+                        "h_ssa_type",
+                        e.p("xx", a(e, "xx")),
+                        e.p("ty", acc(e, a(e, "xx"), a(e, "ty"), "wslot", "base")),
+                    ),
+                ),
+            ),
+            e.ret(a(e, "ty")),
         ),
     )
     fn_impl(
@@ -3619,35 +4747,30 @@ def module(e):
     fn_impl(e, x, "c_tuple", body(e, e.ret(mk(e, "wt_tuple", e.p("elems", e.v("arg"))))))
     _fn_def(e, x, "c_fn", e.rec(e.p("params", e.list_type(ty(e))), e.p("ret", ty(e))), ty(e))
     fn_impl(e, x, "c_fn", body(e, e.ret(mk(e, "wt_fn", e.p("params", a(e, "params")), e.p("ret", a(e, "ret"))))))
+    _fn_def(e, x, "c_fnref", ty(e), ty(e))
+    fn_impl(e, x, "c_fnref", body(e, e.ret(mk(e, "wt_fnref", e.p("fn", e.v("arg"))))))
     # Dependencies: a function or a zeroed block that a module gets only when code uses it. `func_dep` and
     # `alloc_dep` make callable const functions; a call defines the item in the current module on first use (by
     # name), then calls the function or yields the block's pointer. The definition travels in the const function.
-    _fn_def(
-        e,
-        x,
-        "h_funcdep_call",
-        e.rec(
-            e.p("xx", xx_t(e)),
-            e.p("loc", loc_t(e)),
-            e.p("id", tm.unique_t(e)),
-            e.p("name", str_(e)),
-            e.p("params", e.list_type(str_(e))),
-            e.p("ty", ty(e)),
-            e.p("body", e.mb.types_expr()),
-            e.p("argument", cve_t(e)),
-        ),
-        cve_t(e),
-    )
-    fn_throws(e, "h_funcdep_call", errs_t(e))
+    # `h_funcdep_define{xx, loc, id, name, params, ty, body}`: the dependency's function defined once in the current
+    # module (by its identity), yielding its symbol: what a call and a table reference share.
+    dep_fields = [
+        e.p("id", tm.unique_t(e)),
+        e.p("name", str_(e)),
+        e.p("params", e.list_type(str_(e))),
+        e.p("ty", ty(e)),
+        e.p("body", e.mb.types_expr()),
+    ]
+    _fn_def(e, x, "h_funcdep_define", e.rec(e.p("xx", xx_t(e)), e.p("loc", loc_t(e)), *dep_fields), str_(e))
+    fn_throws(e, "h_funcdep_define", errs_t(e))
     fn_impl(
         e,
         x,
-        "h_funcdep_call",
+        "h_funcdep_define",
         body(
             e,
             e.let("mod", _xmod_must(e)),
-            e.let(
-                "fref",
+            e.ret(
                 tm.def_once(
                     e,
                     e.v("mod"),
@@ -3663,6 +4786,32 @@ def module(e):
                             e.p("public", e.b(False)),
                         ),
                     ),
+                )
+            ),
+        ),
+    )
+    _fn_def(
+        e,
+        x,
+        "h_funcdep_call",
+        e.rec(e.p("xx", xx_t(e)), e.p("loc", loc_t(e)), *dep_fields, e.p("argument", cve_t(e))),
+        cve_t(e),
+    )
+    fn_throws(e, "h_funcdep_call", errs_t(e))
+    fn_impl(
+        e,
+        x,
+        "h_funcdep_call",
+        body(
+            e,
+            e.let(
+                "fref",
+                hf_rec(
+                    e,
+                    "h_funcdep_define",
+                    e.p("xx", xx(e)),
+                    e.p("loc", loc(e)),
+                    *[e.p(f, a(e, f)) for f in ["id", "name", "params", "ty", "body"]],
                 ),
             ),
             e.let("ref", cv_of(e, code_none(e, loc(e)), _wval_new(e, a(e, "ty"), "func", e.v("fref")))),
@@ -4277,6 +5426,39 @@ def module(e):
         ),
     )
     method(e, x, "wmod", "ir", ty(e), str_(e), _ir_fn(e, in_(e, "xx", "value"), e.v("arg")))
+    # A tuple in memory: its components in order, each at a multiple of its own alignment (a scalar's width, a
+    # tuple's largest), the whole rounded up to its alignment.
+    method(
+        e,
+        x,
+        "wmod",
+        "align",
+        ty(e),
+        int_t(e),
+        e.seq(
+            e.if_only(
+                has(e, in_(e, "xx", "value"), e.v("arg"), "wtuple"),
+                e.ret(
+                    e.seq(
+                        e.let("m", e.rec(e.p("v", e.int_of(1)))),
+                        e.foreach(
+                            acc(e, in_(e, "xx", "value"), e.v("arg"), "wtuple", "elems"),
+                            "et",
+                            e.seq(
+                                e.let("ea", e.call_m(outer(e), "align", e.v("et"))),
+                                e.if_only(
+                                    e.mb.operator_gt(e.v("ea"), e.fld(e.v("m"), "v")),
+                                    e.mb.set(e.fld(e.v("m"), "v"), e.v("ea")),
+                                ),
+                            ),
+                        ),
+                        e.ret(e.fld(e.v("m"), "v")),
+                    )
+                ),
+            ),
+            e.ret(e.call_m(outer(e), "width", e.v("arg"))),
+        ),
+    )
     method(
         e,
         x,
@@ -4285,6 +5467,27 @@ def module(e):
         ty(e),
         int_t(e),
         e.seq(
+            e.if_only(
+                has(e, in_(e, "xx", "value"), e.v("arg"), "wtuple"),
+                e.ret(
+                    e.seq(
+                        e.let("off", e.rec(e.p("v", e.int_of(0)))),
+                        e.foreach(
+                            acc(e, in_(e, "xx", "value"), e.v("arg"), "wtuple", "elems"),
+                            "et",
+                            e.seq(
+                                e.let("ea", e.call_m(outer(e), "align", e.v("et"))),
+                                e.mb.set(e.fld(e.v("off"), "v"), _round_up(e, e.fld(e.v("off"), "v"), e.v("ea"))),
+                                e.mb.set(
+                                    e.fld(e.v("off"), "v"),
+                                    e.mb.operator_add(e.fld(e.v("off"), "v"), e.call_m(outer(e), "width", e.v("et"))),
+                                ),
+                            ),
+                        ),
+                        e.ret(_round_up(e, e.fld(e.v("off"), "v"), e.call_m(outer(e), "align", e.v("arg")))),
+                    )
+                ),
+            ),
             e.if_only(
                 has(e, in_(e, "xx", "value"), e.v("arg"), "wint"),
                 e.ret(
@@ -4393,6 +5596,32 @@ def module(e):
     tm.module_defs_methods(e, x, "wmod", "wdef")
     # A zeroed block defined on first use (dependencies ask for it from every use site).
     # A data segment defined on first use (dependencies ask for it from every use site).
+    # The index of a function symbol in the module's table, registering it when new.
+    method(
+        e,
+        x,
+        "wmod",
+        "table_index",
+        str_(e),
+        int_t(e),
+        e.seq(
+            e.let("hit", e.rec(e.p("v", e.int_of(-1)))),
+            e.let("i", e.rec(e.p("v", e.int_of(0)))),
+            e.foreach(
+                in_(e, "table"),
+                "s0",
+                e.seq(
+                    e.if_only(e.eq(e.v("s0"), e.v("arg")), e.mb.set(e.fld(e.v("hit"), "v"), e.fld(e.v("i"), "v"))),
+                    e.incr(e.fld(e.v("i"), "v")),
+                ),
+            ),
+            e.if_only(
+                e.eq(e.fld(e.v("hit"), "v"), num(e, -1)),
+                e.seq(e.mb.set(e.fld(e.v("hit"), "v"), e.fld(e.v("i"), "v")), push(e, in_(e, "table"), e.v("arg"))),
+            ),
+            e.ret(e.fld(e.v("hit"), "v")),
+        ),
+    )
     method(
         e,
         x,
@@ -4660,7 +5889,7 @@ def module(e):
                                 "wregion",
                                 e.p("depth", e.int_of(0)),
                                 e.p("start", e.int_of(0)),
-                                e.p("valued", e.b(False)),
+                                e.p("results", e.int_of(0)),
                                 e.p("closed", e.int_of(0)),
                             ),
                         ),
@@ -4712,6 +5941,10 @@ def module(e):
                     ),
                     e.p("push", _count_use(e, _p(e, "val"))),
                     e.p("call", e.foreach(_p(e, "args"), "ax", _count_use(e, e.v("ax")))),
+                    e.p(
+                        "call_indirect",
+                        e.seq(e.foreach(_p(e, "args"), "ax", _count_use(e, e.v("ax"))), _count_use(e, _p(e, "index"))),
+                    ),
                     e.p("ret", e.if_only(e.fld(_p(e, "val"), "is_some"), _count_use(e, e.fld(_p(e, "val"), "value")))),
                 ),
             ),
@@ -4737,6 +5970,20 @@ def module(e):
                             "if",
                             e.seq(
                                 _rs_ops(e, _p(e, "cond")),
+                                count_let(e, "nres"),
+                                e.if_only(
+                                    e.fld(_p(e, "ty"), "is_some"),
+                                    e.foreach(
+                                        hf_rec(
+                                            e,
+                                            "h_flat_types",
+                                            e.p("xx", e.call_m(outer(e), "xx", e.tup())),
+                                            e.p("ty", e.fld(_p(e, "ty"), "value")),
+                                        ),
+                                        "_",
+                                        e.incr(e.fld(e.v("nres"), "v")),
+                                    ),
+                                ),
                                 _rs(
                                     e,
                                     "open_if",
@@ -4751,7 +5998,7 @@ def module(e):
                                                 e.dstr("if"),
                                             ),
                                         ),
-                                        e.p("valued", e.fld(_p(e, "ty"), "is_some")),
+                                        e.p("results", e.fld(e.v("nres"), "v")),
                                     ),
                                 ),
                             ),
@@ -4871,6 +6118,28 @@ def module(e):
                             ),
                         ),
                         e.p(
+                            "call_indirect",
+                            e.seq(
+                                count_let(e, "na"),
+                                e.foreach(
+                                    _p(e, "args"),
+                                    "ax",
+                                    e.foreach(_wv_flat(e, e.v("ax")), "_", e.incr(e.fld(e.v("na"), "v"))),
+                                ),
+                                _rs(e, "ops", _p(e, "args")),
+                                _rs_ops(e, _p(e, "index")),
+                                _rs(
+                                    e,
+                                    "call_indirect",
+                                    e.rec(
+                                        e.p("sig", _p(e, "sig")),
+                                        e.p("nargs", e.mb.operator_add(e.fld(e.v("na"), "v"), e.int_of(1))),
+                                        e.p("res", _p(e, "res")),
+                                    ),
+                                ),
+                            ),
+                        ),
+                        e.p(
                             "ret",
                             e.seq(
                                 e.if_only(e.fld(_p(e, "val"), "is_some"), _rs_ops(e, e.fld(_p(e, "val"), "value"))),
@@ -4964,6 +6233,19 @@ def module(e):
                             ),
                         ),
                     ),
+                ),
+            ),
+            count_let(e, "nt"),
+            count_loop(e, "nt", in_(e, "table")),
+            e.if_only(
+                e.mb.operator_gt(e.fld(e.v("nt"), "v"), num(e, 0)),
+                e.seq(
+                    push(
+                        e,
+                        e.v("out"),
+                        e.cat(e.s('  (table (export "table") '), to_str(e, e.fld(e.v("nt"), "v")), e.s(" funcref)")),
+                    ),
+                    push(e, e.v("out"), e.cat(e.s("  (elem (i32.const 0) "), e.join(in_(e, "table"), " "), e.s(")"))),
                 ),
             ),
             e.foreach(in_(e, "funcs"), "f", push(e, e.v("out"), e.v("f"))),
@@ -5103,8 +6385,10 @@ def module(e):
                 ),
             ),
             e.let("ended", cve_ended(e, e.v("r"))),
+            tm.loan_return_check(e, in_(e, "xx", "value"), e.v("loc"), e.v("r"), TARGET),
+            # The body's result (its last value, or what its returns yielded) is cast to the declared result type.
             e.if_only(
-                and_b(e, e.not_(e.v("ended")), and_b(e, e.v("is_void"), _is_wasm(e, e.v("ctx"), e.v("r")))),
+                and_b(e, e.v("is_void"), _is_wasm(e, e.v("ctx"), e.v("r"))),
                 e.match_of(
                     e.eresult_err(e.mb.eval_value(), e.v("loc"), e.s("void function body yields a value")),
                     "__x",
@@ -5113,7 +6397,7 @@ def module(e):
                     e.p("errs", tm.panic_errs(e, TARGET, "compile failed", e.v("__x"))),
                 ),
             ),
-            e.let("need_cast", and_b(e, e.not_(e.v("ended")), e.not_(e.v("is_void")))),
+            e.let("need_cast", e.not_(e.v("is_void"))),
             e.let(
                 "v",
                 _must_v(
@@ -5295,9 +6579,10 @@ def module(e):
         ),
     )
 
-    _value_aspects(e, x, "wt_int", e.mb.operator_div(in_(e, "bits"), num(e, 8)), _int_hash_body(e))
-    _value_aspects(e, x, "wt_float", e.mb.operator_div(in_(e, "bits"), num(e, 8)), None)
-    _value_aspects(e, x, "wt_ptr", num(e, 4), _ptr_hash_body(e))
+    _value_aspects(e, x, "wt_int", e.mb.operator_div(in_(e, "bits"), num(e, 8)), _int_hash_body(e), "0")
+    _value_aspects(e, x, "wt_float", e.mb.operator_div(in_(e, "bits"), num(e, 8)), None, "0")
+    _value_aspects(e, x, "wt_ptr", num(e, 4), _ptr_hash_body(e), "0")
+    _value_aspects(e, x, "wt_fnref", num(e, 4), None, None)
     self_type(
         e,
         x,
@@ -5308,6 +6593,8 @@ def module(e):
             asp_id(e, "initial_bind"),
             lv(e, "wint_id"),
             lv(e, "size_id"),
+            lv(e, "align_id"),
+            lv(e, "zero_id"),
             lv(e, "hash_id"),
             lv(e, "eq_id"),
             op_id(e, "add"),
@@ -5445,8 +6732,8 @@ def module(e):
     op(e, x, "wt_int", "mul", try_er(e, _binop_body(e, e.s("mul")), cve_t(e)))
     op(e, x, "wt_int", "div", try_er(e, _binop_body(e, _signed_op(e, "div_s", "div_u")), cve_t(e)))
     op(e, x, "wt_int", "mod", try_er(e, _binop_body(e, _signed_op(e, "rem_s", "rem_u")), cve_t(e)))
-    op(e, x, "wt_int", "and", try_er(e, _binop_body(e, e.s("and")), cve_t(e)))
-    op(e, x, "wt_int", "or", try_er(e, _binop_body(e, e.s("or")), cve_t(e)))
+    op(e, x, "wt_int", "and", short_circuit_body(e, "and", try_er(e, _binop_body(e, e.s("and")), cve_t(e))))
+    op(e, x, "wt_int", "or", short_circuit_body(e, "or", try_er(e, _binop_body(e, e.s("or")), cve_t(e))))
     op(e, x, "wt_int", "xor", try_er(e, _binop_body(e, e.s("xor")), cve_t(e)))
     op(e, x, "wt_int", "shl", try_er(e, _binop_body(e, e.s("shl")), cve_t(e)))
     op(e, x, "wt_int", "shr", try_er(e, _binop_body(e, _signed_op(e, "shr_s", "shr_u")), cve_t(e)))
@@ -5537,6 +6824,8 @@ def module(e):
             asp_id(e, "initial_bind"),
             lv(e, "wfloat_id"),
             lv(e, "size_id"),
+            lv(e, "align_id"),
+            lv(e, "zero_id"),
             lv(e, "eq_id"),
             op_id(e, "add"),
             op_id(e, "sub"),
@@ -5650,6 +6939,7 @@ def module(e):
         ),
     )
     _conv_methods(e, x)
+    _fmath_methods(e, x)
     x.append(
         e.impl_interface(
             e.v("wt_float"),
@@ -5710,6 +7000,8 @@ def module(e):
             asp_id(e, "initial_bind"),
             lv(e, "wptr_id"),
             lv(e, "size_id"),
+            lv(e, "align_id"),
+            lv(e, "zero_id"),
             lv(e, "hash_id"),
             lv(e, "eq_id"),
             op_id(e, "eq"),
@@ -5844,23 +7136,12 @@ def module(e):
                                     cv_of(
                                         e,
                                         _code_of(e, e.v("out")),
-                                        mk(
+                                        _mem_val(
                                             e,
-                                            "wval",
-                                            e.p("ty", in_(e, "pointee")),
-                                            e.p(
-                                                "source",
-                                                e.call(
-                                                    e.lower_v("ws_mem"),
-                                                    e.rec(
-                                                        e.p("addr", e.v("r")),
-                                                        e.p(
-                                                            "offset",
-                                                            e.mb.as_(e.mb.operator_mul(e.v("ki"), e.v("w")), int_t(e)),
-                                                        ),
-                                                    ),
-                                                ),
-                                            ),
+                                            _xmod(e),
+                                            in_(e, "pointee"),
+                                            e.v("r"),
+                                            e.mb.as_(e.mb.operator_mul(e.v("ki"), e.v("w")), int_t(e)),
                                         ),
                                     ),
                                 ),
@@ -5926,20 +7207,12 @@ def module(e):
                             cv_of(
                                 e,
                                 cve_code(e, e.v("addr")),
-                                mk(
+                                _mem_val(
                                     e,
-                                    "wval",
-                                    e.p("ty", in_(e, "pointee")),
-                                    e.p(
-                                        "source",
-                                        e.call(
-                                            e.lower_v("ws_mem"),
-                                            e.rec(
-                                                e.p("addr", e.call_m(_wval_of(e, e.v("addr")), "ref", e.tup())),
-                                                e.p("offset", e.int_of(0)),
-                                            ),
-                                        ),
-                                    ),
+                                    _xmod(e),
+                                    in_(e, "pointee"),
+                                    e.call_m(_wval_of(e, e.v("addr")), "ref", e.tup()),
+                                    e.int_of(0),
                                 ),
                             ),
                         )
@@ -6034,132 +7307,16 @@ def module(e):
         )
     )
     x.append(e.impl_interface(e.v("wt_fn"), t(e, "wfn"), e.p("params", in_(e, "params")), e.p("ret", in_(e, "ret"))))
-    x.append(
-        e.impl_interface(
-            e.v("wt_fn"),
-            asp_iface(e, "function"),
-            e.p(
-                "call",
-                body(
-                    e,
-                    e.let("out", _insts_new(e)),
-                    _append_code(e, e.v("out"), cve_code(e, a(e, "function"))),
-                    e.let("fnv", _wval_of(e, a(e, "function"))),
-                    e.let("args", e.list_new(lt(e, "wval"))),
-                    e.let("pmap", e.map_new(str_(e), ty(e))),
-                    e.let("pn", e.rec(e.p("v", e.int_of(0)))),
-                    e.foreach(
-                        in_(e, "params"),
-                        "p",
-                        e.seq(
-                            e.call_m(e.v("pmap"), "put", e.tup(to_str(e, e.fld(e.v("pn"), "v")), e.v("p"))),
-                            e.incr(e.fld(e.v("pn"), "v")),
-                        ),
-                    ),
-                    e.let("elems", e.list_new(e.mb.types_cve())),
-                    e.let("argv", a(e, "argument")),
-                    e.let("single", e.eq(e.fld(e.v("pn"), "v"), num(e, 1))),
-                    e.if_only(e.v("single"), push(e, e.v("elems"), e.v("argv"))),
-                    e.if_only(
-                        e.not_(e.v("single")),
-                        e.seq(
-                            e.if_only(
-                                e.not_(cve_has(e, e.v("argv"))),
-                                ret_m(e, err_cve(e, loc(e), "call argument has no value")),
-                            ),
-                            e.let("tk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "tuple"))),
-                            e.if_only(
-                                e.not_(e.fld(e.v("tk"), "is_some")),
-                                ret_m(e, err_cve(e, loc(e), "call arguments must be a tuple")),
-                            ),
-                            e.foreach(
-                                bim(
-                                    e,
-                                    asp_iface(e, "tuple"),
-                                    "take_elements",
-                                    e.fld(e.v("tk"), "value"),
-                                    e.rec(
-                                        e.p("xx", xx(e)), e.p("loc", loc(e)), e.p("value", cve_value(e, e.v("argv")))
-                                    ),
-                                ),
-                                "er",
-                                e.seq(e.let("ec0", unwrap_cve_m(e, e.v("er"))), push(e, e.v("elems"), e.v("ec0"))),
-                            ),
-                        ),
-                    ),
-                    e.let("st", e.rec(e.p("i", e.int_of(0)))),
-                    e.foreach(
-                        e.v("elems"),
-                        "ec",
-                        e.seq(
-                            e.if_only(
-                                e.mb.operator_ge(e.fld(e.v("st"), "i"), e.fld(e.v("pn"), "v")),
-                                ret_m(e, err_cve(e, loc(e), "too many call arguments")),
-                            ),
-                            e.let(
-                                "v",
-                                unwrap_cve_m(
-                                    e,
-                                    try_er(
-                                        e,
-                                        _operand(
-                                            e,
-                                            xx(e),
-                                            loc(e),
-                                            _xmod(e),
-                                            e.call_m(e.v("pmap"), "get", to_str(e, e.fld(e.v("st"), "i"))),
-                                            e.v("ec"),
-                                        ),
-                                        cve_t(e),
-                                    ),
-                                ),
-                            ),
-                            _append_code(e, e.v("out"), cve_code(e, e.v("v"))),
-                            push(e, e.v("args"), _wval_of(e, e.v("v"))),
-                            e.incr(e.fld(e.v("st"), "i")),
-                        ),
-                    ),
-                    e.if_only(
-                        e.mb.operator_lt(e.fld(e.v("st"), "i"), e.fld(e.v("pn"), "v")),
-                        ret_m(e, err_cve(e, loc(e), "too few call arguments")),
-                    ),
-                    e.if_only(
-                        has(e, xx(e), in_(e, "ret"), "wvoid"),
-                        e.seq(
-                            push(
-                                e,
-                                e.v("out"),
-                                _inst(
-                                    e,
-                                    loc(e),
-                                    "call",
-                                    e.p("res", e.list_new(str_(e))),
-                                    e.p("fn", e.v("fnv")),
-                                    e.p("args", e.v("args")),
-                                ),
-                            ),
-                            ret_m(e, ok_cve(e, cv_no(e, _code_of(e, e.v("out"))))),
-                        ),
-                    ),
-                    e.let("rv", _fresh_val(e, _xmod(e), in_(e, "ret"))),
-                    push(
-                        e,
-                        e.v("out"),
-                        _inst(
-                            e,
-                            loc(e),
-                            "call",
-                            e.p("res", _names_of(e, e.v("rv"))),
-                            e.p("fn", e.v("fnv")),
-                            e.p("args", e.v("args")),
-                        ),
-                    ),
-                    e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), e.v("rv")))),
-                ),
-            ),
-            e.p("exception_type", e.option_type_lowered_none()),
-        )
+    _fn_call_impl(
+        e,
+        x,
+        "wt_fn",
+        in_(e, "params"),
+        in_(e, "ret"),
+        lambda res: _inst(e, loc(e), "call", e.p("res", res), e.p("fn", e.v("fnv")), e.p("args", e.v("args"))),
+        False,
     )
+    _fnref_type(e, x)
 
     _tuple_type(e, x)
     self_type(
@@ -6217,7 +7374,7 @@ def module(e):
                 )
             ),
         ),
-        body(e, e.ret(type_can_cast_from(e, xx(e), loc(e), a(e, "dest_type"), in_(e, "base")))),
+        body(e, e.ret(type_can_convert(e, xx(e), loc(e), in_(e, "base"), a(e, "dest_type")))),
         body(
             e,
             e.let(
@@ -6868,30 +8025,6 @@ def module(e):
         )
     )
 
-    self_type(
-        e,
-        x,
-        "wgfn_t",
-        e.cat(e.s("wasm global definition function "), to_str(e, in_(e, "kind"))),
-        rt_dispatch(e, lt(e, "wmod"), e.aspect_dispatch(lv(e, "wgfn_m_id"))),
-        can_cast_from_self(e),
-        cast_from_self(e),
-        no_cast_to(e),
-        cast_to_panic(e),
-        body(
-            e,
-            e.ret(
-                and_b(
-                    e,
-                    has(e, xx(e), a(e, "other"), "wgfn_m"),
-                    e.eq(acc(e, xx(e), a(e, "other"), "wgfn_m", "kind"), in_(e, "kind")),
-                )
-            ),
-        ),
-    )
-    rt_lift_impl(e, x, "wgfn_t")
-    rt_bind_impl(e, x, "wgfn_t", lt(e, "wmod"))
-    rt_use_impl(e, x, "wgfn_t")
     x.append(
         e.impl_interface(
             e.v("wmem_fill"),
@@ -7513,6 +8646,7 @@ def module(e):
                             e.p("sip_key_id", tm.fresh_unique(e)),
                             e.p("sip_fn_id", tm.fresh_unique(e)),
                             e.p("exports", e.list_new(str_(e))),
+                            e.p("table", e.list_new(str_(e))),
                             e.p("labels", e.list_new(lt(e, "wlabel"))),
                             e.p("locals", e.list_new(lt(e, "wlocal"))),
                             e.p("frames", e.call(e.lower(e.fld(e.v("srcmap"), "new")), e.tup())),
@@ -7554,6 +8688,7 @@ def module(e):
     _initial_bind_impl(e, x, "wt_float")
     _initial_bind_impl(e, x, "wt_ptr")
     _initial_bind_impl(e, x, "wt_fn")
+    _initial_bind_impl(e, x, "wt_fnref")
     _initial_bind_impl(e, x, "wt_void")
 
     # The unsafe conversions, named: a pointer to another pointer type, a pointer to a 32-bit integer, a 32-bit
@@ -7585,8 +8720,26 @@ def module(e):
     tm.named_conv(e, x, "ptr_cast_b", "wasm.ptr_cast", wptr, wptr, loaded_retag)
     tm.named_conv(e, x, "ptr_to_int_b", "wasm.ptr_to_int", wptr, wint32, loaded_retag)
     tm.named_conv(e, x, "int_to_ptr_b", "wasm.int_to_ptr", wint32, wptr, loaded_retag)
+
+    def wfnref(ty_):
+        return has(e, xx(e), base_of(ty_), "wfnref")
+
+    tm.named_conv(e, x, "fnref_to_int_b", "wasm.fnref_to_int", wfnref, wint32, loaded_retag)
+    tm.named_conv(e, x, "int_to_fnref_b", "wasm.int_to_fnref", wint32, wfnref, loaded_retag)
+    _fn_ref_fn(e, x)
     x.append(e.finish(e.v("d")))
-    passthrough = ["ptr", "fn", "tuple", "global_t", "import_t", "func_dep", "alloc_dep", "data_dep", "cstr_dep"]
+    passthrough = [
+        "ptr",
+        "fn",
+        "fnref",
+        "tuple",
+        "global_t",
+        "import_t",
+        "func_dep",
+        "alloc_dep",
+        "data_dep",
+        "cstr_dep",
+    ]
     defs = []
     defs.append(e.p("new", e.fld(e.v("wasm_b"), "func")))
     defs.append(e.p("mod_t", t(e, "wmod")))
@@ -7595,8 +8748,13 @@ def module(e):
     defs.append(e.p("meta_new", e.fld(e.v("wmeta"), "new")))
     for name in passthrough:
         defs.append(e.p(name, e.v("c_" + name)))
-    for name in CONV_NAMES:
+    for name in CONV_NAMES + ["fn_ref", "fnref_dep"]:
         defs.append(e.p(name, e.fld(e.v(name + "_b"), "func")))
+    defs.append(e.p("fn_key", e.v("h_fn_key")))
+    defs.append(e.p("dep_key", e.v("h_dep_key")))
+    defs.append(e.p("fnref_dep_keys", e.v("c_fnref_dep_keys")))
+    defs.append(e.p("fnref_dep_types", e.v("c_fnref_dep_types")))
+    defs.append(e.p("fnkey_t", t(e, "wfkey")))
     for obj in [
         "wt_int",
         "wt_float",
@@ -7625,7 +8783,7 @@ def module(e):
         y.append(
             e.let(
                 spec.name,
-                _lty(
+                lty(
                     e,
                     "wt_int",
                     e.rec(
@@ -7639,15 +8797,15 @@ def module(e):
         )
     for bits in [32, 64]:
         exported.append("f" + str(bits))
-        y.append(e.let("f" + str(bits), _lty(e, "wt_float", e.rec(e.p("bits", e.int_of(bits))))))
+        y.append(e.let("f" + str(bits), lty(e, "wt_float", e.rec(e.p("bits", e.int_of(bits))))))
     exported.append("void")
-    y.append(e.let("void", _lty(e, "wt_void", e.tup())))
+    y.append(e.let("void", lty(e, "wt_void", e.tup())))
     exported.append("unit")
-    y.append(e.let("unit", _lty(e, "wunit", e.tup())))
+    y.append(e.let("unit", lty(e, "wunit", e.tup())))
     exported.append("trap")
-    y.append(e.let("trap", _lty(e, "wtrap", e.tup())))
+    y.append(e.let("trap", lty(e, "wtrap", e.tup())))
     y.append(
-        e.let("cstr_t", _lty(e, "wt_global", e.rec(e.p("base", _lty(e, "wt_ptr", e.rec(e.p("pointee", e.v("u8"))))))))
+        e.let("cstr_t", lty(e, "wt_global", e.rec(e.p("base", lty(e, "wt_ptr", e.rec(e.p("pointee", e.v("u8"))))))))
     )
     for kind in WGFN_KINDS:
         if kind != "cstr_fn":
@@ -7766,7 +8924,11 @@ def module(e):
     ydefs.append(e.p("mod_t", e.fld(e.v("mod_o"), "type")))
     for name in META_EXPORTS:
         ydefs.append(e.p(name, e.fld(e.v("k"), name)))
-    for name in passthrough + CONV_NAMES:
+    for name in (
+        passthrough
+        + CONV_NAMES
+        + ["fn_ref", "fnref_dep", "fn_key", "dep_key", "fnref_dep_keys", "fnref_dep_types", "fnkey_t"]
+    ):
         ydefs.append(e.p(name, e.fld(e.v("k"), name)))
     for name in exported:
         ydefs.append(e.p(name, e.v(name)))
@@ -7779,7 +8941,11 @@ def module(e):
         exports.append(e.p(name, e.fld(e.v("k"), name)))
     for name in META_EXPORTS:
         exports.append(e.p(name, e.fld(e.v("k"), name)))
-    for name in passthrough + CONV_NAMES:
+    for name in (
+        passthrough
+        + CONV_NAMES
+        + ["fn_ref", "fnref_dep", "fn_key", "dep_key", "fnref_dep_keys", "fnref_dep_types", "fnkey_t"]
+    ):
         exports.append(e.p(name, e.fld(e.v("k"), name)))
     for name in exported:
         exports.append(e.p(name, e.fld(e.v("k"), name)))

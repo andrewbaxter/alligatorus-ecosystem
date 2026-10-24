@@ -14,6 +14,8 @@ The three functions are dependencies (`func_dep`): a module gets them when its c
 from . import destructor
 from ..eco_mb import p
 from ..target_mb import (
+    fn_type_of,
+    up,
     a,
     asp_iface,
     bim,
@@ -47,12 +49,6 @@ BODY_HOST = 1
 SETUP_MOD = 2
 
 
-def _up(e, expr, depth):
-    for _ in range(depth):
-        expr = e.lower(expr)
-    return expr
-
-
 def _lo(e, name):
     return e.lower(e.v(name))
 
@@ -77,9 +73,9 @@ def _release_body(e):
         e.if_else(
             e.eq(e.v("n"), e.n(0)),
             e.seq(
-                e.call(fn_of(e, _up(e, e.v("destroy"), BODY_HOST)), e.v("p")),
+                e.call(fn_of(e, up(e, e.v("destroy"), BODY_HOST)), e.v("p")),
                 e.call(
-                    _up(e, e.fld(e.v("heap"), "free"), BODY_MOD),
+                    up(e, e.fld(e.v("heap"), "free"), BODY_MOD),
                     conv(e, e.lower(e.v("ptr_cast")), e.v("p"), _lo(e, "pv")),
                 ),
             ),
@@ -97,9 +93,7 @@ def _clone_body(e):
 
 
 def _fn_type(e, params, ret):
-    return e.call(
-        e.lower(e.fld(e.v("lib"), "fn")), e.rec(p("params", e.list_new(e.mb.eval_type(), *params)), p("ret", ret))
-    )
+    return fn_type_of(e, e.lower(e.v("lib")), params, ret)
 
 
 def _setup(e):
@@ -111,7 +105,7 @@ def _setup(e):
         e.let(
             "owned_r",
             e.call(
-                e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
+                e.fld(up(e, e.v("destructor"), SETUP_MOD), "type"),
                 e.rec(p("under", e.v("under")), p("destroy", fn_of(e, e.v("release")))),
             ),
         )

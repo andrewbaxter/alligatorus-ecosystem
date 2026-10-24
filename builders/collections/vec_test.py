@@ -1,8 +1,14 @@
 """vec-test.atz: an llvm app exercising vec-llvm.atz. It prints `hi` through a byte vec, then `pass` or `fail` for
 each check on an i32 vec (push 100, sum, slice length, sum through the slice, sub-slice length and element, write
-through a sub-slice element, pop, length, capacity, write through `at`, clear, pop of the empty vec)."""
+through a sub-slice element, pop, length, capacity, write through `at`, clear, pop of the empty vec).
+
+vec-test-err-cast.atz (mode `err_cast`) must fail to build: an owned vec of i32 cast to the owned vec of u8. Both
+are handles over the same pointer representation, and a type's identity is its own (values.atz `ident_i`), so
+neither the pointer type nor the other vec type takes the value for its own."""
 
 from ..root_mode import APP, root_mode_finish
+
+ERR_CAST = "err_cast"
 
 COUNT = 100
 MESSAGE = b"hi"
@@ -13,7 +19,7 @@ def _lo(e, name):
     return e.lower(e.v(name))
 
 
-def module(e):
+def module(e, mode):
     setup = []
     setup.append(e.let("llvm", e.import_local("llvm", "llvm-ir-22.atz")))
     setup.append(e.let("ll", e.call(e.fld(e.v("llvm"), "new"), e.tup())))
@@ -74,66 +80,87 @@ def module(e):
             ),
         )
 
-    body = e.seq(
-        e.seq(
-            e.let("s", e.mb.as_(e.call(_lo(e, "bytes_new"), e.tup()), _lo(e, "bytes_own"))),
-            *[method("s", "push", e.n(b)) for b in MESSAGE + b"\0"],
-            e.call(puts, e.fld(e.v("s"), "data")),
-            e.let("v", e.mb.as_(e.call(_lo(e, "ints_new"), e.tup()), _lo(e, "ints_own"))),
-            counted_loop("fill", COUNT, method("v", "push", e.v("i"))),
-            check(e.eq(e.fld(e.v("v"), "len"), e.n(COUNT))),
-            check(e.mb.operator_ge(e.fld(e.v("v"), "cap"), e.n(COUNT))),
-            e.let("sum", e.mb.as_(e.n(0), _lo(e, "t_i32"))),
-            counted_loop(
-                "sum", COUNT, e.mb.set(e.v("sum"), e.mb.operator_add(e.v("sum"), method("v", "at", e.v("i"))))
-            ),
-            check(e.eq(e.v("sum"), e.n(COUNT * (COUNT - 1) // 2))),
-            e.let("s", method("v", "slice", e.tup())),
-            check(e.eq(e.fld(e.v("s"), "len"), e.n(COUNT))),
-            e.let("sum2", e.mb.as_(e.n(0), _lo(e, "t_i32"))),
-            counted_loop(
-                "sum2",
-                COUNT,
-                e.mb.set(e.v("sum2"), e.mb.operator_add(e.v("sum2"), e.call(e.fld(e.v("s"), "at"), e.v("i")))),
-            ),
-            check(e.eq(e.v("sum2"), e.n(COUNT * (COUNT - 1) // 2))),
-            e.let("s2", e.call(e.fld(e.v("s"), "sub"), e.tup(e.n(10), e.n(20)))),
-            check(e.eq(e.fld(e.v("s2"), "len"), e.n(10))),
-            check(e.eq(e.call(e.fld(e.v("s2"), "at"), e.n(0)), e.n(10))),
-            e.mb.set(e.call(e.fld(e.v("s2"), "at"), e.n(1)), e.n(777)),
-            check(e.eq(method("v", "at", e.n(11)), e.n(777))),
-            check(
-                e.eq(
-                    e.match_of(
-                        method("v", "pop", e.tup()),
-                        "p",
-                        None,
-                        e.p("some", e.v("p")),
-                        e.p("none", e.mb.as_(e.n(-1), _lo(e, "t_i32"))),
-                    ),
-                    e.n(COUNT - 1),
-                )
-            ),
-            check(e.eq(e.fld(e.v("v"), "len"), e.n(COUNT - 1))),
-            e.mb.set(method("v", "at", e.n(3)), e.n(1000)),
-            check(e.eq(method("v", "at", e.n(3)), e.n(1000))),
-            method("v", "clear", e.tup()),
-            check(e.eq(e.fld(e.v("v"), "len"), e.n(0))),
-            check(
-                e.eq(
-                    e.match_of(
-                        method("v", "pop", e.tup()),
-                        "p",
-                        None,
-                        e.p("some", e.v("p")),
-                        e.p("none", e.mb.as_(e.n(-1), _lo(e, "t_i32"))),
-                    ),
-                    e.n(-1),
-                )
-            ),
+    checks = e.seq(
+        e.let("s", e.call(_lo(e, "bytes_new"), e.tup())),
+        *[method("s", "push", e.n(b)) for b in MESSAGE + b"\0"],
+        e.call(puts, e.fld(e.v("s"), "data")),
+        e.let("v", e.call(_lo(e, "ints_new"), e.tup())),
+        counted_loop("fill", COUNT, method("v", "push", e.v("i"))),
+        check(e.eq(e.fld(e.v("v"), "len"), e.n(COUNT))),
+        check(e.mb.operator_ge(e.fld(e.v("v"), "cap"), e.n(COUNT))),
+        e.let("sum", e.mb.as_(e.n(0), _lo(e, "t_i32"))),
+        counted_loop("sum", COUNT, e.mb.set(e.v("sum"), e.mb.operator_add(e.v("sum"), method("v", "at", e.v("i"))))),
+        check(e.eq(e.v("sum"), e.n(COUNT * (COUNT - 1) // 2))),
+        e.let("s", method("v", "slice", e.tup())),
+        check(e.eq(e.fld(e.v("s"), "len"), e.n(COUNT))),
+        e.let("sum2", e.mb.as_(e.n(0), _lo(e, "t_i32"))),
+        counted_loop(
+            "sum2",
+            COUNT,
+            e.mb.set(e.v("sum2"), e.mb.operator_add(e.v("sum2"), e.call(e.fld(e.v("s"), "at"), e.v("i")))),
         ),
-        e.ret(e.n(0)),
+        check(e.eq(e.v("sum2"), e.n(COUNT * (COUNT - 1) // 2))),
+        e.let("s2", e.call(e.fld(e.v("s"), "sub"), e.tup(e.n(10), e.n(20)))),
+        check(e.eq(e.fld(e.v("s2"), "len"), e.n(10))),
+        check(e.eq(e.call(e.fld(e.v("s2"), "at"), e.n(0)), e.n(10))),
+        e.mb.set(e.call(e.fld(e.v("s2"), "at"), e.n(1)), e.n(777)),
+        check(e.eq(method("v", "at", e.n(11)), e.n(777))),
+        check(
+            e.eq(
+                e.match_of(
+                    method("v", "pop", e.tup()),
+                    "p",
+                    None,
+                    e.p("some", e.v("p")),
+                    e.p("none", e.mb.as_(e.n(-1), _lo(e, "t_i32"))),
+                ),
+                e.n(COUNT - 1),
+            )
+        ),
+        check(e.eq(e.fld(e.v("v"), "len"), e.n(COUNT - 1))),
+        e.mb.set(method("v", "at", e.n(3)), e.n(1000)),
+        check(e.eq(method("v", "at", e.n(3)), e.n(1000))),
+        method("v", "clear", e.tup()),
+        check(e.eq(e.fld(e.v("v"), "len"), e.n(0))),
+        check(
+            e.eq(
+                e.match_of(
+                    method("v", "pop", e.tup()),
+                    "p",
+                    None,
+                    e.p("some", e.v("p")),
+                    e.p("none", e.mb.as_(e.n(-1), _lo(e, "t_i32"))),
+                ),
+                e.n(-1),
+            )
+        ),
+        method("v", "push", e.n(1)),
+        method("v", "push", e.n(2)),
+        method("v", "push", e.n(3)),
+        method("v", "insert", e.tup(e.n(1), e.n(9))),
+        check(e.eq(method("v", "at", e.n(1)), e.n(9))),
+        check(e.eq(method("v", "at", e.n(3)), e.n(3))),
+        check(e.eq(e.fld(e.v("v"), "len"), e.n(4))),
+        check(e.eq(method("v", "remove", e.n(0)), e.n(1))),
+        check(e.eq(method("v", "at", e.n(0)), e.n(9))),
+        check(e.eq(e.fld(e.v("v"), "len"), e.n(3))),
+        e.let("v2", e.call(_lo(e, "ints_new"), e.tup())),
+        method("v2", "push", e.n(5)),
+        method("v2", "push", e.n(6)),
+        method("v", "extend", method("v2", "slice", e.tup())),
+        check(e.eq(e.fld(e.v("v"), "len"), e.n(5))),
+        check(e.eq(method("v", "at", e.n(4)), e.n(6))),
     )
+    if mode == APP:
+        body = e.seq(checks, e.ret(e.n(0)))
+    elif mode == ERR_CAST:
+        body = e.seq(
+            e.let("v", e.call(_lo(e, "ints_new"), e.tup())),
+            e.let("bad", e.mb.as_(e.v("v"), _lo(e, "bytes_own"))),
+            e.ret(e.n(0)),
+        )
+    else:
+        raise AssertionError(mode)
     top.append(
         e.let(
             "main",

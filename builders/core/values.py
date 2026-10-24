@@ -5,13 +5,24 @@ Interfaces on values: `retag(type) -> value`, the same runtime value (same place
 `retag_slot(type) -> binding_slot`, a target's parameter slot viewed as a slot of `type`.
 
 Aspects on types (looked up through the type's aspect dispatch):
-- `size_i`: `size(()) -> int`, the byte size of a stored value of the type.
+- `size_i`: `size(xx) -> int`, the byte size of a stored value of the type, padded to its alignment (as C's sizeof).
+- `align_i`: `align(xx) -> int`, the alignment of a stored value of the type.
 - `hash_i`: `hash({xx, loc, cv}) -> eresult(cve)`, stages a 32-bit integer hash of the value `cv`.
 - `eq_i`: `eq({xx, loc, a, b}) -> eresult(cve)`, stages the target's native comparison of two values (usable as an
   `if` condition).
+- `zero_i`: `zero({xx, loc}) -> eresult(cve)`, stages the type's zero value (all bits clear: zero numbers, the null
+  pointer, a tuple of zeros), the value a container holds where there is none yet.
+- `loan_i`: `origin(()) -> string`, answered by a borrowed value's type (destructor.atz's loan of a bound owned
+  value): what it was borrowed from. A target refuses to return a loan from a function (its origin is a local of
+  that function), the check every language with borrows makes.
+- `ident_i`: `ident(()) -> unique`, the identity of the type's kind. A type answers it for itself, never by
+  delegating to a representation, so a wrapper (a handle, a read-only view) is told apart from the type it reads as:
+  two types are equal only when their identities agree and the type accepts the other's parameters.
 
-Callables for use in target code: `hash(v)`, `eq((a, b))`, and `size(type)` (a host integer); each errors when the
-type lacks the aspect. The aspect ids (`size_id`, `hash_id`, `eq_id`) are exported for type dispatch tables.
+Callables for use in target code: `hash(v)`, `eq((a, b))`, `size(type)` and `align(type)` (host integers) and
+`zero(type)`; each errors when the type lacks the aspect. The aspect ids (`size_id`, `align_id`, `hash_id`, `eq_id`,
+`zero_id`, `ident_id`) are
+exported for type dispatch tables.
 """
 
 from ..eco_mb import p
@@ -19,9 +30,9 @@ from ..target_mb import (
     a,
     asp_iface,
     bim,
-    bim0,
     body,
     const_fn,
+    const_type_arg,
     cve_has,
     cve_t,
     cve_type,
@@ -29,13 +40,12 @@ from ..target_mb import (
     err_cve,
     const_eval_in,
     int_t,
-    is_runtime,
     loc,
     loc_t,
     lookup,
-    or_b,
     ret_m,
     ty_desc,
+    unique_t,
     unwrap_cve_m,
     xx,
     xx_t,
@@ -117,7 +127,8 @@ def module(e):
             ),
         )
     )
-    _iface(e, top, "size_i", "size", e.tup(), int_t(e))
+    _iface(e, top, "size_i", "size", xx_t(e), int_t(e))
+    _iface(e, top, "align_i", "align", xx_t(e), int_t(e))
     _iface(e, top, "hash_i", "hash", e.rec(p("xx", xx_t(e)), p("loc", loc_t(e)), p("cv", cve_t(e))), _eres_cve_t(e))
     _iface(
         e,
@@ -127,6 +138,9 @@ def module(e):
         e.rec(p("xx", xx_t(e)), p("loc", loc_t(e)), p("a", cve_t(e)), p("b", cve_t(e))),
         _eres_cve_t(e),
     )
+    _iface(e, top, "zero_i", "zero", e.rec(p("xx", xx_t(e)), p("loc", loc_t(e))), _eres_cve_t(e))
+    _iface(e, top, "ident_i", "ident", e.tup(), unique_t(e))
+    _iface(e, top, "loan_i", "origin", e.tup(), e.mb.types_string())
     const_fn(
         e,
         top,
@@ -202,15 +216,45 @@ def module(e):
         body(
             e,
             *_arg_cve(e, "values.size"),
-            e.let("tyk", lookup(e, xx(e), cve_type(e, e.v("argv")), asp_iface(e, "type"))),
-            e.if_only(
-                or_b(e, is_runtime(e, e.v("argv")), e.not_(e.fld(e.v("tyk"), "is_some"))),
-                ret_m(e, err_cve(e, loc(e), "values.size: argument must be a constant type")),
-            ),
-            e.let("st", bim(e, asp_iface(e, "type"), "type", e.fld(e.v("tyk"), "value"), cve_value(e, e.v("argv")))),
+            *const_type_arg(e, "values.size", e.v("argv"), "st"),
             *_need(e, "values.size", e.v("st"), "size_i", "size"),
-            e.let("n", bim0(e, e.lower(e.fld(e.v("size_i"), "type")), "size", _impl(e))),
+            e.let("n", bim(e, e.lower(e.fld(e.v("size_i"), "type")), "size", _impl(e), xx(e))),
             e.ret(const_eval_in(e, xx(e), loc(e), e.stage(e.lower(e.v("n"))))),
+        ),
+    )
+    const_fn(
+        e,
+        top,
+        "align_b",
+        "values.align",
+        body(
+            e,
+            *_arg_cve(e, "values.align"),
+            *const_type_arg(e, "values.align", e.v("argv"), "st"),
+            *_need(e, "values.align", e.v("st"), "align_i", "alignment"),
+            e.let("n", bim(e, e.lower(e.fld(e.v("align_i"), "type")), "align", _impl(e), xx(e))),
+            e.ret(const_eval_in(e, xx(e), loc(e), e.stage(e.lower(e.v("n"))))),
+        ),
+    )
+    const_fn(
+        e,
+        top,
+        "zero_b",
+        "values.zero",
+        body(
+            e,
+            *_arg_cve(e, "values.zero"),
+            *const_type_arg(e, "values.zero", e.v("argv"), "st"),
+            *_need(e, "values.zero", e.v("st"), "zero_i", "zero"),
+            e.ret(
+                bim(
+                    e,
+                    e.lower(e.fld(e.v("zero_i"), "type")),
+                    "zero",
+                    _impl(e),
+                    e.rec(p("xx", xx(e)), p("loc", loc(e))),
+                )
+            ),
         ),
     )
     top.append(e.finish(e.v("d")))
@@ -218,14 +262,24 @@ def module(e):
         p("retag", e.fld(e.v("retag"), "type")),
         p("retag_slot", e.fld(e.v("retag_slot"), "type")),
         p("size_i", e.fld(e.v("size_i"), "type")),
+        p("align_i", e.fld(e.v("align_i"), "type")),
         p("hash_i", e.fld(e.v("hash_i"), "type")),
         p("eq_i", e.fld(e.v("eq_i"), "type")),
+        p("zero_i", e.fld(e.v("zero_i"), "type")),
+        p("ident_i", e.fld(e.v("ident_i"), "type")),
+        p("loan_i", e.fld(e.v("loan_i"), "type")),
         p("size_id", e.v("size_id")),
+        p("align_id", e.v("align_id")),
         p("hash_id", e.v("hash_id")),
         p("eq_id", e.v("eq_id")),
+        p("zero_id", e.v("zero_id")),
+        p("ident_id", e.v("ident_id")),
+        p("loan_id", e.v("loan_id")),
         p("size", e.fld(e.v("size_b"), "func")),
+        p("align", e.fld(e.v("align_b"), "func")),
         p("hash", e.fld(e.v("hash_b"), "func")),
         p("eq", e.fld(e.v("eq_b"), "func")),
+        p("zero", e.fld(e.v("zero_b"), "func")),
     ]
     top.append(e.ret(e.rec(*exported)))
     return top

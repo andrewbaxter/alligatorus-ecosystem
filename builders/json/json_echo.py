@@ -75,8 +75,8 @@ def _echo(e, null, on_error, write_byte):
         return e.p(name, method("w", name, *args) if args else method("w", name, e.tup()))
 
     return e.seq(
-        e.let("p", e.mb.as_(e.call(_lo(e, "jp_new"), null), _lo(e, "jp_own"))),
-        e.let("w", e.mb.as_(e.call(_lo(e, "jw_new"), null), _lo(e, "jw_own"))),
+        e.let("p", e.call(_lo(e, "jp_new"), null)),
+        e.let("w", e.call(_lo(e, "jw_new"), null)),
         e.mb.labeled(
             "doc",
             e.mb.loop(
@@ -107,7 +107,7 @@ def _error_report(e, null, write_byte, code):
     return e.seq(
         *[write_byte(e.n(ord(ch))) for ch in ERROR_TEXT],
         e.seq(
-            e.let("w2", e.mb.as_(e.call(_lo(e, "jw_new"), null), _lo(e, "jw_own"))),
+            e.let("w2", e.call(_lo(e, "jw_new"), null)),
             e.call(e.fld(e.v("w2"), "int"), code),
         ),
         write_byte(e.n(ord("\n"))),

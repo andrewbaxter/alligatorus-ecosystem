@@ -105,7 +105,7 @@ def module(e):
     body = e.seq(
         e.let("fails", e.mb.as_(e.n(0), lo("t_i32"))),
         e.seq(
-            e.let("mp", e.mb.as_(e.call(lo("imap_new"), e.tup()), lo("imap_own"))),
+            e.let("mp", e.call(lo("imap_new"), e.tup())),
             counted_loop("fill", COUNT, method("mp", "put", e.v("i"), e.mb.operator_mul(e.v("i"), e.n(3)))),
             check(e.eq(e.fld(e.v("mp"), "len"), e.n(COUNT))),
             check(truthy(method("mp", "has", e.n(150)))),
@@ -155,7 +155,7 @@ def module(e):
             method("mp", "clear", e.tup()),
             check(e.eq(e.fld(e.v("mp"), "len"), e.n(0))),
             check(e.not_(truthy(method("mp", "has", e.n(7))))),
-            e.let("st", e.mb.as_(e.call(lo("iset_new"), e.tup()), lo("iset_own"))),
+            e.let("st", e.call(lo("iset_new"), e.tup())),
             counted_loop("fills", 50, method("st", "add", e.v("i"))),
             check(e.eq(e.fld(e.v("st"), "len"), e.n(50))),
             check(truthy(method("st", "has", e.n(25)))),

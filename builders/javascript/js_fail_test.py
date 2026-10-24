@@ -2,6 +2,7 @@
 message): an undeclared member, a wrong argument type, a union whose members share a runtime tag, a non-bool
 condition, an undeclared global's type, a `throw` in a function declaring no exception type."""
 
+
 def _jsf(e, name):
     return e.fld(e.v("js"), name)
 

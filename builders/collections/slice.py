@@ -16,6 +16,7 @@ elements.
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
+    up,
     a,
     acc,
     and_b,
@@ -77,12 +78,6 @@ BODY_MOD = 2
 SETUP_MOD = 2
 
 
-def _up(e, expr, depth):
-    for _ in range(depth):
-        expr = e.lower(expr)
-    return expr
-
-
 class _Target:
     """What differs between the wasm and llvm modules: the import, the trap, pointer arithmetic."""
 
@@ -97,7 +92,7 @@ class _Target:
 
     def trap(self, e, depth):
         """A trap statement in target code: the target's trap, a callable type, called through its function value."""
-        return e.call(fn_of(e, _up(e, e.fld(e.v("lib"), "trap"), depth)), e.tup())
+        return e.call(fn_of(e, up(e, e.fld(e.v("lib"), "trap"), depth)), e.tup())
 
     def elem_ptr(self, e, base, idx, size, ptr_type):
         """The address of element `idx` of the array at `base`, as `ptr_type`; `i32` is a host local."""

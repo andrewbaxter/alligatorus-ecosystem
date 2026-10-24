@@ -21,8 +21,10 @@ from ..core import meta, srcmap, values
 from .. import target_mb
 from .. import target_mb as tm
 from ..target_mb import (
+    lty,
     panic_errs,
     a,
+    aggregate_layout_impls,
     acc,
     accessor,
     and_b,
@@ -77,6 +79,7 @@ from ..target_mb import (
     loc_t,
     lookup,
     lookup_v,
+    retag_values,
     lt,
     lv,
     marker_type,
@@ -102,6 +105,7 @@ from ..target_mb import (
     rt_lift_impl,
     rt_use_impl,
     self_type,
+    short_circuit_body,
     src_bits,
     src_type,
     str_,
@@ -117,6 +121,7 @@ from ..target_mb import (
     ty_desc,
     type_aspect,
     type_can_cast_from,
+    type_can_convert,
     unwrap_cve_m,
     unwrap_cve_t,
     unwrap_m,
@@ -574,14 +579,22 @@ def _conv_methods(e, x):
             e.p("exception_type", e.option_type_lowered_none()),
         )
     )
-    target_mb.method_fields(e, x, "lt_int", "lconv", ["wrap", "to_float"])
-    target_mb.method_fields(e, x, "lt_float", "lconv", ["trunc", "to_float"])
+    target_mb.method_fields(e, x, "lt_int", [("lconv", ["wrap", "to_float"])])
+    target_mb.method_fields(e, x, "lt_float", [("lconv", ["trunc", "to_float"])])
 
 
-def _value_aspects(e, x, obj, size_expr, hash_stage):
-    """Implements values.atz's `size_i`, `eq_i` and (when `hash_stage` is given) `hash_i` for a type object: eq
-    stages the type's own `==`; hash stages a 32-bit hash of the value `cv`."""
+def _value_aspects(e, x, obj, size_expr, hash_stage, zero_text):
+    """Implements values.atz's `size_i`, `eq_i`, `zero_i` (the constant `zero_text`) and (when `hash_stage` is
+    given) `hash_i` for a type object: eq stages the type's own `==`; hash stages a 32-bit hash of the value `cv`."""
     x.append(e.impl_interface(e.v(obj), e.fld(e.v("values"), "size_i"), e.p("size", size_expr)))
+    x.append(e.impl_interface(e.v(obj), e.fld(e.v("values"), "align_i"), e.p("align", size_expr)))
+    x.append(
+        e.impl_interface(
+            e.v(obj),
+            e.fld(e.v("values"), "zero_i"),
+            e.p("zero", ok_cve(e, cv_of(e, code_none(e, a(e, "loc")), _lval_new(e, outer(e), e.s(zero_text))))),
+        )
+    )
     x.append(
         e.impl_interface(
             e.v(obj),
@@ -785,10 +798,6 @@ def _sip_hash(e, to_i64, key_arg):
         ),
         cve_t(e),
     )
-
-
-def _lty(e, obj, arg):
-    return e.mb.as_(e.call(e.fld(e.v("k"), obj + "_new"), arg), ty(e))
 
 
 def _lval_of(e, cve_tp):
@@ -1374,6 +1383,26 @@ def _tuple_type(e, x):
             ret_m(e, ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _lval_new(e, elem_t, e.v("r"))))),
         )
 
+    def _any_elem_drops(e_):
+        """Whether a component type of the tuple has the drop aspect (in the type's own aspect dispatch)."""
+        return e_.mb.labeled(
+            "d",
+            e_.seq(
+                e_.foreach(
+                    in_(e_, "elems"),
+                    "et",
+                    e_.if_only(
+                        e_.fld(
+                            lookup(e_, e_.fld(e_.v("arg"), "xx"), e_.v("et"), e_.mb.eval_aspect_drop_dynamic()),
+                            "is_some",
+                        ),
+                        e_.mb.return_to("d", e_.mb.as_(e_.b(True), bool_t(e_))),
+                    ),
+                ),
+                e_.mb.return_to("d", e_.mb.as_(e_.b(False), bool_t(e_))),
+            ),
+        )
+
     self_type(
         e,
         x,
@@ -1384,14 +1413,29 @@ def _tuple_type(e, x):
             e.foreach(in_(e, "elems"), "et", push(e, e.v("ds"), bim0(e, ty(e), "desc", e.v("et")))),
             e.ret(e.cat(e.s("("), e.join(e.v("ds"), ", "), e.s(")"))),
         ),
-        e.aspect_dispatch(
-            lv(e, "ltype_id"),
-            lv(e, "ltuple_id"),
-            asp_id(e, "initial_bind"),
-            asp_id(e, "bind"),
-            asp_id(e, "set"),
-            asp_id(e, "field"),
-            e.mb.eval_aspect_drop_dynamic_id(),
+        # A tuple drops (its components) only when a component does.
+        e.mb.if_of(
+            [
+                (
+                    e.eq(a(e, "key"), e.mb.eval_aspect_drop_dynamic_id()),
+                    e.if_else(
+                        _any_elem_drops(e),
+                        e.opt_some(e.mb.types_aspect(), outer(e)),
+                        e.opt_none(e.mb.types_aspect()),
+                    ),
+                )
+            ],
+            e.aspect_dispatch(
+                lv(e, "ltype_id"),
+                lv(e, "ltuple_id"),
+                lv(e, "zero_id"),
+                lv(e, "size_id"),
+                lv(e, "align_id"),
+                asp_id(e, "initial_bind"),
+                asp_id(e, "bind"),
+                asp_id(e, "set"),
+                asp_id(e, "field"),
+            ),
         ),
         body(
             e,
@@ -1411,7 +1455,7 @@ def _tuple_type(e, x):
                 "ea",
                 "eb",
                 ty(e),
-                e.if_only(e.not_(type_can_cast_from(e, xx(e), loc(e), e.v("ea"), e.v("eb"))), ret_m(e, dfalse(e))),
+                e.if_only(e.not_(type_can_convert(e, xx(e), loc(e), e.v("eb"), e.v("ea"))), ret_m(e, dfalse(e))),
             ),
             e.ret(e.not_(dfalse(e))),
         ),
@@ -1496,6 +1540,18 @@ def _tuple_type(e, x):
         )
     )
     x.append(e.impl_interface(e.v("lt_tuple"), t(e, "ltuple"), e.p("elems", in_(e, "elems"))))
+    aggregate_layout_impls(e, x, "lt_tuple", in_(e, "elems"))
+    # The zero tuple: llvm's aggregate constant.
+    x.append(
+        e.impl_interface(
+            e.v("lt_tuple"),
+            e.fld(e.v("values"), "zero_i"),
+            e.p(
+                "zero",
+                ok_cve(e, cv_of(e, code_none(e, a(e, "loc")), _lval_new(e, outer(e), e.s("zeroinitializer")))),
+            ),
+        )
+    )
     _initial_bind_impl(e, x, "lt_tuple")
     _bind_impl(e, x, "lt_tuple")
     _set_impl(e, x, "lt_tuple")
@@ -2016,7 +2072,7 @@ def module(e):
     x.append(e.let("meta", e.import_local("meta", meta.FILE)))
     x.append(e.let("values", e.import_local("values", values.FILE)))
     x.append(e.let("srcmap", e.import_local("srcmap", srcmap.FILE)))
-    for vid in ["size_id", "hash_id", "eq_id"]:
+    for vid in ["size_id", "align_id", "hash_id", "eq_id", "zero_id"]:
         x.append(e.let(vid, e.fld(e.v("values"), vid)))
     x.append(e.let("d", e.define()))
     x.append(e.option_type_let())
@@ -2358,6 +2414,7 @@ def module(e):
     )
     fn_throws(e, "h_operand", errs_t(e))
     _fn_def(e, x, "h_is_unit", e.rec(e.p("xx", xx_t(e)), e.p("cv", cve_t(e))), e.mb.types_bool())
+    _fn_def(e, x, "h_ssa_type", e.rec(e.p("xx", xx_t(e)), e.p("ty", ty(e))), ty(e))
     _fn_def(
         e,
         x,
@@ -2611,8 +2668,44 @@ def module(e):
             e.let("lk", lookup(e, xx(e), cve_type(e, a(e, "cv")), lt(e, "ltype"))),
             e.if_only(e.not_(e.fld(e.v("lk"), "is_some")), throw_err(e, loc(e), "not an llvm value")),
             e.let("st", im0(e, "ltype", "ssa", e.fld(e.v("lk"), "value"))),
-            e.let("c", unwrap_cve_t(e, cast_value(e, xx(e), loc(e), e.v("st"), a(e, "cv")))),
-            e.ret(hf_rec(e, "h_mat", e.p("loc", loc(e)), e.p("mod", a(e, "mod")), e.p("cv", e.v("c")))),
+            # The value viewed as its ssa type: the target's own view, not a conversion (an owned value refuses to be
+            # cast to its pointer, and keeps its ownership here: it comes back typed as itself).
+            e.let("c", retag_values(e, a(e, "cv"), e.v("st"))),
+            # The materialized value keeps the value's own type (a handle over the ssa type comes back a handle),
+            # less the slot wrappers of the bindings it was read through.
+            e.let("mv", hf_rec(e, "h_mat", e.p("loc", loc(e)), e.p("mod", a(e, "mod")), e.p("cv", e.v("c")))),
+            e.ret(
+                hf_rec(
+                    e,
+                    "h_retag",
+                    e.p("loc", loc(e)),
+                    e.p("mod", a(e, "mod")),
+                    e.p("cv", e.v("mv")),
+                    e.p("ty", hf_rec(e, "h_ssa_type", e.p("xx", xx(e)), e.p("ty", cve_type(e, a(e, "cv"))))),
+                )
+            ),
+        ),
+    )
+    fn_impl(
+        e,
+        x,
+        "h_ssa_type",
+        body(
+            e,
+            # The type an ssa value of `ty` keeps: `ty` without the parameter slots it was read through.
+            e.if_only(
+                has(e, a(e, "xx"), a(e, "ty"), "lslot"),
+                ret_m(
+                    e,
+                    hf_rec(
+                        e,
+                        "h_ssa_type",
+                        e.p("xx", a(e, "xx")),
+                        e.p("ty", acc(e, a(e, "xx"), a(e, "ty"), "lslot", "base")),
+                    ),
+                ),
+            ),
+            e.ret(a(e, "ty")),
         ),
     )
     fn_impl(
@@ -4823,9 +4916,11 @@ def module(e):
                 ),
             ),
             e.let("ended", cve_ended(e, e.v("r"))),
+            target_mb.loan_return_check(e, e.v("ctx"), e.v("loc"), e.v("r"), "llvm"),
             e.let("is_void", has(e, e.v("ctx"), e.v("fret"), "lvoid")),
+            # The body's result (its last value, or what its returns yielded) is cast to the declared result type.
             e.if_only(
-                and_b(e, e.not_(e.v("ended")), and_b(e, e.v("is_void"), _is_llvm(e, e.v("ctx"), e.v("r")))),
+                and_b(e, e.v("is_void"), _is_llvm(e, e.v("ctx"), e.v("r"))),
                 e.match_of(
                     e.eresult_err(e.mb.eval_value(), e.v("loc"), e.s("void function body yields a value")),
                     "__x",
@@ -4834,7 +4929,7 @@ def module(e):
                     e.p("errs", target_mb.panic_errs(e, "llvm", "compile failed", e.v("__x"))),
                 ),
             ),
-            e.let("need_cast", and_b(e, e.not_(e.v("ended")), e.not_(e.v("is_void")))),
+            e.let("need_cast", e.not_(e.v("is_void"))),
             e.let(
                 "v",
                 _must_v(
@@ -4998,9 +5093,9 @@ def module(e):
             e.ret(e.cat(e.s("@"), e.v("fname"))),
         ),
     )
-    _value_aspects(e, x, "lt_int", e.mb.operator_div(in_(e, "bits"), num(e, 8)), _int_hash_body(e))
-    _value_aspects(e, x, "lt_float", e.mb.operator_div(in_(e, "bits"), num(e, 8)), None)
-    _value_aspects(e, x, "lt_ptr", num(e, 8), _ptr_hash_body(e))
+    _value_aspects(e, x, "lt_int", e.mb.operator_div(in_(e, "bits"), num(e, 8)), _int_hash_body(e), "0")
+    _value_aspects(e, x, "lt_float", e.mb.operator_div(in_(e, "bits"), num(e, 8)), None, "0.0")
+    _value_aspects(e, x, "lt_ptr", num(e, 8), _ptr_hash_body(e), "null")
     self_type(
         e,
         x,
@@ -5011,6 +5106,8 @@ def module(e):
             asp_id(e, "initial_bind"),
             lv(e, "lint_id"),
             lv(e, "size_id"),
+            lv(e, "align_id"),
+            lv(e, "zero_id"),
             lv(e, "hash_id"),
             lv(e, "eq_id"),
             op_id(e, "add"),
@@ -5085,6 +5182,8 @@ def module(e):
                 ),
             ),
             e.let("sb", cv_bits(e, e.v("st"), "lint")),
+            # A source of this width (a type reading as this integer) is the same representation: retagged.
+            e.if_only(e.eq(e.v("sb"), in_(e, "bits")), ret_m(e, _retag(e, a(e, "cv"), outer(e)))),
             e.let(
                 "op",
                 e.if_else(
@@ -5132,8 +5231,8 @@ def module(e):
     op(e, x, "lt_int", "mul", try_er(e, _binop_body(e, e.s("mul")), cve_t(e)))
     op(e, x, "lt_int", "div", try_er(e, _binop_body(e, _signed_op(e, "sdiv", "udiv")), cve_t(e)))
     op(e, x, "lt_int", "mod", try_er(e, _binop_body(e, _signed_op(e, "srem", "urem")), cve_t(e)))
-    op(e, x, "lt_int", "and", try_er(e, _binop_body(e, e.s("and")), cve_t(e)))
-    op(e, x, "lt_int", "or", try_er(e, _binop_body(e, e.s("or")), cve_t(e)))
+    op(e, x, "lt_int", "and", short_circuit_body(e, "and", try_er(e, _binop_body(e, e.s("and")), cve_t(e))))
+    op(e, x, "lt_int", "or", short_circuit_body(e, "or", try_er(e, _binop_body(e, e.s("or")), cve_t(e))))
     op(e, x, "lt_int", "xor", try_er(e, _binop_body(e, e.s("xor")), cve_t(e)))
     op(e, x, "lt_int", "shl", try_er(e, _binop_body(e, e.s("shl")), cve_t(e)))
     op(e, x, "lt_int", "shr", try_er(e, _binop_body(e, _signed_op(e, "ashr", "lshr")), cve_t(e)))
@@ -5223,6 +5322,8 @@ def module(e):
             asp_id(e, "initial_bind"),
             lv(e, "lfloat_id"),
             lv(e, "size_id"),
+            lv(e, "align_id"),
+            lv(e, "zero_id"),
             lv(e, "eq_id"),
             op_id(e, "add"),
             op_id(e, "sub"),
@@ -5397,6 +5498,8 @@ def module(e):
             asp_id(e, "initial_bind"),
             lv(e, "lptr_id"),
             lv(e, "size_id"),
+            lv(e, "align_id"),
+            lv(e, "zero_id"),
             lv(e, "hash_id"),
             lv(e, "eq_id"),
             op_id(e, "eq"),
@@ -6135,7 +6238,7 @@ def module(e):
             push(e, e.v("out"), _store_inst(e, loc(e), _lval_of(e, e.v("v")), in_(e, "ptr"))),
             e.ret(ok_cve(e, cv_of(e, _code_of(e, e.v("out")), _lval_mem(e, outer(e), in_(e, "ptr"))))),
         ),
-        body(e, e.ret(type_can_cast_from(e, xx(e), loc(e), a(e, "dest_type"), in_(e, "base")))),
+        body(e, e.ret(type_can_convert(e, xx(e), loc(e), in_(e, "base"), a(e, "dest_type")))),
         body(
             e,
             e.let("r", _fresh(e, _xmod(e))),
@@ -7813,7 +7916,7 @@ def module(e):
         y.append(
             e.let(
                 spec.name,
-                _lty(
+                lty(
                     e,
                     "lt_int",
                     e.rec(
@@ -7827,32 +7930,32 @@ def module(e):
         )
     for bits in [32, 64]:
         exported.append("f" + str(bits))
-        y.append(e.let("f" + str(bits), _lty(e, "lt_float", e.rec(e.p("bits", e.int_of(bits))))))
+        y.append(e.let("f" + str(bits), lty(e, "lt_float", e.rec(e.p("bits", e.int_of(bits))))))
     exported.append("void")
-    y.append(e.let("void", _lty(e, "lt_void", e.tup())))
+    y.append(e.let("void", lty(e, "lt_void", e.tup())))
     exported.append("unit")
-    y.append(e.let("unit", _lty(e, "lunit", e.tup())))
+    y.append(e.let("unit", lty(e, "lunit", e.tup())))
     exported.append("loop")
-    y.append(e.let("loop", _lty(e, "lloop_t", e.tup())))
+    y.append(e.let("loop", lty(e, "lloop_t", e.tup())))
     exported.append("trap")
-    y.append(e.let("trap", _lty(e, "ltrap_t", e.tup())))
+    y.append(e.let("trap", lty(e, "ltrap_t", e.tup())))
     y.append(
         e.let(
             "null_t",
-            _lty(
+            lty(
                 e,
                 "lt_global",
-                e.rec(e.p("base", _lty(e, "lt_ptr", e.rec(e.p("pointee", e.v("void"))))), e.p("mem", e.b(False))),
+                e.rec(e.p("base", lty(e, "lt_ptr", e.rec(e.p("pointee", e.v("void"))))), e.p("mem", e.b(False))),
             ),
         )
     )
     y.append(
         e.let(
             "cstr_t",
-            _lty(
+            lty(
                 e,
                 "lt_global",
-                e.rec(e.p("base", _lty(e, "lt_ptr", e.rec(e.p("pointee", e.v("u8"))))), e.p("mem", e.b(False))),
+                e.rec(e.p("base", lty(e, "lt_ptr", e.rec(e.p("pointee", e.v("u8"))))), e.p("mem", e.b(False))),
             ),
         )
     )
@@ -7863,7 +7966,7 @@ def module(e):
             e.let(kind + "_o", e.call(e.fld(e.v("k"), "lgfn_t_new"), e.rec(e.p("kind", e.int_of(_lgfn_kind(kind))))))
         )
     exported.append("gref_t")
-    y.append(e.let("gref_t", _lty(e, "lt_gref", e.tup())))
+    y.append(e.let("gref_t", lty(e, "lt_gref", e.tup())))
     y.append(e.let("d", e.define()))
     y.append(e.let("gfn_d", e.define()))
     for kind in LGFN_KINDS:

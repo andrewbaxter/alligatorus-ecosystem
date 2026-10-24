@@ -9,11 +9,14 @@
   error, so the header cannot be desynchronized from the heap); `at(i)` is the element place (bounds-checked through
   slice.atz's `slice_idx`: an index out of range traps); `push(x)`, `clear()` are methods; `pop()` is `some` of the
   last element taken off the vec, or `none` when the vec is empty (option.atz); `slice()` is the slice (slice.atz)
-  of the current elements.
+  of the current elements; `insert(i, x)` puts `x` at `i` (0 to the length; the elements from `i` shift up) and
+  `remove(i)` takes element `i` out (the elements after it shift down) and yields it; `extend(s)` pushes the
+  elements of the slice `s` in order (elements without a destructor only: a slice's elements are not taken).
 - elements with a destructor (destructor.atz owned types): `push(x)` takes the value (an owned temporary or a
   `move()`), `at(i)` and the slice's elements are borrows (destructor.borrow: usable as the under type, assignable
-  with an owned value, which destroys the old one, never bindable), `pop()` yields the owned value (an empty vec
-  traps: check `len`), and `clear()` and the owned vec's drop destroy every element. `data` is the raw under
+  with an owned value, which destroys the old one, never bindable), `pop()` yields an owned option owning the
+  element (option.atz: matching a temporary moves it out), and `clear()` and the owned vec's drop destroy every
+  element. `data` is the raw under
   pointer: reading an element through it is the unsafe path.
 The methods and the helpers (`vec_<elem>_at`, `_push`, `_pop`, `_clear`, `_slice`, `_grow`, `_free`, `_new`) are
 dependencies (`func_dep`): a module gets each when its code first uses it, once. A method call is a call of its
@@ -26,11 +29,14 @@ from ..memory import destructor, readonly
 from ..core import values
 from ..eco_mb import p
 from ..target_mb import (
+    up,
+    tuple_elements,
+    fn_type_of,
     bool_t,
-    acc,
     has_b,
     a,
     alloc_or_trap,
+    bim,
     bim0,
     body,
     const_eval_in,
@@ -66,7 +72,7 @@ LEN_CELL = 2
 CAP_CELL = 3
 MIN_CAP = 4
 
-METHODS = ["at", "push", "pop", "clear", "slice"]
+METHODS = ["at", "push", "pop", "clear", "slice", "insert", "remove", "extend"]
 PLACES = ["len", "cap", "data"]
 # The largest byte size the 32-bit size arithmetic handles.
 MAX_BYTES = 2147483647
@@ -77,12 +83,6 @@ MAX_BYTES = 2147483647
 BODY_MOD = 2
 BODY_HOST = 1
 SETUP_MOD = 2
-
-
-def _up(e, expr, depth):
-    for _ in range(depth):
-        expr = e.lower(expr)
-    return expr
 
 
 class _Target:
@@ -127,52 +127,52 @@ class _Target:
     def null(self, e, depth):
         """The null pointer (in target code)."""
         if self.kind == WASM:
-            return e.mb.as_(e.n(0), _up(e, e.v("pv"), depth))
-        return _up(e, e.v("null_v"), BODY_HOST)
+            return e.mb.as_(e.n(0), up(e, e.v("pv"), depth))
+        return up(e, e.v("null_v"), BODY_HOST)
 
     def size(self, e, n, depth):
         """`n` (i32) as the allocator's size argument."""
         if self.kind == WASM:
             return n
-        return int_as(e, n, _up(e, e.fld(e.v("lib"), "u64"), depth))
+        return int_as(e, n, up(e, e.fld(e.v("lib"), "u64"), depth))
 
     def trap(self, e, depth):
         """A trap statement in target code: the target's trap, a callable type, called through its function value."""
-        return e.call(fn_of(e, _up(e, e.fld(e.v("lib"), "trap"), depth)), e.tup())
+        return e.call(fn_of(e, up(e, e.fld(e.v("lib"), "trap"), depth)), e.tup())
 
     def addr_int(self, e, depth):
         """The address-sized integer type (module let)."""
-        return _up(e, e.v("i32" if self.kind == WASM else "i64"), depth)
+        return up(e, e.v("i32" if self.kind == WASM else "i64"), depth)
 
     def loop(self, e, depth):
         """An infinite loop value, made in the body from the lowered intrinsic type."""
         if self.kind == WASM:
-            return e.call(_up(e, e.fld(e.v("lib"), "loop_fn"), depth), e.rec())
+            return e.call(up(e, e.fld(e.v("lib"), "loop_fn"), depth), e.rec())
         return e.call(
-            _up(e, e.fld(e.v("lib"), "ref_fn"), depth),
-            e.rec(p("ref", e.s("loop")), p("ty", _up(e, e.fld(e.v("lib"), "loop"), depth))),
+            up(e, e.fld(e.v("lib"), "ref_fn"), depth),
+            e.rec(p("ref", e.s("loop")), p("ty", up(e, e.fld(e.v("lib"), "loop"), depth))),
         )
 
     def malloc(self, e, n, depth):
         """`n` bytes from the heap, or a trap when the allocation fails."""
         return alloc_or_trap(
             e,
-            e.call(_up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth)),
-            _up(e, e.v("ptr_to_int"), depth),
+            e.call(up(e, e.fld(e.v("heap"), "malloc"), depth), self.size(e, n, depth)),
+            up(e, e.v("ptr_to_int"), depth),
             self.addr_int(e, depth),
             self.trap(e, depth),
         )
 
     def free(self, e, ptr, depth):
-        return e.call(_up(e, e.fld(e.v("heap"), "free"), depth), ptr)
+        return e.call(up(e, e.fld(e.v("heap"), "free"), depth), ptr)
 
     def elem_ptr(self, e, base, idx, size, ptr_type, i32, depth):
         """The address of element `idx` of the array at `base` (a `ptr(elem)`), as `ptr_type`."""
         if self.kind == WASM:
             return conv(
                 e,
-                _up(e, e.v("int_to_ptr"), depth),
-                e.mb.operator_add(conv(e, _up(e, e.v("ptr_to_int"), depth), base, i32), e.mb.operator_mul(idx, size)),
+                up(e, e.v("int_to_ptr"), depth),
+                e.mb.operator_add(conv(e, up(e, e.v("ptr_to_int"), depth), base, i32), e.mb.operator_mul(idx, size)),
                 ptr_type,
             )
         return e.mb.operator_add(base, idx)
@@ -180,21 +180,21 @@ class _Target:
     def copy(self, e, dst, src, n, depth):
         """Copies `n` bytes; a statement. The wasm intrinsic is instantiated in the body (only its type is lowered)."""
         if self.kind == WASM:
-            return e.call(e.call(_up(e, e.fld(e.v("lib"), "memory_copy_fn"), depth), e.rec()), e.tup(dst, src, n))
-        return e.call(_up(e, e.fld(e.v("heap"), "memcpy"), depth), e.tup(dst, src, self.size(e, n, depth)))
+            return e.call(e.call(up(e, e.fld(e.v("lib"), "memory_copy_fn"), depth), e.rec()), e.tup(dst, src, n))
+        return e.call(up(e, e.fld(e.v("heap"), "memcpy"), depth), e.tup(dst, src, self.size(e, n, depth)))
 
 
 def _cell(e, h, index, depth):
     """Header cell `index` (i32) of the vec whose header is `h`."""
     return e.mb.field(
-        conv(e, _up(e, e.v("ptr_cast"), depth), e.mb.as_(h, _up(e, e.v("pv"), depth)), _up(e, e.v("pi32"), depth)),
+        conv(e, up(e, e.v("ptr_cast"), depth), e.mb.as_(h, up(e, e.v("pv"), depth)), up(e, e.v("pi32"), depth)),
         e.n(index),
     )
 
 
 def _data_cell(e, h, depth):
     return e.mb.field(
-        conv(e, _up(e, e.v("ptr_cast"), depth), e.mb.as_(h, _up(e, e.v("pv"), depth)), _up(e, e.v("ppv"), depth)),
+        conv(e, up(e, e.v("ptr_cast"), depth), e.mb.as_(h, up(e, e.v("pv"), depth)), up(e, e.v("ppv"), depth)),
         e.n(0),
     )
 
@@ -202,7 +202,7 @@ def _data_cell(e, h, depth):
 def _grow_body(e, tg):
     """grow(v, min_cap): reallocate the data to hold at least min_cap elements (doubling)."""
     d = BODY_MOD
-    size = _up(e, e.v("elem_size"), BODY_HOST)
+    size = up(e, e.v("elem_size"), BODY_HOST)
     return e.seq(
         e.let("old_cap", _cell(e, e.v("v"), CAP_CELL, d)),
         e.let("doubled", e.mb.operator_mul(e.v("old_cap"), e.n(2))),
@@ -212,7 +212,7 @@ def _grow_body(e, tg):
         ),
         e.let("cap", e.if_else(e.mb.operator_gt(e.v("cap1"), e.n(MIN_CAP)), e.v("cap1"), e.n(MIN_CAP))),
         # The byte size must fit the (signed 32-bit) size arithmetic: a capacity past that traps.
-        e.if_only(e.mb.operator_gt(e.v("cap"), _up(e, e.v("max_cap"), BODY_HOST)), tg.trap(e, d)),
+        e.if_only(e.mb.operator_gt(e.v("cap"), up(e, e.v("max_cap"), BODY_HOST)), tg.trap(e, d)),
         e.let("fresh", tg.malloc(e, e.mb.operator_mul(e.v("cap"), size), d)),
         e.let("old", _data_cell(e, e.v("v"), d)),
         e.if_only(
@@ -252,12 +252,12 @@ def _new_body(e, tg):
 def _data(e, v, dm=BODY_MOD, dh=BODY_HOST):
     """The data pointer of the vec `v`, as `ptr(elem)` (in a dependency body staged `dm` below the module and `dh`
     below its host locals)."""
-    return conv(e, _up(e, e.v("ptr_cast"), dh), _data_cell(e, v, dm), _up(e, e.v("pelem"), dh))
+    return conv(e, up(e, e.v("ptr_cast"), dh), _data_cell(e, v, dm), up(e, e.v("pelem"), dh))
 
 
 def _dep_fn(e, name, *args, dh=BODY_HOST):
     """A call of the dependency `name` (a host local, a callable type) in a dependency body."""
-    return e.call(fn_of(e, _up(e, e.v(name), dh)), args[0] if len(args) == 1 else e.tup(*args))
+    return e.call(fn_of(e, up(e, e.v(name), dh)), args[0] if len(args) == 1 else e.tup(*args))
 
 
 def _at_body(e, tg, dm, dh):
@@ -267,17 +267,17 @@ def _at_body(e, tg, dm, dh):
         e.ret(
             conv(
                 e,
-                _up(e, e.v("ptr_cast"), dh),
+                up(e, e.v("ptr_cast"), dh),
                 tg.elem_ptr(
                     e,
                     _data(e, e.v("v"), dm, dh),
                     _dep_fn(e, "slice_idx", e.v("i"), _cell(e, e.v("v"), LEN_CELL, dm), dh=dh),
-                    _up(e, e.v("elem_size"), dh),
-                    _up(e, e.v("pelem"), dh),
-                    _up(e, e.v("i32"), dh),
+                    up(e, e.v("elem_size"), dh),
+                    up(e, e.v("pelem"), dh),
+                    up(e, e.v("i32"), dh),
                     dh,
                 ),
-                _up(e, e.v("pref"), dh),
+                up(e, e.v("pref"), dh),
             )
         )
     )
@@ -300,20 +300,14 @@ def _push_body(e, tg):
 
     # The variant is chosen inside the staged body by the constant condition (one staged body).
     return e.stage(
-        e.if_else(
-            _up(e, e.v("elem_drops"), BODY_HOST), body(e.call(e.fld(e.v("x"), "forget"), e.tup())), body(e.v("x"))
-        )
+        e.if_else(up(e, e.v("elem_drops"), BODY_HOST), body(e.call(e.fld(e.v("x"), "forget"), e.tup())), body(e.v("x")))
     )
 
 
 def _pop_body(e, tg, dm, dh):
-    """pop(v) -> option: `some` of the last element (taken off the vec), or `none` of an empty vec. The tag is
-    computed before the payload, so it sees the length before the decrement; a block yields a value only through a
-    return."""
-
-    def has_elem():
-        return e.not_(e.eq(_cell(e, e.v("v"), LEN_CELL, dm), e.n(0)))
-
+    """pop(v) -> option: `some` of the last element (taken off the vec; an element with a destructor is adopted
+    back into an owned value, which the option then owns), or `none` of an empty vec. A block yields a value only
+    through a return."""
     last = e.mb.labeled(
         "pop",
         e.seq(
@@ -323,24 +317,115 @@ def _pop_body(e, tg, dm, dh):
     )
     return e.seq(
         e.ret(
-            _dep_fn(
-                e,
-                "opt_of_t",
-                e.mb.as_(has_elem(), _up(e, e.v("i32"), dh)),
-                e.if_else(has_elem(), last, e.mb.as_(e.n(0), _up(e, e.v("elem"), dh))),
-                dh=dh,
+            e.if_else(
+                e.eq(_cell(e, e.v("v"), LEN_CELL, dm), e.n(0)),
+                _dep_fn(e, "opt_none_t", e.tup(), dh=dh),
+                _dep_fn(e, "opt_some_t", e.mb.as_(last, up(e, e.v("elem_own"), dh)), dh=dh),
             )
         )
     )
 
 
-def _pop_owned_body(e, tg, dm, dh):
-    """pop(v) -> elem_raw (elements with a destructor): the last element, taken off the vec, as its under value;
-    the method adopts it into an owned value again (`as own`). An empty vec traps (check `len`)."""
+def _stored(e, x):
+    """The value stored for the parameter `x`: an element with a destructor is taken out of its parameter (`forget`
+    marks the binding moved: the vec owns it now) and stored as its under value."""
+    return e.if_else(up(e, e.v("elem_drops"), BODY_HOST), e.call(e.fld(x, "forget"), e.tup()), x)
+
+
+def _shift(e, tg, d, label, start, stop, step):
+    """A loop over `__j` from `start` while `stop(__j)` is false, running `step(__j)`."""
     return e.seq(
-        e.if_only(e.eq(_cell(e, e.v("v"), LEN_CELL, dm), e.n(0)), tg.trap(e, dm)),
-        e.mb.set(_cell(e, e.v("v"), LEN_CELL, dm), e.mb.operator_sub(_cell(e, e.v("v"), LEN_CELL, dm), e.n(1))),
-        e.ret(e.mb.field(_data(e, e.v("v"), dm, dh), _cell(e, e.v("v"), LEN_CELL, dm))),
+        e.let("__j", start),
+        e.mb.labeled(
+            label,
+            e.foreach(
+                tg.loop(e, d),
+                "_",
+                e.seq(e.if_only(stop(e.v("__j")), e.mb.return_label(label)), step(e.v("__j"))),
+            ),
+        ),
+    )
+
+
+def _insert_body(e, tg):
+    """insert(v, i, x): `i` past the length traps; grow when full, shift the elements from `i` up, store at `i`."""
+    d = BODY_MOD
+    len_ = _cell(e, e.v("v"), LEN_CELL, d)
+
+    def at(j):
+        return e.mb.field(_data(e, e.v("v")), j)
+
+    return e.seq(
+        e.if_only(e.mb.operator_lt(e.v("i"), e.n(0)), tg.trap(e, d)),
+        e.if_only(e.mb.operator_gt(e.v("i"), len_), tg.trap(e, d)),
+        e.if_only(
+            e.eq(len_, _cell(e, e.v("v"), CAP_CELL, d)),
+            _dep_fn(e, "grow", e.v("v"), e.mb.operator_add(len_, e.n(1))),
+        ),
+        _shift(
+            e,
+            tg,
+            d,
+            "up",
+            len_,
+            lambda j: e.not_(e.mb.operator_gt(j, e.v("i"))),
+            lambda j: e.seq(
+                e.mb.set(at(j), at(e.mb.operator_sub(j, e.n(1)))), e.mb.set(j, e.mb.operator_sub(j, e.n(1)))
+            ),
+        ),
+        e.mb.set(at(e.v("i")), _stored(e, e.v("x"))),
+        e.mb.set(len_, e.mb.operator_add(len_, e.n(1))),
+    )
+
+
+def _remove_body(e, tg):
+    """remove(v, i) -> elem: `i` out of range traps; the element taken out (an element with a destructor adopted
+    back into an owned value), the elements after it shifted down."""
+    d = BODY_MOD
+    len_ = _cell(e, e.v("v"), LEN_CELL, d)
+
+    def at(j):
+        return e.mb.field(_data(e, e.v("v")), j)
+
+    return e.seq(
+        e.if_only(e.mb.operator_lt(e.v("i"), e.n(0)), tg.trap(e, d)),
+        e.if_only(e.not_(e.mb.operator_lt(e.v("i"), len_)), tg.trap(e, d)),
+        e.let("__t", at(e.v("i"))),
+        _shift(
+            e,
+            tg,
+            d,
+            "down",
+            e.v("i"),
+            lambda j: e.not_(e.mb.operator_lt(j, e.mb.operator_sub(len_, e.n(1)))),
+            lambda j: e.seq(
+                e.mb.set(at(j), at(e.mb.operator_add(j, e.n(1)))), e.mb.set(j, e.mb.operator_add(j, e.n(1)))
+            ),
+        ),
+        e.mb.set(len_, e.mb.operator_sub(len_, e.n(1))),
+        e.ret(
+            e.if_else(
+                up(e, e.v("elem_drops"), BODY_HOST),
+                e.mb.as_(e.v("__t"), up(e, e.v("elem_own"), BODY_HOST)),
+                e.v("__t"),
+            )
+        ),
+    )
+
+
+def _extend_body(e, tg, dm, dh):
+    """extend(v, s): pushes the slice's elements in order."""
+    return _shift(
+        e,
+        tg,
+        dm,
+        "ext",
+        e.mb.as_(e.n(0), up(e, e.v("i32"), dh)),
+        lambda j: e.not_(e.mb.operator_lt(j, e.fld(e.v("s"), "len"))),
+        lambda j: e.seq(
+            _dep_fn(e, "m_push", e.v("v"), e.call(e.fld(e.v("s"), "at"), j), dh=dh),
+            e.mb.set(j, e.mb.operator_add(j, e.n(1))),
+        ),
     )
 
 
@@ -348,7 +433,7 @@ def _drop_elems(e, tg, d, dh):
     """A statement dropping every element (elements with a destructor): each is taken as an owned value into a
     binding whose drop destroys it."""
     return e.seq(
-        e.let("__i", e.mb.as_(e.n(0), _up(e, e.v("i32"), dh))),
+        e.let("__i", e.mb.as_(e.n(0), up(e, e.v("i32"), dh))),
         e.mb.labeled(
             "dr",
             e.foreach(
@@ -361,7 +446,7 @@ def _drop_elems(e, tg, d, dh):
                     e.seq(
                         e.let(
                             "__o",
-                            e.mb.as_(e.mb.field(_data(e, e.v("v"), d, dh), e.v("__i")), _up(e, e.v("elem_own"), dh)),
+                            e.mb.as_(e.mb.field(_data(e, e.v("v"), d, dh), e.v("__i")), up(e, e.v("elem_own"), dh)),
                         )
                     ),
                     e.mb.set(e.v("__i"), e.mb.operator_add(e.v("__i"), e.n(1))),
@@ -376,9 +461,7 @@ def _clear_body(e, tg):
     d = BODY_MOD
     emptied = e.mb.set(_cell(e, e.v("v"), LEN_CELL, d), e.n(0))
     return e.stage(
-        e.if_else(
-            _up(e, e.v("elem_drops"), BODY_HOST), e.seq(_drop_elems(e, tg, d, BODY_HOST), emptied), e.seq(emptied)
-        )
+        e.if_else(up(e, e.v("elem_drops"), BODY_HOST), e.seq(_drop_elems(e, tg, d, BODY_HOST), emptied), e.seq(emptied))
     )
 
 
@@ -388,10 +471,10 @@ def _slice_body(e, tg, dm, dh):
         e.ret(
             e.mb.as_(
                 e.tup(
-                    conv(e, _up(e, e.v("ptr_cast"), dh), _data(e, e.v("v"), dm, dh), _up(e, e.v("pref"), dh)),
+                    conv(e, up(e, e.v("ptr_cast"), dh), _data(e, e.v("v"), dm, dh), up(e, e.v("pref"), dh)),
                     _cell(e, e.v("v"), LEN_CELL, dm),
                 ),
-                _up(e, e.v("slice_of"), dh),
+                up(e, e.v("slice_of"), dh),
             )
         )
     )
@@ -404,6 +487,8 @@ HOST_DEPS = [
     ("grow", "grow", "grow_t", ("v", "min_cap"), _grow_body),
     ("new", "new", "new_t", (), _new_body),
     ("m_push", "push", "push_t", ("v", "x"), _push_body),
+    ("m_insert", "insert", "insert_t", ("v", "i", "x"), _insert_body),
+    ("m_remove", "remove", "remove_t", ("v", "i"), _remove_body),
     ("m_clear", "clear", "free_t", ("v",), _clear_body),
     ("free_vec", "free", "free_t", ("v",), _free_body),
 ]
@@ -414,10 +499,9 @@ SETUP_DEPS = [
     ("m_at", "at", ("v", "i"), _at_body, lambda e, fn_t: fn_t([e.v("pv"), e.v("i32")], e.v("pref"))),
     ("m_pop", "pop", ("v",), _pop_body, lambda e, fn_t: fn_t([e.v("pv")], e.v("opt_t"))),
     ("m_slice", "slice", ("v",), _slice_body, lambda e, fn_t: fn_t([e.v("pv")], e.v("slice_t"))),
+    ("m_extend", "extend", ("v", "s"), _extend_body, lambda e, fn_t: fn_t([e.v("pv"), e.v("slice_t")], e.v("void"))),
 ]
-# pop's variant for elements with a destructor.
-POP_OWNED = ("m_pop", "pop", ("v",), _pop_owned_body, lambda e, fn_t: fn_t([e.v("pv")], e.v("elem_raw")))
-HOST_FN_TYPES = ["push_t"]
+HOST_FN_TYPES = ["push_t", "insert_t", "remove_t"]
 # What the vec type carries: the element and pointer types, the slice and option types of its elements, and its
 # method dependencies.
 FIELDS = [
@@ -438,6 +522,9 @@ FIELDS = [
     "m_pop",
     "m_clear",
     "m_slice",
+    "m_insert",
+    "m_remove",
+    "m_extend",
 ]
 
 
@@ -481,7 +568,7 @@ def _host_types(e, out):
     # The largest capacity whose byte size the 32-bit size arithmetic handles.
     out.append(e.let("max_cap", e.mb.operator_div(e.int_of(MAX_BYTES), e.v("elem_size"))))
     # Elements with a destructor are stored as their under type (`elem_raw`); `at` and `slice` hand out borrows
-    # (`elem_ref`), and `pop` adopts a stored value back into an owned one (`elem_own`).
+    # (`elem_ref`), and `pop` adopts a stored value back into an owned one (`elem_own`) that its option owns.
     out.append(e.let("elem_drops", has_b(e, xx(e), e.v("elem"), e.mb.eval_aspect_drop_dynamic())))
     out.append(e.let("owned_m", e.lower(e.fld(e.v("destructor"), "owned_m"))))
     out.append(
@@ -508,18 +595,12 @@ def _host_types(e, out):
     )
     out.append(e.let("pelem", e.call(e.lower(e.fld(e.v("lib"), "ptr")), e.v("elem_raw"))))
     out.append(e.let("pref", e.call(e.lower(e.fld(e.v("lib"), "ptr")), e.v("elem_ref"))))
-    out.append(
-        e.let(
-            "push_t",
-            e.call(
-                e.lower(e.fld(e.v("lib"), "fn")),
-                e.rec(
-                    p("params", e.list_new(e.mb.eval_type(), e.lower(e.v("pv")), e.v("elem"))),
-                    p("ret", e.lower(e.v("void"))),
-                ),
-            ),
-        )
-    )
+    for name, params, ret in [
+        ("push_t", [e.lower(e.v("pv")), e.v("elem")], e.lower(e.v("void"))),
+        ("insert_t", [e.lower(e.v("pv")), e.v("i32"), e.v("elem")], e.lower(e.v("void"))),
+        ("remove_t", [e.lower(e.v("pv")), e.v("i32")], e.v("elem")),
+    ]:
+        out.append(e.let(name, fn_type_of(e, e.lower(e.v("lib")), params, ret)))
 
 
 def _setup(e, tg):
@@ -539,51 +620,41 @@ def _setup(e, tg):
         "free_vec",
         "new",
         "m_push",
+        "m_insert",
+        "m_remove",
         "m_clear",
     ]:
         out.append(e.let(name, e.lower(e.v(name))))
-    for name in ["pv", "pi32", "ppv", "i32", "ptr_cast", "ptr_to_int", "int_to_ptr"]:
-        out.append(e.let(name, _up(e, e.v(name), SETUP_MOD)))
-    out.append(e.let("sl", e.call(_up(e, e.fld(e.v("slice"), "type"), SETUP_MOD), e.v("elem_ref"))))
+    for name in ["pv", "pi32", "ppv", "i32", "void", "ptr_cast", "ptr_to_int", "int_to_ptr"]:
+        out.append(e.let(name, up(e, e.v(name), SETUP_MOD)))
+    out.append(e.let("sl", e.call(up(e, e.fld(e.v("slice"), "type"), SETUP_MOD), e.v("elem_ref"))))
     out.append(e.let("slice_t", e.fld(e.v("sl"), "type")))
     out.append(e.let("slice_of", e.fld(e.v("sl"), "of")))
     out.append(e.let("slice_idx", e.fld(e.v("sl"), "idx")))
-    # Options hold plain values: elements with a destructor get `pop` as the owned value instead (the option type
-    # here is unused then).
-    out.append(
-        e.let(
-            "opt",
-            e.call(
-                _up(e, e.fld(e.v("option"), "type"), SETUP_MOD),
-                e.if_else(e.v("elem_drops"), e.v("i32"), e.v("elem")),
-            ),
-        )
-    )
+    # The option `pop` yields: an owned option (owning the popped element) when the elements have a destructor.
+    out.append(e.let("opt", e.call(up(e, e.fld(e.v("option"), "type"), SETUP_MOD), e.v("elem"))))
     out.append(e.let("opt_t", e.fld(e.v("opt"), "type")))
-    out.append(e.let("opt_of_t", e.fld(e.v("opt"), "of_t")))
+    out.append(e.let("opt_some_t", e.fld(e.v("opt"), "some_t")))
+    out.append(e.let("opt_none_t", e.fld(e.v("opt"), "none_t")))
     # The places' types: read-only, so a user cannot desynchronize the length, capacity and data.
     for name, under in [("ro_i32", "i32"), ("ro_pelem", "pelem")]:  # pelem: the raw (under) element pointer
-        out.append(e.let(name, e.call(_up(e, e.fld(e.v("readonly"), "type"), SETUP_MOD), e.v(under))))
+        out.append(e.let(name, e.call(up(e, e.fld(e.v("readonly"), "type"), SETUP_MOD), e.v(under))))
 
     def fn_t(params, ret):
         return e.call(
-            _up(e, e.fld(e.v("lib"), "fn"), SETUP_MOD),
+            up(e, e.fld(e.v("lib"), "fn"), SETUP_MOD),
             e.rec(p("params", e.list_new(e.mb.eval_type(), *params)), p("ret", ret)),
         )
 
     for fn, suffix, params, fbody, make_t in SETUP_DEPS:
         ty_ = make_t(e, fn_t)
         body_ = fbody(e, tg, SETUP_MOD + 1, 1)
-        if fn == POP_OWNED[0]:
-            # pop's type and body for elements with a destructor; the variant is chosen by the constant condition.
-            ty_ = e.if_else(e.v("elem_drops"), POP_OWNED[4](e, fn_t), ty_)
-            body_ = e.if_else(e.lower(e.v("elem_drops")), POP_OWNED[3](e, tg, SETUP_MOD + 1, 1), body_)
         out.append(
             e.let(
                 fn,
                 _func_dep(
                     e,
-                    _up(e, e.fld(e.v("lib"), "func_dep"), SETUP_MOD),
+                    up(e, e.fld(e.v("lib"), "func_dep"), SETUP_MOD),
                     e.cat(e.v("name"), e.s("_" + suffix)),
                     params,
                     ty_,
@@ -595,7 +666,7 @@ def _setup(e, tg):
         e.let(
             "raw",
             e.mb.as_(
-                e.call(_up(e, e.fld(e.v("vt"), "new"), SETUP_MOD), e.rec(*[p(f, e.v(f)) for f in FIELDS])),
+                e.call(up(e, e.fld(e.v("vt"), "new"), SETUP_MOD), e.rec(*[p(f, e.v(f)) for f in FIELDS])),
                 e.mb.eval_type(),
             ),
         )
@@ -604,8 +675,8 @@ def _setup(e, tg):
         e.let(
             "owned_r",
             e.call(
-                e.fld(_up(e, e.v("destructor"), SETUP_MOD), "type"),
-                e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free_vec")))),
+                e.fld(up(e, e.v("destructor"), SETUP_MOD), "owning"),
+                e.rec(p("under", e.v("raw")), p("destroy", fn_of(e, e.v("free_vec"))), p("new", e.v("new"))),
             ),
         )
     )
@@ -615,7 +686,7 @@ def _setup(e, tg):
                 p("type", e.fld(e.v("owned_r"), "type")),
                 p("own", e.fld(e.v("owned_r"), "own")),
                 p("raw", e.v("raw")),
-                p("new", fn_of(e, e.v("new"))),
+                p("new", e.fld(e.v("owned_r"), "new")),
             )
         )
     )
@@ -655,18 +726,42 @@ def _vt(e, x):
     def method_body(kind):
         if kind == "at":
             return e.mb.field(e.call(dep(kind), e.tup(self_v(e), graft(e, a(e, "argument")))), e.n(0))
-        if kind == "push":
+        if kind in ("push", "extend"):
             return e.call(dep(kind), e.tup(self_v(e), graft(e, a(e, "argument"))))
-        if kind == "pop":
-            # Elements with a destructor come back as their under value and are adopted into owned values here.
-            return e.if_else(
-                e.lower(e.v("elem_drops")),
-                e.mb.as_(e.call(dep(kind), self_v(e)), e.lower(e.v("elem_own"))),
-                e.call(dep(kind), self_v(e)),
+        if kind == "insert":
+            return e.call(
+                dep(kind),
+                e.tup(
+                    self_v(e),
+                    graft(e, e.call_m(e.v("__ins"), "get", e.int_of(0))),
+                    graft(e, e.call_m(e.v("__ins"), "get", e.int_of(1))),
+                ),
             )
+        if kind == "remove":
+            return e.call(dep(kind), e.tup(self_v(e), graft(e, a(e, "argument"))))
         return e.call(dep(kind), self_v(e))
 
-    handle_methods(e, x, meth, "vt_m", fields, METHODS, method_body)
+    handle_methods(
+        e,
+        x,
+        meth,
+        "vt_m",
+        fields,
+        METHODS,
+        method_body,
+        kind_prelude={
+            "insert": tuple_elements(e, "vec: insert takes (index, value)", a(e, "argument"), "__ins", 2),
+            "extend": [
+                e.if_only(
+                    e.v("elem_drops"),
+                    ret_m(
+                        e,
+                        err_cve(e, loc(e), "vec: extend copies a slice's elements: not for elements with a destructor"),
+                    ),
+                )
+            ],
+        },
+    )
 
 
 def size_of(e, label, type_expr, bind):
@@ -680,7 +775,27 @@ def size_of(e, label, type_expr, bind):
                 err_cve(e, loc(e), e.cat(e.s(label + ": type "), ty_desc(e, type_expr), e.s(" has no size aspect"))),
             ),
         ),
-        e.let(bind, bim0(e, e.lower(e.fld(e.v("values"), "size_i")), "size", e.fld(e.v(bind + "_sk"), "value"))),
+        e.let(bind, bim(e, e.lower(e.fld(e.v("values"), "size_i")), "size", e.fld(e.v(bind + "_sk"), "value"), xx(e))),
+    ]
+
+
+def align_of(e, label, type_expr, bind):
+    """Binds `bind` to the alignment of `type_expr` from values.atz's align aspect, else errors out."""
+    return [
+        e.let(bind + "_ak", lookup(e, xx(e), type_expr, e.lower(e.fld(e.v("values"), "align_i")))),
+        e.if_only(
+            e.not_(e.fld(e.v(bind + "_ak"), "is_some")),
+            ret_m(
+                e,
+                err_cve(
+                    e, loc(e), e.cat(e.s(label + ": type "), ty_desc(e, type_expr), e.s(" has no alignment aspect"))
+                ),
+            ),
+        ),
+        e.let(
+            bind,
+            bim(e, e.lower(e.fld(e.v("values"), "align_i")), "align", e.fld(e.v(bind + "_ak"), "value"), xx(e)),
+        ),
     ]
 
 

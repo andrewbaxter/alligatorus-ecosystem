@@ -1,6 +1,7 @@
 """hello-web.atz: wasm web app appending an <h1> to the document via the WebIDL hooks. Its handles (window, document,
-the h1, the body read from the out cell and wrapped) are owned and released when `_start` returns."""
+the h1, the body matched out of its option) are owned and released when `_start` returns."""
 
+from ..target_mb import fn_of
 from ..wasm.wat import bind_types
 
 TAG = "h1"
@@ -39,27 +40,11 @@ def module(e):
     top.append(e.let("m", e.fld(e.v("k"), "m")))
     top.append(e.let("tag", e.call_m(e.v("m"), "cstr", e.s(TAG))))
     top.append(e.let("text", e.call_m(e.v("m"), "cstr", e.s(MESSAGE))))
-    top.append(
-        e.let(
-            "cell",
-            e.call(
-                e.fld(e.v("wasm"), "data_fn"),
-                e.rec(
-                    e.p("mod", e.v("m")),
-                    e.p("name", e.s("cell")),
-                    e.p("elem", e.fld(e.v("k"), "t_i32")),
-                    e.p("values", e.tup(e.n(0), e.n(0))),
-                ),
-            ),
-        )
-    )
     top.append(e.let("document", _hook(e, "get", "Window", "document")))
     top.append(e.let("create", _hook(e, "op", "Document", "createElement")))
     top.append(e.let("set_text", _hook(e, "set", "Node", "textContent")))
     top.append(e.let("body", _hook(e, "get", "Document", "body")))
     top.append(e.let("append", _hook(e, "op", "Node", "appendChild")))
-    # The body handle read from the out cell is adopted as what `Document.body` returns.
-    top.append(e.let("body_h", e.call(e.fld(e.v("webidl"), "handle"), e.s("HTMLElement"))))
     top.append(
         e.let(
             "start",
@@ -87,15 +72,14 @@ def module(e):
                                     e.lower(e.v("set_text")),
                                     e.tup(e.v("h1"), e.n(1), e.lower(e.v("text")), _len(e, MESSAGE)),
                                 ),
-                                e.call(e.lower(e.v("body")), e.tup(e.v("doc"), e.lower(e.v("cell")))),
-                                e.let(
+                                # `Document.body` is nullable: its option is matched (a document without one traps).
+                                e.match_of(
+                                    e.call(e.lower(e.v("body")), e.v("doc")),
                                     "b",
-                                    e.mb.as_(
-                                        e.mb.field(e.lower(e.v("cell")), e.n(1)),
-                                        e.lower(e.fld(e.v("body_h"), "own")),
-                                    ),
+                                    None,
+                                    e.p("some", e.call(e.lower(e.v("append")), e.tup(e.v("b"), e.v("h1")))),
+                                    e.p("none", e.call(fn_of(e, e.lower(e.fld(e.v("wasm"), "trap"))), e.tup())),
                                 ),
-                                e.call(e.lower(e.v("append")), e.tup(e.v("b"), e.v("h1"))),
                             )
                         ),
                     ),

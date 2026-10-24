@@ -9,6 +9,7 @@ constants) only.
 from .. import target_mb as tm
 from ..core import values
 from ..target_mb import (
+    lty,
     a,
     acc,
     accessor,
@@ -110,7 +111,7 @@ TARGET = "glsl"
 
 KINDS = ["float", "int", "uint", "bool"]
 
-GGFN_KINDS = ["func_fn", "export_fn", "in_fn", "out_fn", "uniform_block_fn", "gl_fn"]
+GGFN_KINDS = ["func_fn", "export_fn", "in_fn", "out_fn", "uniform_block_fn", "gl_fn", "uniform_fn"]
 
 GL_VARS = [
     ["gl_Position", "float", "4"],
@@ -197,6 +198,8 @@ BUILTINS = [
     ["dFdx", "G G"],
     ["dFdy", "G G"],
     ["fwidth", "G G"],
+    ["texture", "F4 S F2"],
+    ["textureLod", "F4 S F2 F"],
 ]
 
 
@@ -874,7 +877,7 @@ def _conv_methods(e, x):
             return e.eq(k, e.s("float"))
         return kind_in(k, "int", "uint", "float")
 
-    tm.method_fields(e, x, "gt_scalar", "gconv", ["wrap", "trunc", "to_float"], when=when)
+    tm.method_fields(e, x, "gt_scalar", [("gconv", ["wrap", "trunc", "to_float"])], when=when)
 
 
 def _vec_ir(e, kind, n):
@@ -1356,6 +1359,22 @@ def _def_types(e, x):
     )
     x.append(e.impl_interface(e.v("gt_void"), t(e, "gtype"), e.p("ir", e.s("void"))))
     x.append(e.impl_interface(e.v("gt_void"), t(e, "gvoid")))
+
+    # `sampler2D`: an opaque handle, declared only as a uniform (`uniform_fn`) and passed to `texture`.
+    self_type(
+        e,
+        x,
+        "gt_sampler",
+        e.s("sampler2D"),
+        e.aspect_dispatch(lv(e, "gtype_id"), lv(e, "gsampler_id")),
+        body(e, e.ret(is_equal(e, xx(e), outer(e), src_type(e)))),
+        cast_from_self(e),
+        no_cast_to(e),
+        cast_to_panic(e),
+        body(e, e.ret(has(e, xx(e), a(e, "other"), "gsampler"))),
+    )
+    x.append(e.impl_interface(e.v("gt_sampler"), t(e, "gtype"), e.p("ir", e.s("sampler2D"))))
+    x.append(e.impl_interface(e.v("gt_sampler"), t(e, "gsampler")))
 
 
 def _def_refs(e, x):
@@ -2344,7 +2363,11 @@ def _def_hooks(e, x):
                         e.if_else(
                             e.eq(e.v("kind"), e.s("int")),
                             e.dstr("i"),
-                            e.if_else(e.eq(e.v("kind"), e.s("uint")), e.dstr("u"), e.dstr("b")),
+                            e.if_else(
+                                e.eq(e.v("kind"), e.s("uint")),
+                                e.dstr("u"),
+                                e.if_else(e.eq(e.v("kind"), e.s("sampler")), e.dstr("s"), e.dstr("b")),
+                            ),
                         ),
                     ),
                     e.fld(e.v("st"), "n"),
@@ -2654,14 +2677,18 @@ def _def_hooks(e, x):
                 ),
             ),
             e.if_only(
-                or_b(e, _ggfn_is(e, "in_fn"), _ggfn_is(e, "out_fn")),
+                or_b(e, _ggfn_is(e, "in_fn"), or_b(e, _ggfn_is(e, "out_fn"), _ggfn_is(e, "uniform_fn"))),
                 e.seq(
                     e.if_only(
                         e.not_(
                             or_b(
                                 e,
                                 has(e, xx(e), e.v("tyv"), "gscalar"),
-                                or_b(e, has(e, xx(e), e.v("tyv"), "gvec"), has(e, xx(e), e.v("tyv"), "gmat")),
+                                or_b(
+                                    e,
+                                    or_b(e, has(e, xx(e), e.v("tyv"), "gvec"), has(e, xx(e), e.v("tyv"), "gmat")),
+                                    and_b(e, _ggfn_is(e, "uniform_fn"), has(e, xx(e), e.v("tyv"), "gsampler")),
+                                ),
                             )
                         ),
                         ret_m(
@@ -2679,7 +2706,11 @@ def _def_hooks(e, x):
                     e.let(
                         "decl",
                         e.cat(
-                            e.if_else(_ggfn_is(e, "in_fn"), e.dstr("in "), e.dstr("out ")),
+                            e.if_else(
+                                _ggfn_is(e, "in_fn"),
+                                e.dstr("in "),
+                                e.if_else(_ggfn_is(e, "out_fn"), e.dstr("out "), e.dstr("uniform ")),
+                            ),
                             _ir_of(e, xx(e), e.v("tyv")),
                             e.s(" "),
                             e.v("name"),
@@ -2799,6 +2830,10 @@ def _family_part(tok, k):
         return "f2"
     if tok == "F3":
         return "f3"
+    if tok == "F4":
+        return "f4"
+    if tok == "S":
+        return "s1"
     raise ValueError("unknown glsl family token " + tok)
 
 
@@ -2888,7 +2923,7 @@ def _def_builtins(e, x):
                             ),
                             e.let("et0", cve_type(e, e.v("ec"))),
                             e.if_else(
-                                has(e, xx(e), e.v("et0"), "gtype"),
+                                or_b(e, has(e, xx(e), e.v("et0"), "gtype"), has(e, xx(e), e.v("et0"), "ggtype_m")),
                                 e.seq(
                                     e.let(
                                         "et",
@@ -3154,7 +3189,7 @@ def module(e):
     defs.append(e.p("desc", e.v("c_desc")))
     defs.append(e.p("field_t", t(e, "gfield")))
     defs.append(e.p("field_new", e.fld(e.v("gfield"), "new")))
-    for obj in ["gt_scalar", "gt_vec", "gt_mat", "gt_void", "ggfn_t", "gbuiltin_t"]:
+    for obj in ["gt_scalar", "gt_vec", "gt_mat", "gt_void", "gt_sampler", "ggfn_t", "gbuiltin_t"]:
         defs.append(e.p(obj + "_new", e.fld(e.v(obj), "new")))
     x.append(e.ret(e.rec(*defs)))
 
@@ -3163,16 +3198,18 @@ def module(e):
     exported = []
     for kind in KINDS:
         exported.append(kind)
-        y.append(e.let(kind, _lty(e, "gt_scalar", e.rec(e.p("kind", e.s(kind))))))
+        y.append(e.let(kind, lty(e, "gt_scalar", e.rec(e.p("kind", e.s(kind))))))
         for n in range(2, 5):
             name = ("" if kind == "float" else kind[0]) + "vec" + str(n)
             exported.append(name)
-            y.append(e.let(name, _lty(e, "gt_vec", e.rec(e.p("kind", e.s(kind)), e.p("n", e.int_of(n))))))
+            y.append(e.let(name, lty(e, "gt_vec", e.rec(e.p("kind", e.s(kind)), e.p("n", e.int_of(n))))))
     for n in range(2, 5):
         exported.append("mat" + str(n))
-        y.append(e.let("mat" + str(n), _lty(e, "gt_mat", e.rec(e.p("n", e.int_of(n))))))
+        y.append(e.let("mat" + str(n), lty(e, "gt_mat", e.rec(e.p("n", e.int_of(n))))))
     exported.append("void")
-    y.append(e.let("void", _lty(e, "gt_void", e.tup())))
+    y.append(e.let("void", lty(e, "gt_void", e.tup())))
+    exported.append("sampler2D")
+    y.append(e.let("sampler2D", lty(e, "gt_sampler", e.tup())))
     for kind in GGFN_KINDS:
         exported.append(kind)
         y.append(
@@ -3196,7 +3233,7 @@ def module(e):
         y.append(e.let(kind, e.fld(e.v(kind + "_b"), "func")))
     builtins = []
     for row in BUILTINS:
-        builtins.append(e.p(row[0], _lty(e, "gbuiltin_t", e.rec(e.p("name", e.s(row[0]))))))
+        builtins.append(e.p(row[0], lty(e, "gbuiltin_t", e.rec(e.p("name", e.s(row[0]))))))
     y.append(e.let("gbuiltins", e.rec(*builtins)))
     y.append(e.finish(e.v("gfn_d")))
     y.append(e.option_type_let())
@@ -3251,10 +3288,6 @@ def module(e):
     return top
 
 
-def _lty(e, obj, arg):
-    return e.mb.as_(e.call(e.fld(e.v("k"), obj + "_new"), arg), ty(e))
-
-
 def _def_data(e, x):
     def_iface(e, x, "gfield_m")
     def_obj(e, x, "gfield", "glsl block field", e.rec(e.p("name", str_(e)), e.p("ty", ty(e))))
@@ -3265,6 +3298,7 @@ def _def_data(e, x):
     def_iface(e, x, "gvec", e.p("kind", str_(e)), e.p("n", int_t(e)))
     def_iface(e, x, "gmat", e.p("n", int_t(e)))
     def_iface(e, x, "gvoid")
+    def_iface(e, x, "gsampler")
     def_iface(e, x, "gfn", e.p("params", e.list_type(ty(e))), e.p("ret", ty(e)))
     def_iface(e, x, "ggtype_m", e.p("base", ty(e)))
     def_iface(e, x, "gblock_m", e.p("fields", e.list_type(t(e, "gfield"))), e.p("name", str_(e)))
@@ -3327,6 +3361,7 @@ def _def_data(e, x):
     def_obj(e, x, "gt_vec", "glsl vector type", e.rec(e.p("kind", str_(e)), e.p("n", int_t(e))))
     def_obj(e, x, "gt_mat", "glsl matrix type", e.rec(e.p("n", int_t(e))))
     def_obj(e, x, "gt_void", "glsl void type", e.tup())
+    def_obj(e, x, "gt_sampler", "glsl sampler type", e.tup())
     def_obj(e, x, "gt_fn", "glsl function type", e.rec(e.p("params", e.list_type(ty(e))), e.p("ret", ty(e))))
     def_obj(e, x, "gt_global", "glsl global type", e.rec(e.p("base", ty(e))))
     def_obj(
@@ -3563,6 +3598,10 @@ def _def_helpers(e, x):
                     ),
                 ),
             ),
+            e.if_only(
+                has(e, xx(e), a(e, "ty"), "gsampler"),
+                ret_m(e, e.rec(e.p("kind", e.dstr("sampler")), e.p("n", e.int_of(1)), e.p("mat", dfalse(e)))),
+            ),
             e.mb.panic(e.cat(e.s("glsl: type has no components: "), ty_desc(e, a(e, "ty")))),
         ),
     )
@@ -3573,6 +3612,7 @@ def _def_helpers(e, x):
         body(
             e,
             e.if_only(a(e, "mat"), ret_m(e, e.mb.as_(mk(e, "gt_mat", e.p("n", a(e, "n"))), ty(e)))),
+            e.if_only(e.eq(a(e, "kind"), e.s("sampler")), ret_m(e, e.mb.as_(mk_arg(e, "gt_sampler", e.tup()), ty(e)))),
             e.if_only(e.eq(a(e, "n"), num(e, 1)), ret_m(e, e.mb.as_(_scalar_t(e, a(e, "kind")), ty(e)))),
             e.ret(e.mb.as_(_vec_t(e, a(e, "kind"), a(e, "n")), ty(e))),
         ),
@@ -3602,7 +3642,13 @@ def _def_helpers(e, x):
                                     e.if_else(
                                         e.eq(e.v("c"), num(e, ord("u"))),
                                         e.dstr("uint"),
-                                        e.if_else(e.eq(e.v("c"), num(e, ord("b"))), e.dstr("bool"), e.dstr("mat")),
+                                        e.if_else(
+                                            e.eq(e.v("c"), num(e, ord("b"))),
+                                            e.dstr("bool"),
+                                            e.if_else(
+                                                e.eq(e.v("c"), num(e, ord("s"))), e.dstr("sampler"), e.dstr("mat")
+                                            ),
+                                        ),
                                     ),
                                 ),
                             ),

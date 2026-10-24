@@ -932,10 +932,16 @@ def _luref(e, x):
         ),
         e.mb.as_(e.b(False), bool_t(e)),
         cast_to_panic(e),
+        # A reference casts to a level, to its under type itself (the reference read as the value) and to whatever
+        # the under type casts to.
         e.if_else(
             is_at(a(e, "dest_type")),
             e.mb.as_(e.b(True), bool_t(e)),
-            bim(e, e.mb.eval_type(), "can_cast_to", under(), _rec_xl(e, p("dest_type", a(e, "dest_type")))),
+            or_b(
+                e,
+                is_equal(e, xx(e), under(), a(e, "dest_type")),
+                bim(e, e.mb.eval_type(), "can_cast_to", under(), _rec_xl(e, p("dest_type", a(e, "dest_type")))),
+            ),
         ),
         body(
             e,
@@ -990,6 +996,7 @@ def _luref(e, x):
                 ),
             ),
             e.let("v", _retag_m(e, a(e, "cv"), under(), cve_t(e))),
+            e.if_only(is_equal(e, xx(e), under(), a(e, "dest_type")), ret_m(e, ok_cve(e, e.v("v")))),
             e.ret(
                 bim(
                     e,
@@ -1116,12 +1123,17 @@ def _lat(e, x):
         e.if_else(
             is_equal(e, xx(e), outer(e), a(e, "dest_type")),
             e.mb.as_(e.b(True), bool_t(e)),
-            bim(e, e.mb.eval_type(), "can_cast_to", under(), _rec_xl(e, p("dest_type", a(e, "dest_type")))),
+            or_b(
+                e,
+                is_equal(e, xx(e), under(), a(e, "dest_type")),
+                bim(e, e.mb.eval_type(), "can_cast_to", under(), _rec_xl(e, p("dest_type", a(e, "dest_type")))),
+            ),
         ),
         body(
             e,
             e.if_only(is_equal(e, xx(e), outer(e), a(e, "dest_type")), ret_m(e, ok_cve(e, a(e, "cv")))),
             e.let("v", _retag_m(e, a(e, "cv"), under(), cve_t(e))),
+            e.if_only(is_equal(e, xx(e), under(), a(e, "dest_type")), ret_m(e, ok_cve(e, e.v("v")))),
             e.ret(
                 bim(
                     e,

@@ -1,5 +1,6 @@
 """vec-test-wasm.atz: a WASI app exercising vec-wasm.atz. It prints `ok` through a byte vec and exits with the
-number of failed checks on an i32 vec (push 100, sum, slice checks as in vec-test.atz, pop, length, capacity)."""
+number of failed checks on an i32 vec (push 100, sum, slice checks as in vec-test.atz, pop, length, capacity) and on
+a vec of (i32, i32) pairs (push, read by component, assign through `at`)."""
 
 from .. import target_mb as tm
 from ..wasm.wat import bind_types
@@ -26,7 +27,10 @@ def module(e):
     )
     for name in ["ptr_cast", "ptr_to_int"]:
         setup.append(e.let(name, e.fld(e.v("wasm"), name)))
-    exported = ["m", "proc_exit_fn_t", "fd_write_fn_t", "start_fn_t", "t_i32", "t_u32", "t_u8", "t_pv"]
+    setup.append(
+        e.let("pair_t", e.call(e.fld(e.v("wasm"), "tuple"), e.list_new(e.mb.eval_type(), e.v("t_i32"), e.v("t_i32"))))
+    )
+    exported = ["m", "proc_exit_fn_t", "fd_write_fn_t", "start_fn_t", "t_i32", "t_u32", "t_u8", "t_pv", "pair_t"]
     exported += ["ptr_cast", "ptr_to_int"]
     setup.append(e.ret(e.rec(*[e.p(n, e.v(n)) for n in exported])))
 
@@ -47,7 +51,7 @@ def module(e):
                 ),
             )
         )
-    for vname, elem in [("ints", "t_i32"), ("bytes", "t_u8")]:
+    for vname, elem in [("ints", "t_i32"), ("bytes", "t_u8"), ("pairs", "pair_t")]:
         top.append(e.let(vname, e.call(e.fld(e.v("vec"), "type"), e.v(elem))))
         for f in ["type", "own", "new"]:
             top.append(e.let(vname + "_" + f, e.fld(e.v(vname), f)))
@@ -74,6 +78,12 @@ def module(e):
     def method(v, name, *args):
         return e.call(e.fld(e.v(v), name), args[0] if len(args) == 1 else e.tup(*args))
 
+    def pair(a, b):
+        return e.mb.as_(e.tup(e.n(a), e.n(b)), lo("pair_t"))
+
+    def pair_at(i, c):
+        return e.mb.field(method("w", "at", e.n(i)), e.n(c))
+
     def counted_loop(label, limit, body):
         return e.seq(
             e.let("i", e.mb.as_(e.n(0), lo("t_i32"))),
@@ -94,7 +104,7 @@ def module(e):
     body = e.seq(
         e.let("fails", e.mb.as_(e.n(0), lo("t_i32"))),
         e.seq(
-            e.let("v", e.mb.as_(e.call(lo("ints_new"), e.tup()), lo("ints_own"))),
+            e.let("v", e.call(lo("ints_new"), e.tup())),
             counted_loop("fill", COUNT, method("v", "push", e.v("i"))),
             check(e.eq(e.fld(e.v("v"), "len"), e.n(COUNT))),
             check(e.mb.operator_ge(e.fld(e.v("v"), "cap"), e.n(COUNT))),
@@ -146,7 +156,35 @@ def module(e):
                     e.n(-1),
                 )
             ),
-            e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_own"))),
+            method("v", "push", e.n(1)),
+            method("v", "push", e.n(2)),
+            method("v", "push", e.n(3)),
+            method("v", "insert", e.tup(e.n(1), e.n(9))),
+            check(e.eq(method("v", "at", e.n(1)), e.n(9))),
+            check(e.eq(method("v", "at", e.n(3)), e.n(3))),
+            check(e.eq(e.fld(e.v("v"), "len"), e.n(4))),
+            check(e.eq(method("v", "remove", e.n(0)), e.n(1))),
+            check(e.eq(method("v", "at", e.n(0)), e.n(9))),
+            check(e.eq(e.fld(e.v("v"), "len"), e.n(3))),
+            e.let("v2", e.call(lo("ints_new"), e.tup())),
+            method("v2", "push", e.n(5)),
+            method("v2", "push", e.n(6)),
+            method("v", "extend", method("v2", "slice", e.tup())),
+            check(e.eq(e.fld(e.v("v"), "len"), e.n(5))),
+            check(e.eq(method("v", "at", e.n(4)), e.n(6))),
+            e.let("w", e.call(lo("pairs_new"), e.tup())),
+            method("w", "push", pair(1, 2)),
+            method("w", "push", pair(10, 20)),
+            method("w", "push", pair(30, 40)),
+            check(e.eq(e.fld(e.v("w"), "len"), e.n(3))),
+            check(e.eq(pair_at(0, 1), e.n(2))),
+            check(e.eq(pair_at(2, 0), e.n(30))),
+            e.mb.set(method("w", "at", e.n(1)), pair(7, 8)),
+            check(e.eq(pair_at(1, 0), e.n(7))),
+            check(e.eq(pair_at(1, 1), e.n(8))),
+            check(e.eq(pair_at(0, 1), e.n(2))),
+            check(e.eq(pair_at(2, 1), e.n(40))),
+            e.let("s", e.call(lo("bytes_new"), e.tup())),
             *[method("s", "push", e.n(b)) for b in MESSAGE],
             e.mb.set(e.mb.field(lo("iov"), e.n(0)), tm.conv(e, lo("ptr_to_int"), e.fld(e.v("s"), "data"), lo("t_u32"))),
             e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(e.fld(e.fld(e.v("s"), "len"), "wrap"), lo("t_u32"))),

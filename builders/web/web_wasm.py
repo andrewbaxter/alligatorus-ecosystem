@@ -1,5 +1,8 @@
-"""web-wasm.atz: `build` helper packaging a wat module as a browser app dir: index.html, main.js, main.wasm, and
-their debug maps (main.js.map over main.js.frames.json, main.wasm.map over frames.json, the wat module's frames)."""
+"""web-wasm.atz: `build` packages a wat module as a browser app dir: index.html, main.js, main.wasm, and their debug
+maps (main.js.map over main.js.frames.json, main.wasm.map over frames.json, the wat module's frames).
+`module_build` packages it as an ES module instead (no index.html): main.js exports `start({root, host, wasm})`,
+which gives the imports of the wasm module's `host_module` from `host.imports`, instantiates the wasm at the URL
+`wasm`, calls `host.attach(instance)` and then `_start(root)` with an owned handle of the element `root`."""
 
 from . import webidl_wasm
 from ..target_mb import p_
@@ -25,15 +28,8 @@ def _jfn(e, params, ret):
     return _jsc(e, "fn", e.p("params", e.tup(*params)), e.p("ret", ret))
 
 
-def module(e):
-    top = []
-    top.append(e.let("js", e.import_local("js", "js-es2020.atz")))
-    top.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
-    top.append(e.let("webidl", e.import_local("webidl", "webidl-js.atz")))
-    top.append(e.let("d", e.define()))
-    top.append(e.option_type_let())
-    top.append(e.let("build_b", e.def_func(e.v("d"), "build")))
-    body = []
+def _declare(e, body):
+    """The browser API the loader uses, declared."""
     # The browser API the loader uses, declared: `fetch`, `WebAssembly.instantiateStreaming` and what its promise
     # yields (the instance and its `_start` export), and the module variables `imports` and `instance`.
     objects = [
@@ -67,11 +63,19 @@ def module(e):
             )
         )
     for g, js_name, ty_ in [
-        ("WebAssembly_instantiate", "WebAssembly.instantiateStreaming", _jfn(e, [e.v("response_p"), e.v("imports_t")], e.v("source_p"))),
+        (
+            "WebAssembly_instantiate",
+            "WebAssembly.instantiateStreaming",
+            _jfn(e, [e.v("response_p"), e.v("imports_t")], e.v("source_p")),
+        ),
         ("fetch", "fetch", _jfn(e, [string], e.v("response_p"))),
         ("instance", "instance", e.v("instance_t")),
     ]:
         body.append(e.let(g, _jsc(e, "global_fn", e.p("name", e.s(js_name)), e.p("ty", ty_))))
+
+
+def _assemble(e, body):
+    """Assembles the wat text (`arg.wat`) into `wasm_bytes` and its map `wasm_map`."""
     body.append(
         e.let(
             "r",
@@ -124,6 +128,11 @@ def module(e):
                 ),
             )
         )
+
+
+def _glue(e, body):
+    """The js module `m` with the webidl runtime `rt` and the module variable `imports`, holding the glue of every
+    `webidl` import the wasm module's meta names."""
     body.append(e.let("m", e.call(e.lower(e.fld(e.v("js"), "new")), e.tup())))
     body.append(e.let("rt", e.call(e.lower(e.fld(e.v("webidl"), "runtime")), e.rec(e.p("mod", e.v("m"))))))
     body.append(
@@ -151,6 +160,65 @@ def module(e):
             e.match_of(e.call_m0(e.v("m0"), "k"), "mk", None, e.p("dep", on_dep), e.p("other", e.seq())),
         )
     )
+
+
+def _dir(e, html):
+    """The output dir: the js module (`out`, rendered), the wasm module and their maps, and `index.html` when `html`."""
+    entries = []
+    if html:
+        entries.append(e.p("index.html", e.call(e.mb.eval_str_utf8(), e.s(HTML))))
+    entries += [
+        e.p(
+            "main.js",
+            e.call(e.mb.eval_str_utf8(), e.cat(e.fld(e.v("out"), "js"), e.s("//# sourceMappingURL=main.js.map\n"))),
+        ),
+        e.p("main.js.map", e.call(e.mb.eval_str_utf8(), e.fld(e.v("out"), "map"))),
+        e.p("main.js.frames.json", e.call(e.mb.eval_str_utf8(), e.fld(e.v("out"), "frames"))),
+        e.p("main.wasm", e.v("wasm_bytes")),
+        e.p("main.wasm.map", e.v("wasm_map")),
+        e.p("frames.json", e.call(e.mb.eval_str_utf8(), e.fld(e.v("arg"), "frames"))),
+    ]
+    return e.call(e.mb.builtin("dir"), e.map_new(e.mb.types_string(), _bytes_t(e), *entries))
+
+
+# The ES module's `start({root, host, wasm})`: `host.imports` become the imports of the module `host_module` (an
+# identifier), the wasm at the URL `wasm` is instantiated, `host.attach(instance)` runs, then `_start` with an owned
+# handle of `root`. Its promise settles once `_start` returns.
+START_LINES = [
+    ["imports.", "$host_module", " = opts.host.imports;"],
+    ["return WebAssembly.instantiateStreaming(fetch(opts.wasm), imports).then(function (r) {"],
+    ["  instance = r.instance;"],
+    ["  opts.host.attach(instance);"],
+    ["  instance.exports._start(", "$h_new", "(opts.root));"],
+    ["});"],
+]
+
+
+def _start_line(e, parts):
+    out = []
+    for part in parts:
+        if part == "$host_module":
+            out.append(e.fld(e.v("arg"), "host_module"))
+        elif part == "$h_new":
+            out.append(e.fld(e.v("rt"), "h_new"))
+        else:
+            out.append(e.s(part))
+    return e.cat(*out)
+
+
+def module(e):
+    top = []
+    top.append(e.let("js", e.import_local("js", "js-es2020.atz")))
+    top.append(e.let("wasm", e.import_local("wasm", "wat-2.0.atz")))
+    top.append(e.let("webidl", e.import_local("webidl", "webidl-js.atz")))
+    top.append(e.let("d", e.define()))
+    top.append(e.option_type_let())
+    top.append(e.let("build_b", e.def_func(e.v("d"), "build")))
+    body = []
+    _declare(e, body)
+    _assemble(e, body)
+    _glue(e, body)
+    void = e.lower(e.fld(e.v("js"), "void"))
     body.append(
         e.let(
             "ready",
@@ -193,30 +261,7 @@ def module(e):
         )
     )
     body.append(e.let("out", e.call_m(e.v("m"), "render", e.rec(e.p("frames", e.s("main.js.frames.json"))))))
-    body.append(
-        e.ret(
-            e.call(
-                e.mb.builtin("dir"),
-                e.map_new(
-                    e.mb.types_string(),
-                    _bytes_t(e),
-                    e.p("index.html", e.call(e.mb.eval_str_utf8(), e.s(HTML))),
-                    e.p(
-                        "main.js",
-                        e.call(
-                            e.mb.eval_str_utf8(),
-                            e.cat(e.fld(e.v("out"), "js"), e.s("//# sourceMappingURL=main.js.map\n")),
-                        ),
-                    ),
-                    e.p("main.js.map", e.call(e.mb.eval_str_utf8(), e.fld(e.v("out"), "map"))),
-                    e.p("main.js.frames.json", e.call(e.mb.eval_str_utf8(), e.fld(e.v("out"), "frames"))),
-                    e.p("main.wasm", e.v("wasm_bytes")),
-                    e.p("main.wasm.map", e.v("wasm_map")),
-                    e.p("frames.json", e.call(e.mb.eval_str_utf8(), e.fld(e.v("arg"), "frames"))),
-                ),
-            )
-        )
-    )
+    body.append(e.ret(_dir(e, True)))
     top.append(
         e.func_impl(
             e.v("build_b"),
@@ -230,6 +275,48 @@ def module(e):
             e.stage(e.mb.seq(body)),
         )
     )
+    top.append(e.let("module_build_b", e.def_func(e.v("d"), "module_build")))
+    mbody = []
+    _declare(e, mbody)
+    _assemble(e, mbody)
+    _glue(e, mbody)
+    mbody.append(
+        e.let(
+            "start",
+            e.call_m(
+                e.v("m"),
+                "func_text",
+                e.rec(
+                    e.p("name", e.s("start")),
+                    e.p("params", e.str_list(e.s("opts"))),
+                    e.p("lines", e.list_new(e.mb.types_string(), *[_start_line(e, line) for line in START_LINES])),
+                ),
+            ),
+        )
+    )
+    mbody.append(e.call_m(e.v("m"), "export", e.rec(e.p("name", e.v("start")), e.p("as", e.s("start")))))
+    mbody.append(e.let("out", e.call_m(e.v("m"), "render", e.rec(e.p("frames", e.s("main.js.frames.json"))))))
+    mbody.append(e.ret(_dir(e, False)))
+    top.append(
+        e.func_impl(
+            e.v("module_build_b"),
+            e.rec(
+                e.p("wat", e.mb.types_string()),
+                e.p("meta", e.list_type(e.fld(e.v("wasm"), "meta_t"))),
+                e.p("frames", e.mb.types_string()),
+                e.p("host_module", e.mb.types_string()),
+            ),
+            e.option_type_some(e.mb.builtin("types", "dir")),
+            e.mb.opt_none_type(),
+            e.stage(e.mb.seq(mbody)),
+        )
+    )
     top.append(e.finish(e.v("d")))
-    top.append(e.ret(e.rec(e.p("build", e.fld(e.v("build_b"), "func")))))
+    top.append(
+        e.ret(
+            e.rec(
+                e.p("build", e.fld(e.v("build_b"), "func")), e.p("module_build", e.fld(e.v("module_build_b"), "func"))
+            )
+        )
+    )
     return top

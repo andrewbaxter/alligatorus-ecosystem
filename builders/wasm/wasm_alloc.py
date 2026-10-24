@@ -11,7 +11,8 @@ power of two above. `malloc` takes the first fitting chunk from the smallest bin
 remainder of at least 16 bytes; otherwise it carves from the top chunk, which starts at the first page boundary after
 the static data and grows with `memory.grow` (yielding 0 when that fails). `free` coalesces with free neighbours
 through the boundary tags, merges into the top chunk when adjacent to it, and bins the result; `free(0)` is a no-op
-and freeing a chunk that is not in use (a second free, or no allocation) traps.
+and freeing a chunk that is not in use (a second free, or no allocation) traps: a freed chunk's own head is marked
+free before it is absorbed by a neighbour, so a second free of it traps as long as nothing overwrote that head.
 
 Everything is a dependency (`func_dep`/`alloc_dep`): a module that calls `malloc` or `free` gets the functions and the
 state block on first use; nothing is passed around.
@@ -280,6 +281,9 @@ def _free_body(e):
             # A chunk not in use is being freed twice (or the pointer is no allocation): trap.
             e.if_only(e.not_(_flag(e, e.v("c"), CINUSE)), e.call(fn_of(e, _hook_t(e, "trap")), e.tup())),
             e.let("s", _size_of(e, e.v("c"))),
+            # The chunk is free from here on, in its own head too: when it is absorbed by a neighbour its head stays
+            # behind, and a second free of it must still find it free (and trap).
+            e.mb.set(_head(e, e.v("c")), e.mb.operator_and(_head(e, e.v("c")), e.n(-3))),
             # coalesce backward
             e.if_only(
                 e.not_(_flag(e, e.v("c"), PINUSE)),

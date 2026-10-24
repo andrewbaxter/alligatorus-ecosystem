@@ -37,7 +37,7 @@ def _llvm(e):
     for f in ["type", "own", "new"]:
         top.append(e.let("ints_" + f, e.fld(e.v("ints"), f)))
     body = e.seq(
-        e.let("v", e.mb.as_(e.call(e.lower(e.v("ints_new")), e.tup()), e.lower(e.v("ints_own")))),
+        e.let("v", e.call(e.lower(e.v("ints_new")), e.tup())),
         e.let("x", e.call(e.fld(e.v("v"), "at"), e.n(0))),
         e.ret(e.v("x")),
     )
@@ -124,7 +124,7 @@ def _wasm(e):
         return e.call(e.fld(e.v(v), name), args[0] if len(args) == 1 else e.tup(*args))
 
     body = e.seq(
-        e.let("s", e.mb.as_(e.call(lo("bytes_new"), e.tup()), lo("bytes_own"))),
+        e.let("s", e.call(lo("bytes_new"), e.tup())),
         *[method("s", "push", e.n(b)) for b in MESSAGE],
         e.mb.set(e.mb.field(lo("iov"), e.n(0)), tm.conv(e, lo("ptr_to_int"), e.fld(e.v("s"), "data"), lo("t_u32"))),
         e.mb.set(e.mb.field(lo("iov"), e.n(1)), e.call(e.fld(e.fld(e.v("s"), "len"), "wrap"), lo("t_u32"))),
@@ -132,7 +132,7 @@ def _wasm(e):
             lo("fd_write"),
             e.tup(e.n(1), tm.conv(e, lo("ptr_cast"), lo("iov"), lo("t_pv")), e.n(1), lo("nwritten")),
         ),
-        e.let("v", e.mb.as_(e.call(lo("ints_new"), e.tup()), lo("ints_own"))),
+        e.let("v", e.call(lo("ints_new"), e.tup())),
         e.let("x", method("v", "at", e.n(0))),
         e.call(lo("proc_exit"), e.call(e.fld(e.v("x"), "wrap"), lo("t_u32"))),
     )

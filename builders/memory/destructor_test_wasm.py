@@ -1,11 +1,11 @@
 """destructor-test-wasm.atz: a WASI app owning heap blocks through destructor.atz; its exit status is the number
-of destroy calls, expected 3 (a reassignment, the moved-into binding, the reassigned binding; the moved-from binding
-is not destroyed)."""
+of destroy calls, expected 5 (a reassignment, a discarded owned value returned by a function, the binding of a
+returned owned value, the moved-into binding, the reassigned binding; the moved-from binding is not destroyed)."""
 
 from .. import target_mb as tm
 from ..wasm.wat import bind_types
 
-EXPECTED_DESTROYS = 3
+EXPECTED_DESTROYS = 5
 
 
 def module(e):
@@ -107,12 +107,37 @@ def module(e):
     def owned(v):
         return e.mb.as_(v, lo("own_blk"))
 
+    # A function returning an owned value: a dependency whose return type is the owned type; the caller owns the
+    # block it yields.
+    top.append(
+        e.let(
+            "make",
+            e.call(
+                e.fld(e.v("wasm"), "func_dep"),
+                e.rec(
+                    e.p("name", e.s("make")),
+                    e.p("params", e.list_new(e.mb.types_string())),
+                    e.p(
+                        "ty",
+                        e.call(
+                            e.fld(e.v("wasm"), "fn"),
+                            e.rec(e.p("params", e.list_new(e.mb.eval_type())), e.p("ret", e.v("owned_blk"))),
+                        ),
+                    ),
+                    e.p("body", e.stage(e.seq(e.ret(owned(malloc(16)))))),
+                ),
+            ),
+        )
+    )
+
     body = e.seq(
         e.seq(
             e.let("a", owned(malloc(16))),
             e.let("b", owned(malloc(16))),
             e.let("c", e.call(e.fld(e.v("b"), "move"), e.tup())),
             e.mb.set(e.v("a"), owned(malloc(16))),
+            e.call(tm.fn_of(e, lo("make")), e.tup()),
+            e.let("d", e.call(tm.fn_of(e, lo("make")), e.tup())),
             e.mb.set(
                 e.mb.field(tm.conv(e, lo("ptr_cast"), e.mb.as_(e.v("c"), lo("t_pv")), lo("t_pi32")), e.n(0)), e.n(5)
             ),
